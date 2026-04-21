@@ -1,0 +1,73 @@
+[build-system]
+requires = ["setuptools>=45", "wheel", "setuptools_scm>=6.2"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "satgonetem"
+version = "0.1.0"
+description = "SatGoNetem - Satellite Network Emulation Tool"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+    {name = "Juan Arias Suarez", email = "juan.arias-suarez@isae-supaero.fr"}
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Topic :: System :: Networking",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+]
+dependencies = [
+    "docker>=7.1.0",
+    "grpcio>=1.62.0",
+    "matplotlib>=3.10.0",
+    "networkx>=3.4.0",
+    "numpy>=2.2.0",
+    "Pillow>=11.2.0",
+    "protobuf>=6.31.0",
+    "PyYAML>=6.0.0",
+    "sgp4>=2.23",
+    "uvicorn[standard]>=0.29.0",
+    "jinja2>=3.1.0",
+    "fastapi>=0.110.0",
+    "python-multipart>=0.0.9",
+    "psutil>=7.0.0",
+    "pandas>=2.3.0",
+    "astropy>=6.1.7",
+    "pyroute2>=0.7.0",
+    "yaspin>=3.0.0",
+    "sat_com_topology @ git+https://gitlab.isae-supaero.fr/eqospace/sat-com-topology.git@main#egg=sat_com_topology",
+    "pytest>=9.0.3",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "black>=23.0",
+    "flake8>=6.0",
+    "mypy>=1.0",
+]
+
+[project.urls]
+Homepage = "TODO"
+Documentation = "TODO"
+Repository = "TODO"
+Issues = "TODO"
+
+[tool.setuptools]
+packages = ["satgonetem"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+
+[tool.uv]
+python = "3.13t"
