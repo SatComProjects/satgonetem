@@ -246,6 +246,52 @@ topology._apply_network_config(net_cfg)
 
 ---
 
+## Saving and loading a topology
+
+A fully configured `TopologyManager` can be serialised to a single JSON file and
+restored later with `from_file`. All ground station data files referenced in the
+configuration are embedded in the JSON, so the file is self-contained.
+
+### Saving
+
+```python
+topology.to_file("my_topology.json")
+```
+
+By default `to_file` captures the current `NetworkConfig` from the instance. Pass
+an explicit `NetworkConfig` to override what is persisted:
+
+```python
+from satgonetem.services.topology_satcom import NetworkConfig
+
+net_cfg = NetworkConfig(isl_link_capacity=500000, routing="dynamic-ospf")
+topology.to_file("my_topology.json", network_config=net_cfg)
+```
+
+The file contains three top-level keys:
+
+| Key | Contents |
+|---|---|
+| `simulation_property` | Serialised `SimulationProperty` (constellation, ground objects, dates) |
+| `network_config` | Serialised `NetworkConfig` fields |
+| `ground_files` | Map of original file path to embedded file content and basename |
+
+### Loading
+
+```python
+from satgonetem.services.topology_satcom import TopologyManager
+
+topology = TopologyManager.from_file("my_topology.json")
+```
+
+`from_file` writes any embedded ground station data files to `/tmp/<stem>_ground_files/`
+(e.g. `/tmp/my_topology_ground_files/`), updates the `data_file` paths in the
+configuration, then calls `from_satcom` and
+applies the persisted `NetworkConfig`. The returned instance is ready to use in the
+same way as one built directly with `from_satcom`.
+
+---
+
 ## Accessing topology data
 
 After construction, the three main collections are ready:

@@ -1,0 +1,71 @@
+{
+  "simulation_property": {
+    "start_date": "01/01/2024 00:00:00",
+    "end_date": "01/01/2024 00:01:00",
+    "simulation_name": "TestConstellation",
+    "movement_model": "pyorbital",
+    "distance_model": "sklearn",
+    "ground_objects_properties": [
+      {
+        "identifier": "Ground Stations",
+        "data_file": "/tmp/ground_stations.txt",
+        "type": "ground_station",
+        "connectivity_properties": {
+          "elevation_above_horizon": 10.0,
+          "maximum_satellite_range_distance": 1500.0,
+          "shell_white_lists": [
+            "LEO"
+          ],
+          "maximum_connected_satellites": 3,
+          "ground_to_space_connections_strategy": "best-angle-until-disconnection"
+        }
+      }
+    ],
+    "walker_shells": [
+      {
+        "type": "star",
+        "constellation_property": {
+          "identifier": "LEO",
+          "amount_of_orbit_plane": 18,
+          "amount_of_satellite_per_orbit_plane": 40,
+          "inclination": 53.0,
+          "phase_difference_between_satellites": true,
+          "mean_revolution_per_day": 14.35
+        },
+        "orbital_connectivity_property": {
+          "maximum_inter_satellite_count": 4,
+          "adjacent_inter_satellite_shifting": 0,
+          "maximum_inter_satellite_range_distance": 1500.0,
+          "maximum_ground_station_range": 1200.0,
+          "maximum_user_terminal_range": 1000.0,
+          "maximum_connected_ground_object": 10000,
+          "maximum_connected_user_terminal": 500,
+          "maximum_connected_ground_station": 10
+        },
+        "ground_object_white_list": [
+          "Ground Stations"
+        ]
+      }
+    ],
+    "disable_ground_station_link_preload": false,
+    "static_ground_station_link_mode": false,
+    "ground_connectivity_properties": []
+  },
+  "network_config": {
+    "project_name": "Constellation",
+    "update_time": 1,
+    "gnd_link_capacity": 100000,
+    "isl_link_capacity": 100000,
+    "protocol": "ipv4",
+    "routing": "static",
+    "satellite_image": "jariassuarez/sgnt:satellite",
+    "network_launcher": "GONETEM",
+    "gonetem_server": "localhost:10110"
+  },
+  "ground_files": {
+    "/tmp/ground_stations.txt": {
+      "content": "0,Berlin,52.52,13.405,0.034\n1,London,51.507,-0.127,0.011\n2,Paris,48.856,2.352,0.035\n3,Rome,41.902,12.496,0.021\n4,Madrid,40.416,-3.703,0.667\n",
+      "basename": "ground_stations.txt"
+    }
+  }
+}

@@ -6,6 +6,7 @@ Satellites will include a satcom_object, which will correspond to their satcomto
 """
 
 import contextlib
+from mimetypes import init
 import warnings
 import base64
 from datetime import datetime
@@ -167,6 +168,107 @@ class TopologyManager(SatComModel):
             simulation_property.model_dump(), simulation_property.simulation_name
         )
         return cls(simulation_manager=sim_manager)
+
+    def to_file(
+        self, path: str, network_config: Optional[NetworkConfig] = None
+    ) -> None:
+        """Save the satcom configuration and network config to a JSON file.
+
+        Serialises the SimulationProperty backing this instance, any referenced
+        ground station data files, and the NetworkConfig so the topology can be
+        fully reconstructed via from_file().
+
+        Args:
+            path: Filesystem path where the JSON file will be written.
+            network_config: NetworkConfig to persist. If None, a NetworkConfig
+                is built from the current instance attributes.
+
+        Raises:
+            OSError: If the file cannot be written or a ground station data
+                file cannot be read.
+        """
+        if network_config is None:
+            network_config = NetworkConfig(
+                project_name=self.project_name,
+                update_time=self.update_time,
+                gnd_link_capacity=self.gnd_link_capacity,
+                isl_link_capacity=self.isl_link_capacity,
+                protocol=self.protocol,
+                routing=self.routing,
+                satellite_image=self.satellite_image,
+                network_launcher=self.network_launcher,
+                gonetem_server=self.gonetem_server,
+            )
+
+        sim_prop_data = dict(
+            self.simulation_manager.configuration.get("properties", {})
+        )
+
+        ground_files: Dict[str, Dict[str, str]] = {}
+        for gop in sim_prop_data.get("ground_objects_properties", []):
+            data_file = gop.get("data_file", "")
+            if data_file and os.path.isfile(data_file):
+                with open(data_file, "r", encoding="utf-8") as fh:
+                    ground_files[data_file] = {
+                        "content": fh.read(),
+                        "basename": os.path.basename(data_file),
+                    }
+
+        payload = {
+            "simulation_property": sim_prop_data,
+            "network_config": network_config.__dict__,
+            "ground_files": ground_files,
+        }
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh, indent=2)
+
+    @classmethod
+    def from_file(cls, path: str) -> "TopologyManager":
+        """Load a TopologyManager from a JSON file produced by to_file().
+
+        Restores embedded ground station data files to '/tmp/<stem>_ground_files/',
+        then reconstructs the SimulationProperty and NetworkConfig.
+
+        Args:
+            path: Path to the JSON file previously written by to_file().
+
+        Returns:
+            An initialised TopologyManager with the persisted configuration applied.
+
+        Raises:
+            FileNotFoundError: If path does not exist.
+            ValueError: If the file content is not a valid topology config.
+            OSError: If ground station data files cannot be written.
+        """
+        with open(path, "r", encoding="utf-8") as fh:
+            payload = json.load(fh)
+
+        sim_prop_data: Dict[str, Any] = payload["simulation_property"]
+        ground_files: Dict[str, Dict[str, str]] = payload.get("ground_files", {})
+
+        if ground_files:
+            stem = os.path.splitext(os.path.basename(path))[0]
+            ground_dir = os.path.join("/tmp", f"{stem}_ground_files")
+            os.makedirs(ground_dir, exist_ok=True)
+
+            path_map: Dict[str, str] = {}
+            for original_path, file_info in ground_files.items():
+                restored_path = os.path.join(ground_dir, file_info["basename"])
+                with open(restored_path, "w", encoding="utf-8") as fh:
+                    fh.write(file_info["content"])
+                path_map[original_path] = restored_path
+
+            for gop in sim_prop_data.get("ground_objects_properties", []):
+                orig = gop.get("data_file", "")
+                if orig in path_map:
+                    gop["data_file"] = path_map[orig]
+
+        simulation_property = SimulationProperty.model_validate(sim_prop_data)
+        network_config = NetworkConfig(**payload["network_config"])
+
+        instance = cls.from_satcom(simulation_property)
+        instance._apply_network_config(network_config)
+        return instance
 
     def __init__(
         self,
@@ -2504,7 +2606,26 @@ def main():
 
     topology_manager = TopologyManager.from_satcom(project)
 
-    static_tbf_validation(topology_manager, debug=True)
+    topology_manager.to_file("test_topology.json")
+
+    topology_manager = TopologyManager.from_file("test_topology.json")
+
+    nodes_and_links = topology_manager.start_gonetem()
+
+    toc = time.perf_counter()
+
+    print(f"Nodes and links: {nodes_and_links}, startup time: {toc - tic:.2f}s")
+
+    close = topology_manager.stop_gonetem()
+
+    end = time.perf_counter()
+
+    total = end - tic
+
+    print(f"GoNetEm stopped, cleanup time: {close:.2f}s")
+    print(f"Total time from start to stop: {total:.2f}s")
+
+    # static_tbf_validation(topology_manager, debug=True)
 
 
 def static_tbf_validation(
