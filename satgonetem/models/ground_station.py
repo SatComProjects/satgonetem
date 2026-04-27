@@ -187,6 +187,6 @@ class GroundStation(Node, QoSCapableMixin):
         for host in hosts:
             remote_ip = host.loopback.ipv4
             remote_name = host.name.lower()
-            command = f"sh -c \"echo '{remote_ip} {remote_name}' >> /etc/hosts\""
+            command = f"echo '{remote_ip} {remote_name}' >> /etc/hosts"
             logging.info("Adding host %s to %s: %s", host, self.name, command)
             self.execute_command(command)

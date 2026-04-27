@@ -138,80 +138,58 @@ class Link:
         5) Convert to SNR and use Shannon capacity C = B * log2(1+SNR) as an upper bound.
         """
         # TX EIRP
-        try:
-            # Ensure antenna gain matches frequency and recompute EIRP from components
-            ant = getattr(tx, "antenna", None)
-            if ant is None:
-                return 0
-            try:
-                ant.calculate_gain_db(frequency_ghz)
-            except Exception:
-                pass
-            gdb = getattr(ant, "gain_db", 0.0)
-            sspa = getattr(ant, "sspa_output_power_db", 0.0)
-            losses = getattr(ant, "losses_db", 0.0)
-            eirp_db = calculate_transmitter_eirp(sspa, gdb, losses)
-        except Exception:
+        ant = getattr(tx, "antenna", None)
+        if ant is None:
             return 0
+        try:
+            ant.calculate_gain_db(frequency_ghz)
+        except (AttributeError, TypeError, ValueError):
+            logger.debug("TX antenna gain calculation failed, using cached value")
+        gdb = getattr(ant, "gain_db", 0.0)
+        sspa = getattr(ant, "sspa_output_power_db", 0.0)
+        losses = getattr(ant, "losses_db", 0.0)
+        eirp_db = calculate_transmitter_eirp(sspa, gdb, losses)
 
         # RX G/T (approximate using antenna gain and 290K system temperature)
-        try:
-            if hasattr(rx, "antenna"):
-                try:
-                    rx.antenna.calculate_gain_db(frequency_ghz)
-                except Exception:
-                    pass
-            rx_gain_db = getattr(getattr(rx, "antenna", None), "gain_db", 0.0)
-            g_over_t_db = rx_gain_db - linear_to_db(rx_tsys_k)
-        except Exception:
-            return 0
+        if hasattr(rx, "antenna"):
+            try:
+                rx.antenna.calculate_gain_db(frequency_ghz)
+            except (AttributeError, TypeError, ValueError):
+                logger.debug("RX antenna gain calculation failed, using cached value")
+        rx_gain_db = getattr(getattr(rx, "antenna", None), "gain_db", 0.0)
+        g_over_t_db = rx_gain_db - linear_to_db(rx_tsys_k)
 
         # Free-space loss
-        try:
-            fsl_db = calculate_free_space_loss_db(frequency_ghz, self.distance / 1000.0)
-        except Exception:
-            fsl_db = 0.0
+        fsl_db = calculate_free_space_loss_db(frequency_ghz, self.distance / 1000.0)
 
         # Other propagation losses (atmospheric)
-        try:
-            att = calculate_atmospheric_attenuation_dB(
-                lat_GS=gs_lat,
-                lon_GS=gs_lon,
-                frequency_ghz=frequency_ghz,
-                elevation_angle=elevation_angle,
-                unavailability=unavailability_percent,
-                antenna_diameter=gs_diameter,
-            )
-            other_losses_db = att[0] if isinstance(att, (list, tuple)) else float(att)
-        except Exception:
-            other_losses_db = 0.0
+        att = calculate_atmospheric_attenuation_dB(
+            lat_GS=gs_lat,
+            lon_GS=gs_lon,
+            frequency_ghz=frequency_ghz,
+            elevation_angle=elevation_angle,
+            unavailability=unavailability_percent,
+            antenna_diameter=gs_diameter,
+        )
+        other_losses_db = att[0] if isinstance(att, (list, tuple)) else float(att)
 
         # C/N0 (dB-Hz)
-        try:
-            cn0_dbhz = calculate_carrier_to_noise_power_spectral_density_ratio(
-                eirp_db=eirp_db,
-                g_over_t_db=g_over_t_db,
-                free_space_loss_db=fsl_db,
-                other_losses_db=other_losses_db,
-            )
-        except Exception:
-            return 0
+        cn0_dbhz = calculate_carrier_to_noise_power_spectral_density_ratio(
+            eirp_db=eirp_db,
+            g_over_t_db=g_over_t_db,
+            free_space_loss_db=fsl_db,
+            other_losses_db=other_losses_db,
+        )
 
         # Noise bandwidth (Hz). Use occupied signal bandwidth (configurable)
         # Convert C/N0 to C/N over bandwidth: C/N [dB] = C/N0 [dB-Hz] - 10*log10(B)
         cn_db = cn0_dbhz - linear_to_db(bandwidth_hz)
         # Linear SNR
-        try:
-            snr_lin = 10.0 ** (cn_db / 10.0)
-        except Exception:
-            snr_lin = 0.0
+        snr_lin = 10.0 ** (cn_db / 10.0)
         # Shannon capacity upper bound
-        try:
-            import math
+        import math
 
-            capacity_bps = bandwidth_hz * math.log2(1.0 + max(0.0, snr_lin))
-        except Exception:
-            capacity_bps = 0.0
+        capacity_bps = bandwidth_hz * math.log2(1.0 + max(0.0, snr_lin))
         return int(capacity_bps / 1000.0)
 
     def _compute_ground_link_capacities(self) -> tuple[int, int]:
@@ -241,7 +219,13 @@ class Link:
                     gs.position["altitude"],
                 ),
             )
-        except Exception:
+        except (KeyError, TypeError, ValueError) as exc:
+            logger.warning(
+                "Failed to compute elevation angle for %s->%s: %s",
+                sat.name,
+                gs.name,
+                exc,
+            )
             elevation_angle = 30.0  # fallback typical elevation
 
         gs_lat = float(gs.position.get("latitude", 0.0))
@@ -320,11 +304,11 @@ class Link:
                     self.target.position["altitude"],
                 ),
             )
-        except Exception as exc:
-            logger.debug(
+        except (KeyError, TypeError, ValueError) as exc:
+            logger.warning(
                 "Failed to compute elevation angle for %s->%s: %s",
-                self.source,
-                self.target,
+                self.source.name,
+                self.target.name,
                 exc,
             )
             return
@@ -344,9 +328,12 @@ class Link:
                 if isinstance(attenuations, (list, tuple))
                 else float(attenuations)
             )
-        except Exception as exc:
-            logger.debug(
-                "Failed to compute atmospheric attenuation for %s: %s", self, exc
+        except (AttributeError, TypeError, ValueError) as exc:
+            logger.warning(
+                "Failed to compute atmospheric attenuation for %s->%s: %s",
+                self.source.name,
+                self.target.name,
+                exc,
             )
             return
 
@@ -367,8 +354,10 @@ class Link:
                 )
                 # Approximate Tsys at 290K if not provided
                 g_over_t_db = rx_gain_db - linear_to_db(290.0)
-            except Exception as exc:
-                logger.debug("Failed to derive G/T for %s: %s", self.target, exc)
+            except (AttributeError, TypeError, ValueError) as exc:
+                logger.warning(
+                    "Failed to derive G/T for %s: %s", self.target.name, exc
+                )
                 return
 
         # Free-space loss (dB) computed during init for downlink
@@ -382,8 +371,13 @@ class Link:
                 free_space_loss_db=fsl_db,
                 other_losses_db=other_losses_db,
             )
-        except Exception as exc:
-            logger.debug("Failed to compute C/N0 for %s: %s", self, exc)
+        except (TypeError, ValueError) as exc:
+            logger.warning(
+                "Failed to compute C/N0 for %s->%s: %s",
+                self.source.name,
+                self.target.name,
+                exc,
+            )
             return
 
         # Link bandwidth and roll-off
@@ -396,7 +390,7 @@ class Link:
                 c_over_n0_dbhz=cn0_dbhz,
                 bandwidth_hz=bandwidth_hz,
             )
-        except Exception:
+        except (TypeError, ValueError):
             # Some callers may not need C/N explicitly; compute continues with Rs for ModCod selection
             pass
 
@@ -420,8 +414,13 @@ class Link:
                 rolloff_factor=rolloff,
                 bits_per_symbol=best_modcod.spectral_efficiency,
             )
-        except Exception as exc:
-            logger.debug("Failed to compute capacity for %s: %s", self, exc)
+        except (TypeError, ValueError) as exc:
+            logger.warning(
+                "Failed to compute capacity for %s->%s: %s",
+                self.source.name,
+                self.target.name,
+                exc,
+            )
             return
 
         # Save as kbps for consistency with other link types

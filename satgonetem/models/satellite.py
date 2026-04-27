@@ -208,7 +208,7 @@ class Satellite(Node, QoSCapableMixin):
         Returns:
             None
         """
-        command = f'bash -c "while true; do ifstat -j > {path}/{self.name}.log; sleep 1; done"'
+        command = f"while true; do ifstat -j > {path}/{self.name}.log; sleep 1; done"
         Thread(target=self.execute_command, args=(command,)).start()
 
     def start_ifstat_debian(self, path: str) -> None:
@@ -221,7 +221,7 @@ class Satellite(Node, QoSCapableMixin):
         Returns:
             None
         """
-        command = f'bash -c "ifstat > {path}/{self.name}.log"'
+        command = f"ifstat > {path}/{self.name}.log"
         Thread(target=self.execute_command, args=(command,)).start()
 
     def start_net_logger(self, path: str) -> None:
@@ -238,8 +238,8 @@ class Satellite(Node, QoSCapableMixin):
             iname = interface.get_iname()
             destination = path + f"/{self.name}_{iname}.log"
             command = (
-                f'bash -c "net_logger --interface {iname} '
-                f'--log {destination} --interval 1"'
+                f"net_logger --interface {iname} "
+                f"--log {destination} --interval 1"
             )
             self.execute_command(command, detach=True)
 
@@ -255,7 +255,7 @@ class Satellite(Node, QoSCapableMixin):
         """
         time.sleep(delay)
         logging.info("Stopping attack on %s", self.name)
-        self.execute_command('sh -c "killall hping3"')
+        self.execute_command("killall hping3")
 
     def create_ibf_interaces(self) -> None:
         """
@@ -341,10 +341,10 @@ class Satellite(Node, QoSCapableMixin):
             egress_name = "eth" + interface.name.split(".")[1]
             ingress_name = "ifb" + interface.name.split(".")[1]
             self.execute_command(
-                f"sh -c 'tc qdisc del dev {egress_name} parent 10: handle 2: htb'"
+                f"tc qdisc del dev {egress_name} parent 10: handle 2: htb"
             )
             self.execute_command(
-                f"sh -c 'tc qdisc del dev {ingress_name} parent 10: handle 2: htb'"
+                f"tc qdisc del dev {ingress_name} parent 10: handle 2: htb"
             )
         self.program_specific_qos_is_on = False
         self.default_qos_is_on = True

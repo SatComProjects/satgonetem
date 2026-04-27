@@ -2,6 +2,8 @@ import enum
 import json
 import os
 import platform
+import shlex
+import subprocess
 import threading
 import time
 import uuid
@@ -98,7 +100,7 @@ class Iperf3Config:
             output_json_path: Container path where JSON output is written.
 
         Returns:
-            A shell command string of the form 'sh -c "iperf3 ..."'.
+            A shell command string ready for Node.execute_command.
         """
         parts = [
             "iperf3",
@@ -151,8 +153,8 @@ class Iperf3Config:
         if self.affinity:
             parts.append(f"--affinity {self.affinity}")
 
-        parts.append(f"> {output_json_path} 2>&1")
-        return 'sh -c "' + " ".join(parts) + '"'
+        parts.append(f"> {shlex.quote(output_json_path)} 2>&1")
+        return " ".join(parts)
 
 
 class Iperf3Results:
@@ -827,8 +829,8 @@ class Iperf3Flow:
         raw: Optional[str] = None
         try:
             server_cmd = (
-                f'sh -c "iperf3 -s -1 -B {dst_ip} -p {self.config.port} '
-                f'--json > {server_json} 2>&1"'
+                f"iperf3 -s -1 -B {shlex.quote(dst_ip)} -p {self.config.port} "
+                f"--json > {shlex.quote(server_json)} 2>&1"
             )
             self.destination.execute_command(server_cmd, detach=True)
             time.sleep(0.5)
@@ -1217,13 +1219,11 @@ def generate_iperf3_plots(
         try:
             system = platform.system()
             if system == "Darwin":  # macOS
-                os.system(f'open "{out_dir}"')
+                subprocess.run(["open", str(out_dir)], check=False)
             elif system == "Windows":
-                # Convert POSIX path to Windows if someone used /tmp on Windows
-                win_path = Path(out_dir).as_posix().replace("/", "\\")
-                os.system(f'explorer "{win_path}"')
+                subprocess.run(["explorer", str(out_dir)], check=False)
             else:  # Linux and others
-                os.system(f'xdg-open "{out_dir}"')
+                subprocess.run(["xdg-open", str(out_dir)], check=False)
         except Exception:
             pass
 

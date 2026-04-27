@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import base64
 import logging
+import shlex
 import subprocess
 import threading
 import uuid
@@ -62,30 +63,55 @@ class Node:
 
         # Change FRRManager ISIS
 
-    def execute_command(self, command: str, detach: bool = False) -> None:
+    def execute_command(self, command: str, detach: bool = False) -> str:
         """
-        A method that executes a command in the container.
-        :param command: The command to execute.
+        Execute a command in the container.
+
+        Args:
+            command: The shell command to execute.
+            detach: If True, run the command in the background and return
+                immediately.
+
+        Returns:
+            The command's stdout as a stripped string. Returns an empty string
+            when *detach* is True.
+
+        Raises:
+            RuntimeError: If the container is not initialized, the command
+                string is malformed, or the command exits with a non-zero
+                status.
         """
         if not self.container:
-            logging.error(f"Container {self.name} is not initialized.")
-            return None
+            raise RuntimeError(f"Container {self.name} is not initialized.")
 
-        # Wrap command in a shell to ensure it runs correctly
-        if command.startswith("sh -c") or command.startswith("bash -c"):
-            command = command
-        else:
-            command = f'sh -c "{command}"'
+        # Pass commands as a list so docker-py forwards them directly to the
+        # container runtime without additional shell interpretation.  If a
+        # caller already wrapped the command in sh -c / bash -c we split it
+        # safely with shlex; otherwise we wrap it ourselves.
+        if isinstance(command, str):
+            if command.startswith("sh -c") or command.startswith("bash -c"):
+                try:
+                    command = shlex.split(command)
+                except ValueError as exc:
+                    raise RuntimeError(
+                        f"Malformed shell command for {self.name}: {exc}"
+                    ) from exc
+            else:
+                command = ["sh", "-c", command]
 
-        error, output = self.container.exec_run(
+        exit_code, output = self.container.exec_run(
             cmd=command,
             detach=detach,
         )  # type: ignore
         if detach:
-            return None
-        if not error:
-            self.command_output = output.decode("utf-8").strip()
-        return error if error else output.decode("utf-8").strip()
+            return ""
+        decoded = output.decode("utf-8").strip() if output else ""
+        self.command_output = decoded
+        if exit_code != 0:
+            raise RuntimeError(
+                f"Command failed in {self.name} (exit {exit_code}): {decoded}"
+            )
+        return decoded
 
     def set_ipv4s_to_containers(
         self,
@@ -139,9 +165,9 @@ class Node:
 
         payload = "\n".join(lines)
         b64 = base64.b64encode(payload.encode()).decode()
-        cmd = f'bash -lc "echo {b64} | base64 -d | ip -force -batch -"'
+        cmd = f"echo {b64} | base64 -d | ip -force -batch -"
 
-        self.container.exec_run(cmd=cmd, detach=False)  # type: ignore
+        self.container.exec_run(cmd=["sh", "-c", cmd], detach=False)  # type: ignore
 
         return None
 
@@ -200,10 +226,8 @@ class Node:
         """
         A method that enables ipv6 forwarding in the container.
         """
-        self.execute_command('sh -c "echo 1 > /proc/sys/net/ipv6/conf/all/forwarding"')
-        self.execute_command(
-            'sh -c "echo 1 > /proc/sys/net/ipv6/conf/default/forwarding"'
-        )
+        self.execute_command("echo 1 > /proc/sys/net/ipv6/conf/all/forwarding")
+        self.execute_command("echo 1 > /proc/sys/net/ipv6/conf/default/forwarding")
 
         return None
 
@@ -211,14 +235,12 @@ class Node:
         """
         A method that disables the reverse path filtering in the container.
         """
-        self.execute_command('sh -c "echo 0 > /proc/sys/net/ipv4/conf/all/rp_filter"')
-        self.execute_command(
-            'sh -c "echo 0 > /proc/sys/net/ipv4/conf/default/rp_filter"'
-        )
+        self.execute_command("echo 0 > /proc/sys/net/ipv4/conf/all/rp_filter")
+        self.execute_command("echo 0 > /proc/sys/net/ipv4/conf/default/rp_filter")
         for interface in self.interfaces:
             interName = interface.get_iname()
             self.execute_command(
-                f'sh -c "echo 0 > /proc/sys/net/ipv4/conf/{interName}/rp_filter"'
+                f"echo 0 > /proc/sys/net/ipv4/conf/{interName}/rp_filter"
             )
             logging.info(
                 f"Disabling reverse path filtering for interface {interName} in container {self.name}"
@@ -265,17 +287,24 @@ class Node:
                 )
                 workers.append(worker)
                 worker.start()
-            except Exception as e:
-                print(
-                    f"Error executing function {function.__name__} in container {container.name}: {e}"
+            except RuntimeError as e:
+                logging.error(
+                    "Error executing function %s in container %s: %s",
+                    function.__name__,
+                    container.name,
+                    e,
                 )
 
         # Wait for all threads to finish
         for worker in workers:
             try:
                 worker.join()
-            except Exception as e:
-                print(f"Error joining thread for container {worker.name}: {e}")
+            except RuntimeError as e:
+                logging.error(
+                    "Error joining thread for container %s: %s",
+                    worker.name,
+                    e,
+                )
 
         return None
 
@@ -302,47 +331,6 @@ class Node:
         """
         return self.interfaces
 
-    def open_console(self, start_command: str = "") -> None:
-        """
-        A method that opens the console of the container.
-        """
-        # Get the container ID
-        print(f"Opening console for container {self.name} with command {start_command}")
-        if hasattr(self, "container") and not isinstance(
-            self.container, docker.models.containers.Container
-        ):
-            logging.error(f"Container {self.name} is not initialized correctly.")
-            return None
-        container_id: str | None = self.container.id
-        if not container_id:
-            logging.error(f"Container {self.name} is not initialized.")
-            return None
-        if not start_command:
-            command: list[str] = [
-                "gnome-terminal",
-                "--",
-                "docker",
-                "exec",
-                "-it",
-                container_id,
-                "/bin/bash",
-            ]
-        else:
-            command: list[str] = [
-                "gnome-terminal",
-                "--",
-                "docker",
-                "exec",
-                "-it",
-                container_id,
-                "/bin/bash",
-                "-c",
-                start_command,
-            ]
-        subprocess.Popen(command)
-
-        return None
-
     def down_inactive_interfaces(self) -> None:
         """
         A method that down all inactive interfaces.
@@ -350,7 +338,7 @@ class Node:
         for interface in self.interfaces:
             if not interface.is_active and interface.previously_active:
                 # If the interface is not active and was previously active, down it
-                command = f'sh -c "ip link set {interface.get_iname()} down"'
+                command = f"ip link set {interface.get_iname()} down"
                 self.execute_command(command)
                 logging.info(
                     f"Downing interface {interface.get_iname()} in container {self.name}"
@@ -365,7 +353,7 @@ class Node:
         for interface in self.interfaces:
             if interface.is_active and not interface.previously_active:
                 # If the interface is active and was previously inactive, up it
-                command = f'sh -c "ip link set {interface.get_iname()} up"'
+                command = f"ip link set {interface.get_iname()} up"
                 self.execute_command(command)
                 logging.info(
                     f"Upping interface {interface.get_iname()} in container {self.name}"
@@ -392,10 +380,11 @@ class Node:
         A method that returns the routing table of the node.
         :return: The routing table.
         """
-        routing_table = self.execute_command("ip route show")
-        if routing_table:
-            return routing_table.split("\n")
-        return []
+        try:
+            routing_table = self.execute_command("ip route show")
+        except RuntimeError:
+            return []
+        return routing_table.split("\n") if routing_table else []
 
     def sync_state_interfaces(self) -> None:
         """
@@ -458,21 +447,34 @@ class Node:
         veth_pair = "sudo ip link add veth-host type veth peer name veth-container"
 
         ### Attach one end of the Veth pair to the host bridge ###
-        attach_to_bridge = f"sudo ip link set veth-container netns {self.container_pid}"
+        attach_to_bridge = f"sudo ip link set veth-container netns {shlex.quote(str(self.container_pid))}"
 
         ### Down interfaces
         down_interfaces = (
-            f"sudo ip link set veth-host down && sudo ip link set {phy_interface} down"
+            f"sudo ip link set veth-host down && "
+            f"sudo ip link set {shlex.quote(phy_interface)} down"
         )
 
         ### Create bridge and add interfaces ###
-        create_bridge = f"sudo brctl addbr br-{self.name} && sudo brctl addif br-{self.name} {phy_interface} && sudo brctl addif br-{self.name} veth-host"
+        br_name = f"br-{self.name}"
+        create_bridge = (
+            f"sudo brctl addbr {shlex.quote(br_name)} && "
+            f"sudo brctl addif {shlex.quote(br_name)} {shlex.quote(phy_interface)} && "
+            f"sudo brctl addif {shlex.quote(br_name)} veth-host"
+        )
 
         ### Up interfaces ###
-        up_interfaces = f"sudo ip link set veth-host up && sudo ip link set {phy_interface} up && sudo ip link set br-{self.name} up"
+        up_interfaces = (
+            f"sudo ip link set veth-host up && "
+            f"sudo ip link set {shlex.quote(phy_interface)} up && "
+            f"sudo ip link set {shlex.quote(br_name)} up"
+        )
 
         ### Append the commands together ###
-        full_command = f"{veth_pair} && {attach_to_bridge} && {down_interfaces} && {create_bridge} && {up_interfaces}"
+        full_command = (
+            f"{veth_pair} && {attach_to_bridge} && {down_interfaces} && "
+            f"{create_bridge} && {up_interfaces}"
+        )
 
         subprocess.Popen(
             ["gnome-terminal", "--", "bash", "-c", full_command + "; exec bash"]

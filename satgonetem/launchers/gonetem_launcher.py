@@ -120,6 +120,9 @@ class GoNetEmLauncher(NetworkLauncher):
 
     def _get_client(self) -> netem_grpc.NetemStub:
         if self._client is None:
+            # NOTE: insecure_channel is intentional. GoNetem is expected to run
+            # on the same trusted localhost; TLS can be enabled if the server is
+            # exposed to an untrusted network.
             self._channel = grpc.insecure_channel(self._server_address)
             self._client = netem_grpc.NetemStub(self._channel)
         return self._client

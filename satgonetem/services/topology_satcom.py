@@ -1087,7 +1087,7 @@ class TopologyManager(SatComModel):
                     distance = 100000  # Default distance
                 else:
                     distance = float(distance)  # Ensure it's a float
-            except Exception as e:
+            except (TypeError, ValueError, KeyError) as e:
                 logging.warning(
                     f"Could not calculate distance between {node1.name} and {node2.name}: {e}"
                 )
@@ -1133,7 +1133,7 @@ class TopologyManager(SatComModel):
                 logging.debug(f"Test link {node1.name} -- {node2.name} already exists")
                 return None
 
-        except Exception as e:
+        except (TypeError, ValueError, KeyError) as e:
             logging.error(
                 f"Error creating test link between {node1.name} and {node2.name}: {e}"
             )
@@ -1298,7 +1298,7 @@ class TopologyManager(SatComModel):
             self.direct_launcher.delete_link(link)
             link.to_delete = False
             logging.info(f"Deleted link {link.source.name} -- {link.target.name}")
-        except Exception as err:
+        except (RuntimeError, OSError) as err:
             logging.error(
                 f"Unable to delete link {link.source.name}--{link.target.name}: {err}"
             )
@@ -1317,7 +1317,7 @@ class TopologyManager(SatComModel):
             logging.info(
                 f"Updated link {link.source.name} -- {link.target.name} with delay {delay} ms"
             )
-        except Exception as err:
+        except (RuntimeError, OSError) as err:
             logging.error(
                 f"Unable to update link {link.source.name}--{link.target.name}: {err}"
             )
@@ -1352,7 +1352,7 @@ class TopologyManager(SatComModel):
             logging.info(
                 f"Added link {link.source.name} -- {link.target.name} with delay {delay} ms"
             )
-        except Exception as err:
+        except (RuntimeError, OSError) as err:
             logging.error(
                 f"Unable to add link {link.source.name}--{link.target.name}: {err}"
             )
@@ -1460,7 +1460,7 @@ class TopologyManager(SatComModel):
             target: Node = link.target
             source.remove_interface_connected_to_node(target)
             target.remove_interface_connected_to_node(source)
-        except Exception as e:
+        except (AttributeError, KeyError, TypeError) as e:
             logging.error(
                 f"Failed to remove interfaces for link {link.source.name}--{link.target.name}: {e}"
             )
@@ -1479,7 +1479,7 @@ class TopologyManager(SatComModel):
                 # Remove link from dictionary
                 key = self._build_link_key(link.source, link.target)
                 del self.links[key]
-            except Exception as e:
+            except (AttributeError, KeyError, TypeError) as e:
                 logging.error(
                     f"Failed to cleanup link {link.source.name}--{link.target.name}: {e}"
                 )
@@ -1488,7 +1488,7 @@ class TopologyManager(SatComModel):
         """Update flags for a single link."""
         try:
             link.to_update = False
-        except Exception as e:
+        except (AttributeError, TypeError) as e:
             logging.error(
                 f"Failed to update flags for link {link.source.name}--{link.target.name}: {e}"
             )
@@ -1498,7 +1498,7 @@ class TopologyManager(SatComModel):
         try:
             self._build_interfaces_from_link(link, set_ip=True, sync_to_node=True)
             link.to_add = False
-        except Exception as e:
+        except (AttributeError, KeyError, TypeError) as e:
             logging.error(
                 f"Failed to add interfaces for link {link.source.name}--{link.target.name}: {e}"
             )
@@ -1851,14 +1851,14 @@ class TopologyManager(SatComModel):
                                 link.tx = usage_bps
                                 link.rx = 0  # Not measured
 
-                            except Exception as e:
-                                logging.debug(
+                            except (AttributeError, KeyError, TypeError, ValueError) as e:
+                                logging.warning(
                                     f"Error processing interface {iface} on {sat_name}: {e}"
                                 )
                                 continue
                 except FileNotFoundError:
                     logging.debug(f"No interface stats file found for {sat_name}")
-                except Exception as e:
+                except (json.JSONDecodeError, KeyError, TypeError, ValueError) as e:
                     logging.error(
                         f"Error processing interface file for {sat_name}: {e}"
                     )
@@ -1910,7 +1910,7 @@ class TopologyManager(SatComModel):
         except json.JSONDecodeError as e:
             logging.warning(f"Failed to parse JSON from {file_path}: {e}")
             return {}
-        except Exception as e:
+        except OSError as e:
             logging.error(f"Error reading interface file {file_path}: {e}")
             raise
 
@@ -1962,7 +1962,7 @@ class TopologyManager(SatComModel):
                 try:
                     fut.result()
                     ok += 1
-                except Exception as e:
+                except (RuntimeError, OSError) as e:
                     error += 1
                     logging.error(f"Failed to start tcpdump on {sat.name}: {e}")
 
@@ -2037,8 +2037,10 @@ class TopologyManager(SatComModel):
                 result = sat.container.exec_run("pgrep tcpdump", demux=False)
                 if result.exit_code == 0:
                     return True
-            except Exception:
-                pass
+            except (RuntimeError, OSError) as exc:
+                logging.warning(
+                    "Failed to check tcpdump status on %s: %s", sat.name, exc
+                )
         return False
 
     def enable_tcpdump_on_satellites(
@@ -2092,7 +2094,7 @@ class TopologyManager(SatComModel):
                 # Kill tcpdump processes
                 sat.container.exec_run("pkill tcpdump", demux=False)
                 logging.info(f"Disabled tcpdump on {sat.name}")
-            except Exception as e:
+            except (RuntimeError, OSError) as e:
                 logging.error(f"Failed to disable tcpdump on {sat.name}: {e}")
 
     def stop_gonetem(self) -> float:
@@ -2331,7 +2333,7 @@ class TopologyManager(SatComModel):
                 else f"Command exited with code {result.exit_code}"
             )
             return {"output": output, "error": error}
-        except Exception as e:
+        except (RuntimeError, OSError) as e:
             logging.error(f"Error executing command on node '{node}': {e}")
             return {"output": "", "error": str(e)}
 

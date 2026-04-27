@@ -238,11 +238,13 @@ class TestIperf3Config:
         cmd = cfg.build_client_command("10.0.0.2", "10.0.0.1", "/tmp/out.json")
         assert "-p 9000" in cmd
 
-    def test_command_wrapped_in_sh(self):
+    def test_command_not_wrapped_in_sh(self):
         cfg = Iperf3Config()
         cmd = cfg.build_client_command("10.0.0.2", "10.0.0.1", "/tmp/out.json")
-        assert cmd.startswith('sh -c "')
-        assert cmd.endswith('"')
+        # Node.execute_command now wraps commands safely; builders should
+        # return the raw command only.
+        assert not cmd.startswith('sh -c "')
+        assert "iperf3" in cmd
 
 
 class TestIperf3Results:

@@ -208,4 +208,4 @@ def _assign_ips(node: "Node") -> None:
         return
     payload = "\n".join(lines)
     b64 = base64.b64encode(payload.encode()).decode()
-    node.execute_command(f'bash -lc "echo {b64} | base64 -d | ip -force -batch -"')
+    node.execute_command(f"echo {b64} | base64 -d | ip -force -batch -")

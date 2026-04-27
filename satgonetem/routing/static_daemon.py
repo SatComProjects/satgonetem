@@ -564,5 +564,5 @@ class StaticRoutingDaemon(RoutingDaemon):
         """
         payload = "\n".join(lines)
         b64 = base64.b64encode(payload.encode()).decode()
-        cmd = f'bash -lc "echo {b64} | base64 -d | ip -force -batch -"'
-        device.container.exec_run(cmd=cmd, detach=True)
+        cmd = f"echo {b64} | base64 -d | ip -force -batch -"
+        device.container.exec_run(cmd=["sh", "-c", cmd], detach=True)
