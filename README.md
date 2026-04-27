@@ -4,6 +4,15 @@
 
 SatGoNetem bridges orbital mechanics and Linux network emulation. It computes satellite positions using SGP4 propagation (or walker constellation patterns), spawns Docker containers for each node, wires them together with virtual ethernet pairs, and applies `tc netem`/TBF qdiscs to model propagation delay and link capacity. As orbits evolve, the emulated topology updates accordingly.
 
+## Documentation
+
+- [`docs/topology_manager_api.md`](docs/topology_manager_api.md) — Full `TopologyManager` API reference
+- [`docs/routing.md`](docs/routing.md) — Routing daemon architecture and custom daemon registration
+- [`docs/traffic.md`](docs/traffic.md) — Ping, iperf3, hping3 tools and `FlowScheduler`
+- [`docs/project_creation.md`](docs/project_creation.md) — End-to-end constellation design guide
+- [`docs/hil_manager.md`](docs/hil_manager.md) — Hardware-in-the-loop integration
+- [`docs/link_budget.md`](docs/link_budget.md) — Link budget calculations and parameters
+
 ## Features
 
 - Real-time satellite constellation simulation (LEO/MEO/GEO, walker and TLE-based)
@@ -240,13 +249,12 @@ Key parameters on `TopologyManager`:
 
 Detailed guides are in `docs/`:
 
-- `topology_manager_api.md` - Full TopologyManager API reference
-- `routing.md` - Routing daemon architecture and custom daemon registration
-- `traffic.md` - Ping, iperf3, hping3 tools and FlowScheduler
-- `dynamics/README.md` - DynamicsModel interface and SatComModel
-- `launchers/README.md` - Launcher backends
-- `project_creation.md` - End-to-end constellation design guide
-- `hil_manager.md` - Hardware-in-the-loop integration
+- [`topology_manager_api.md`](docs/topology_manager_api.md) - Full TopologyManager API reference
+- [`routing.md`](docs/routing.md) - Routing daemon architecture and custom daemon registration
+- [`traffic.md`](docs/traffic.md) - Ping, iperf3, hping3 tools and FlowScheduler
+- [`project_creation.md`](docs/project_creation.md) - End-to-end constellation design guide
+- [`hil_manager.md`](docs/hil_manager.md) - Hardware-in-the-loop integration
+- [`link_budget.md`](docs/link_budget.md) - Link budget calculations and parameters
 
 ## Testing
 
