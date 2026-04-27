@@ -3,6 +3,7 @@
 import pytest
 from unittest.mock import MagicMock, patch
 
+from satgonetem.link_budget.config import LinkBudgetConfig
 from satgonetem.models.link import Link
 from satgonetem.models.node import Node
 from satgonetem.models.interface import Interface
@@ -34,7 +35,7 @@ def isl_link(sat_node):
         target=other_sat,
         distance=300_000.0,
         type="InterSatelliteLink",
-        capacities=[1000],
+        default_capacity_kbps=1000,
     )
 
 
@@ -45,7 +46,7 @@ def gsl_link(sat_node, gnd_node):
         target=gnd_node,
         distance=550_000.0,
         type="GroundStationLink",
-        capacities=[500],
+        default_capacity_kbps=500,
     )
 
 
@@ -58,7 +59,7 @@ class TestLinkInit:
             target=gnd_node,
             distance=550_000.0,
             type="GroundStationLink",
-            capacities=[500],
+            default_capacity_kbps=500,
         )
         assert link.source is sat_node
         assert link.target is gnd_node
@@ -69,7 +70,7 @@ class TestLinkInit:
             target=gnd_node,
             distance=550_000.0,
             type="GroundStationLink",
-            capacities=[500],
+            default_capacity_kbps=500,
         )
         assert link.distance == 550_000.0
 
@@ -79,7 +80,7 @@ class TestLinkInit:
             target=gnd_node,
             distance=550_000.0,
             type="GroundStationLink",
-            capacities=[500],
+            default_capacity_kbps=500,
         )
         assert link.type == "GroundStationLink"
 
@@ -89,7 +90,7 @@ class TestLinkInit:
             target=gnd_node,
             distance=550_000.0,
             type="GroundStationLink",
-            capacities=[500],
+            default_capacity_kbps=500,
         )
         assert link.is_active is True
 
@@ -100,7 +101,7 @@ class TestLinkInit:
             distance=550_000.0,
             type="GroundStationLink",
             is_active=False,
-            capacities=[500],
+            default_capacity_kbps=500,
         )
         assert link.is_active is False
 
@@ -130,7 +131,7 @@ class TestLinkDelay:
             target=node_b,
             distance=distance,
             type="InterSatelliteLink",
-            capacities=[1000],
+            default_capacity_kbps=1000,
         )
         expected_ms = int((distance / SPEED_OF_LIGHT) * 1000)
         assert link.delay == expected_ms
@@ -143,7 +144,7 @@ class TestLinkDelay:
             target=node_b,
             distance=0.0,
             type="InterSatelliteLink",
-            capacities=[1000],
+            default_capacity_kbps=1000,
         )
         assert link.delay == 0
 
@@ -159,12 +160,9 @@ class TestLinkGetLinkCapacity:
             target=node_b,
             distance=300_000.0,
             type="InterSatelliteLink",
-            capacities=[1000],
+            default_capacity_kbps=1000,
         )
-        assert link.capacity == 1000
-
-    def test_gsl_returns_first_capacity(self, gsl_link):
-        assert gsl_link.capacity == 500
+        assert link.peer1_capacity == 1000
 
     def test_capacity_reflects_capacities_list(self):
         node_a = Node("Sat0")
@@ -174,9 +172,9 @@ class TestLinkGetLinkCapacity:
             target=node_b,
             distance=550_000.0,
             type="GroundStationLink",
-            capacities=[250],
+            default_capacity_kbps=250,
         )
-        assert link.capacity == 250
+        assert link.peer1_capacity == 250
 
 
 class TestLinkGetNames:
@@ -205,23 +203,33 @@ class TestLinkEquality:
             target=gnd_node,
             distance=550_000.0,
             type="GroundStationLink",
-            capacities=[500],
+            default_capacity_kbps=500,
         )
         link2 = Link(
             source=sat_node,
             target=gnd_node,
             distance=600_000.0,
             type="GroundStationLink",
-            capacities=[1000],
+            default_capacity_kbps=500,
         )
         assert link1 == link2
 
     def test_not_equal_different_source(self, sat_node, gnd_node):
         other_sat = Node("Sat2")
-        link1 = Link(source=sat_node, target=gnd_node, distance=550_000.0,
-                     type="GroundStationLink", capacities=[500])
-        link2 = Link(source=other_sat, target=gnd_node, distance=550_000.0,
-                     type="GroundStationLink", capacities=[500])
+        link1 = Link(
+            source=sat_node,
+            target=gnd_node,
+            distance=550_000.0,
+            type="GroundStationLink",
+            default_capacity_kbps=500,
+        )
+        link2 = Link(
+            source=other_sat,
+            target=gnd_node,
+            distance=550_000.0,
+            type="GroundStationLink",
+            default_capacity_kbps=500,
+        )
         assert link1 != link2
 
     def test_not_implemented_for_non_link(self, isl_link):
@@ -267,11 +275,11 @@ class TestLinkSyncDistanceAndDelay:
     def test_updates_delay_when_distance_changes(self, gsl_link):
         gsl_link.satcom_object = MagicMock()
         gsl_link.source.position = {
-            "latitude": 0.0, "longitude": 0.0, "altitude": 550.0
+            "latitude": 0.0,
+            "longitude": 0.0,
+            "altitude": 550.0,
         }
-        gsl_link.target.position = {
-            "latitude": 10.0, "longitude": 0.0, "altitude": 0.0
-        }
+        gsl_link.target.position = {"latitude": 10.0, "longitude": 0.0, "altitude": 0.0}
 
         old_delay = gsl_link.delay
         gsl_link.sync_distance_from_satcom_and_delay()
@@ -284,7 +292,7 @@ class TestLinkSyncDistanceAndDelay:
             target=gnd_node,
             distance=1.0,
             type="GroundStationLink",
-            capacities=[500],
+            default_capacity_kbps=500,
         )
         link.satcom_object = MagicMock()
         link.source.position = {"latitude": 0.0, "longitude": 0.0, "altitude": 550.0}
@@ -300,7 +308,7 @@ class TestLinkSyncDistanceAndDelay:
             target=gnd_node,
             distance=550_000.0,
             type="GroundStationLink",
-            capacities=[500],
+            default_capacity_kbps=500,
         )
         link.satcom_object = MagicMock()
         link.source.position = {"latitude": 0.0, "longitude": 0.0, "altitude": 550.0}
@@ -312,27 +320,87 @@ class TestLinkSyncDistanceAndDelay:
         assert isinstance(link.to_update, bool)
 
 
-class TestLinkSyncStatusFromSatcom:
-    """Tests for Link.sync_status_from_satcom."""
+class TestLinkUseBudget:
+    """Tests for Link.use_budget flag."""
 
-    def test_raises_when_satcom_object_is_none(self, isl_link):
-        with pytest.raises(ValueError, match="Satcom object is not set"):
-            isl_link.sync_status_from_satcom()
+    def test_use_budget_false_uses_default_capacity(self, sat_node, gnd_node):
+        link = Link(
+            source=sat_node,
+            target=gnd_node,
+            distance=550_000.0,
+            type="GroundStationLink",
+            default_capacity_kbps=500,
+            use_budget=False,
+        )
+        assert link.peer1_capacity == 500
 
-    def test_sets_is_active_to_inverse_of_satcom_is_active(self, isl_link):
-        mock_satcom = MagicMock()
-        mock_satcom.is_active = True
-        isl_link.satcom_object = mock_satcom
+    def test_use_budget_true_without_antenna_fallback(self, sat_node, gnd_node):
+        link = Link(
+            source=sat_node,
+            target=gnd_node,
+            distance=550_000.0,
+            type="GroundStationLink",
+            default_capacity_kbps=500,
+            use_budget=True,
+        )
+        # No antennas set -> falls back to default capacity
+        assert link.peer1_capacity == 500
 
-        isl_link.sync_status_from_satcom()
+    def test_use_budget_true_with_antennas(self, sat_node, gnd_node):
+        from satgonetem.link_budget.antenna import Antenna
 
-        assert isl_link.is_active is False
+        sat_node.antenna = Antenna(
+            diameter=1.0, efficiency=0.6, sspa_output_power_db=40.0
+        )
+        gnd_node.antenna = Antenna(diameter=2.0, efficiency=0.6)
 
-    def test_is_active_true_when_satcom_is_active_false(self, isl_link):
-        mock_satcom = MagicMock()
-        mock_satcom.is_active = False
-        isl_link.satcom_object = mock_satcom
+        link = Link(
+            source=sat_node,
+            target=gnd_node,
+            distance=550_000.0,
+            type="GroundStationLink",
+            default_capacity_kbps=500,
+            use_budget=True,
+        )
+        # With antennas, capacity should be computed via budget
+        assert isinstance(link.peer1_capacity, int)
+        assert link.peer1_capacity >= 0
 
-        isl_link.sync_status_from_satcom()
+    def test_use_budget_ignored_for_non_gsl(self, sat_node):
+        other_sat = Node("Sat1")
+        other_sat.position = {"latitude": 2.0, "longitude": 0.0, "altitude": 550.0}
+        link = Link(
+            source=sat_node,
+            target=other_sat,
+            distance=300_000.0,
+            type="InterSatelliteLink",
+            default_capacity_kbps=1000,
+            use_budget=True,
+        )
+        assert link.peer1_capacity == 1000
 
-        assert isl_link.is_active is True
+
+class TestLinkBudgetConfigParam:
+    """Tests for Link.link_budget_config parameter."""
+
+    def test_link_budget_config_stored(self, sat_node, gnd_node):
+        cfg = LinkBudgetConfig(downlink_freq_ghz=20.0, uplink_freq_ghz=15.0)
+        link = Link(
+            source=sat_node,
+            target=gnd_node,
+            distance=550_000.0,
+            type="GroundStationLink",
+            default_capacity_kbps=500,
+            link_budget_config=cfg,
+        )
+        assert link.link_budget_config is cfg
+
+    def test_default_link_budget_config_is_none(self, sat_node, gnd_node):
+        link = Link(
+            source=sat_node,
+            target=gnd_node,
+            distance=550_000.0,
+            type="GroundStationLink",
+            default_capacity_kbps=500,
+        )
+        assert link.link_budget_config is None

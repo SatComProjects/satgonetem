@@ -21,7 +21,6 @@ class TestNodeInit:
     def test_routing_tables_start_empty(self):
         node = Node("Sat0")
         assert node.ipv4_routing_table == []
-        assert node.ipv6_routing_table == []
 
     def test_interfaces_start_empty(self):
         node = Node("Sat0")
@@ -40,7 +39,6 @@ class TestNodeInit:
         assert node.loopback is not None
         assert node.loopback.name == "lo"
         assert node.loopback.type == "lo"
-
 
 
 class TestNodeCreateInterface:
@@ -126,38 +124,6 @@ class TestNodeStringRepresentation:
     def test_repr_returns_name(self):
         node = Node("Sat3")
         assert repr(node) == "Sat3"
-
-
-class TestNodeSyncStateInterfaces:
-    """Tests for Node.sync_state_interfaces."""
-
-    def test_previously_active_mirrors_is_active(self):
-        node = Node("Sat0")
-        iface = node.create_interface("Sat0.1")
-        iface.is_active = True
-        iface.previously_active = False
-        node.sync_state_interfaces()
-        assert iface.previously_active is True
-
-    def test_inactive_interface_mirrored(self):
-        node = Node("Sat0")
-        iface = node.create_interface("Sat0.1")
-        iface.is_active = False
-        iface.previously_active = True
-        node.sync_state_interfaces()
-        assert iface.previously_active is False
-
-    def test_syncs_all_interfaces(self):
-        node = Node("Sat0")
-        iface1 = node.create_interface("Sat0.1")
-        iface2 = node.create_interface("Sat0.2")
-        iface1.is_active = True
-        iface1.previously_active = False
-        iface2.is_active = False
-        iface2.previously_active = True
-        node.sync_state_interfaces()
-        assert iface1.previously_active is True
-        assert iface2.previously_active is False
 
 
 class TestNodeHashNode:

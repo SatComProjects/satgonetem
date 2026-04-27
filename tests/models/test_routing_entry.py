@@ -97,31 +97,6 @@ class TestRoutingEntryInitIPv4:
         assert entry.target_node == "Sat5"
 
 
-class TestRoutingEntryInitIPv6:
-    """Tests for RoutingEntry initialisation with IPv6."""
-
-    def test_valid_ipv6_stores_summarized_destination(self, iface):
-        entry = RoutingEntry(
-            destination="2001:0db8:0000:0000:0000:0000:0000:0001",
-            interface=iface,
-            gateway="2001:0db8:0000:0000:0000:0000:0000:0001",
-            prefix=32,
-            protocol="ipv6",
-        )
-        assert entry.prefix == 32
-        assert "0000" in entry.destination or len(entry.destination) > 0
-
-    def test_valid_ipv6_prefix_128(self, iface):
-        entry = RoutingEntry(
-            destination="2001:0db8:0000:0000:0000:0000:0000:0001",
-            interface=iface,
-            gateway="fe80::1",
-            prefix=128,
-            protocol="ipv6",
-        )
-        assert entry.prefix == 128
-
-
 class TestRoutingEntryValidation:
     """Tests for RoutingEntry input validation."""
 
@@ -162,27 +137,6 @@ class TestRoutingEntryValidation:
                 prefix=-1,
                 protocol="ipv4",
             )
-
-    def test_invalid_ipv6_address_raises_value_error(self, iface):
-        with pytest.raises(ValueError, match="Invalid IPv6"):
-            RoutingEntry(
-                destination="not::valid::ipv6::addr",
-                interface=iface,
-                gateway="::1",
-                prefix=64,
-                protocol="ipv6",
-            )
-
-    def test_ipv6_prefix_above_128_raises_value_error(self, iface):
-        with pytest.raises(ValueError, match="Invalid prefix"):
-            RoutingEntry(
-                destination="2001:0db8:0000:0000:0000:0000:0000:0001",
-                interface=iface,
-                gateway="::1",
-                prefix=129,
-                protocol="ipv6",
-            )
-
 
 class TestRoutingEntryEquality:
     """Tests for RoutingEntry.__eq__."""

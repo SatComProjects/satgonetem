@@ -19,10 +19,10 @@ import logging
 import shlex
 import subprocess
 import threading
-import uuid
 
 import docker.models
 import docker.models.containers
+from satgonetem.link_budget.antenna import Antenna
 from satgonetem.models.interface import Interface
 from satgonetem.utils.utils import get_interface_from_name, unique_pair_id
 
@@ -44,15 +44,14 @@ class Node:
         self.name = name
         self.id = int(name[3:])
         self.ipv4_routing_table: list[RoutingEntry] = []
-        self.ipv6_routing_table: list[RoutingEntry] = []
         self.interfaces: list[Interface] = []
         self.ipv4_previous_routing_table = []
-        self.ipv6_previous_routing_table = []
-        self.entriesToEdit = []
+        self.entries_to_edit = []
         self.type: str
         self.command_output = ""
 
         self.position: dict[str, float] = {}
+        self.antenna: Antenna | None = None
 
         # We create a loopback interface for the node
         self.loopback = Interface("lo", iface_type="lo")
@@ -61,9 +60,7 @@ class Node:
         self.container: docker.models.containers.Container | None = None
         self.container_pid: int | None = None
 
-        # Change FRRManager ISIS
-
-    def execute_command(self, command: str, detach: bool = False) -> str:
+    def execute_command(self, command: str | list[str], detach: bool = False) -> str:
         """
         Execute a command in the container.
 
@@ -113,7 +110,7 @@ class Node:
             )
         return decoded
 
-    def set_ipv4s_to_containers(
+    def set_ipv4_to_containers(
         self,
         interface: Interface,
         set_lo: bool = True,
@@ -130,17 +127,6 @@ class Node:
         """
         # Build batch lines
         lines = []
-
-        if not interface:
-            ...
-            # logging.info(f"Setting IPv4s to container {self.name} on all interfaces")
-        else:
-            # logging.info(f"Setting IPv4 {interface.ipv4} to container {self.name} on interface {interface.name}")
-            if not interface.ipv4:
-                logging.warning(
-                    f"Interface {interface.name} has no IPv4 address set, skipping"
-                )
-                return None
 
         int_list = [interface] if interface else self.interfaces
 
@@ -167,7 +153,7 @@ class Node:
         b64 = base64.b64encode(payload.encode()).decode()
         cmd = f"echo {b64} | base64 -d | ip -force -batch -"
 
-        self.container.exec_run(cmd=["sh", "-c", cmd], detach=False)  # type: ignore
+        self.execute_command(command=["sh", "-c", cmd], detach=False)  # type: ignore
 
         return None
 
@@ -197,57 +183,6 @@ class Node:
 
         return None
 
-    def set_ipv6s_to_container(self, set_lo: bool = True) -> None:
-        """
-        A method that sets the IPs of the interfaces to the container.
-        """
-        tmpfile = f"/tmp/batch_{uuid.uuid4().hex}.txt"
-        logging.info(
-            f"Setting IPv6s to container {self.name} using temporary file {tmpfile}"
-        )
-        with open(tmpfile, "w") as f:
-            for interface in self.interfaces:
-                IP = interface.ipv4
-                interName = interface.get_iname()
-                command = f"addr add {IP}/127 dev {interName}"
-                f.write(f"{command}\n")
-
-            if not set_lo:
-                return None
-            if hasattr(self, "loopback"):
-                command = f"addr add {self.loopback.ipv4}/64 dev lo"
-                f.write(f"{command}\n")
-
-        executable = f"ip -6 -force -batch " + tmpfile + " && rm " + tmpfile
-
-        self.execute_command(executable, detach=True)
-
-    def enable_ipv6_forwarding(self) -> None:
-        """
-        A method that enables ipv6 forwarding in the container.
-        """
-        self.execute_command("echo 1 > /proc/sys/net/ipv6/conf/all/forwarding")
-        self.execute_command("echo 1 > /proc/sys/net/ipv6/conf/default/forwarding")
-
-        return None
-
-    def disable_rp_filter(self) -> None:
-        """
-        A method that disables the reverse path filtering in the container.
-        """
-        self.execute_command("echo 0 > /proc/sys/net/ipv4/conf/all/rp_filter")
-        self.execute_command("echo 0 > /proc/sys/net/ipv4/conf/default/rp_filter")
-        for interface in self.interfaces:
-            interName = interface.get_iname()
-            self.execute_command(
-                f"echo 0 > /proc/sys/net/ipv4/conf/{interName}/rp_filter"
-            )
-            logging.info(
-                f"Disabling reverse path filtering for interface {interName} in container {self.name}"
-            )
-
-        return None
-
     def init_bmv2(self) -> None:
         """
         A method that initializes P4D in the container.
@@ -258,66 +193,15 @@ class Node:
 
         return None
 
-    # ==================== End MPLS Methods ====================
-
-    @staticmethod
-    def execute_function_in_all_containers(
-        list_of_containers: list[
-            Node
-        ],  # 2.0071 seconds on average for 400 satellites, 40 gnds
-        function: Callable[..., Any],
-        *args: Any,
-        **kwargs: Any,
-    ) -> None:
-        """
-        A method that executes a function in all containers.
-        :param function: The function to execute.
-        :param args: The arguments of the function.
-        :param kwargs: The keyword arguments of the function.
-        """
-        workers: list[threading.Thread] = []
-        for container in list_of_containers:
-            try:
-                # Create a new thread for each container
-                worker = threading.Thread(
-                    target=function,
-                    args=(container,) + args,
-                    kwargs=kwargs,
-                    name=container.name,
-                )
-                workers.append(worker)
-                worker.start()
-            except RuntimeError as e:
-                logging.error(
-                    "Error executing function %s in container %s: %s",
-                    function.__name__,
-                    container.name,
-                    e,
-                )
-
-        # Wait for all threads to finish
-        for worker in workers:
-            try:
-                worker.join()
-            except RuntimeError as e:
-                logging.error(
-                    "Error joining thread for container %s: %s",
-                    worker.name,
-                    e,
-                )
-
-        return None
-
     def create_interface(
         self,
         name: str,
     ) -> Interface:
         """
         A method that creates an interface for the ground station.
-        :param ip_address: The IP of the interface.
-        :param name: The name of the interface.
-        :param peer: The peer of the interface.
-        :return: The interface.
+        Args:
+            name: The name of the interface to create.
+        Returns: The created Interface object.
         """
         interface = Interface(name=name)
         self.interfaces.append(interface)
@@ -330,36 +214,6 @@ class Node:
         :return: The interfaces.
         """
         return self.interfaces
-
-    def down_inactive_interfaces(self) -> None:
-        """
-        A method that down all inactive interfaces.
-        """
-        for interface in self.interfaces:
-            if not interface.is_active and interface.previously_active:
-                # If the interface is not active and was previously active, down it
-                command = f"ip link set {interface.get_iname()} down"
-                self.execute_command(command)
-                logging.info(
-                    f"Downing interface {interface.get_iname()} in container {self.name}"
-                )
-
-        return None
-
-    def up_active_interfaces(self) -> None:
-        """
-        A method that up all active interfaces.
-        """
-        for interface in self.interfaces:
-            if interface.is_active and not interface.previously_active:
-                # If the interface is active and was previously inactive, up it
-                command = f"ip link set {interface.get_iname()} up"
-                self.execute_command(command)
-                logging.info(
-                    f"Upping interface {interface.get_iname()} in container {self.name}"
-                )
-
-        return None
 
     def hash_node(self) -> int:
         """
@@ -386,14 +240,6 @@ class Node:
             return []
         return routing_table.split("\n") if routing_table else []
 
-    def sync_state_interfaces(self) -> None:
-        """
-        A method that syncs the state of the interfaces.
-        """
-        for interface in self.interfaces:
-            interface.previously_active = interface.is_active
-        return None
-
     def add_policy_based_routing_rules(self) -> None:
         """
         Method to add policy-based routing rules for IPv4.
@@ -412,87 +258,6 @@ class Node:
 
             logging.info(f"Executing command: {command}")
             self.execute_command(command)
-
-    def get_interface_by_peer(self, path: list[int], peer: Node) -> Interface | None:
-        """
-        Method to get the interface by peer node.
-        :param path: The path to the peer node.
-        :param peer: The peer node.
-        :return: The interface if found, None otherwise.
-        """
-        first_hop = path[1]
-        if first_hop is None:
-            logging.error(f"No first hop found in path {path} for peer {peer.name}.")
-            return None
-        # Find the interface that matches the peer node
-        print(f"{self.id}.{first_hop}")
-        interface = get_interface_from_name(self.interfaces, f"{self.id}.{first_hop}")
-        if interface is None:
-            logging.error(
-                f"No interface found for peer {peer.name} in node {self.name}."
-            )
-            return None
-        logging.info(
-            f"Found interface {interface.name} in node {self.name} for peer {peer.name}."
-        )
-        return interface
-
-    def bridge_node_to_host(self, phy_interface: str) -> None:
-        """
-        A method that bridges the interface to the host.
-        """
-        ## We will need sudo for these commands so execute in a shell with sudo privileges
-
-        ### Create the Veth pair ###
-        veth_pair = "sudo ip link add veth-host type veth peer name veth-container"
-
-        ### Attach one end of the Veth pair to the host bridge ###
-        attach_to_bridge = f"sudo ip link set veth-container netns {shlex.quote(str(self.container_pid))}"
-
-        ### Down interfaces
-        down_interfaces = (
-            f"sudo ip link set veth-host down && "
-            f"sudo ip link set {shlex.quote(phy_interface)} down"
-        )
-
-        ### Create bridge and add interfaces ###
-        br_name = f"br-{self.name}"
-        create_bridge = (
-            f"sudo brctl addbr {shlex.quote(br_name)} && "
-            f"sudo brctl addif {shlex.quote(br_name)} {shlex.quote(phy_interface)} && "
-            f"sudo brctl addif {shlex.quote(br_name)} veth-host"
-        )
-
-        ### Up interfaces ###
-        up_interfaces = (
-            f"sudo ip link set veth-host up && "
-            f"sudo ip link set {shlex.quote(phy_interface)} up && "
-            f"sudo ip link set {shlex.quote(br_name)} up"
-        )
-
-        ### Append the commands together ###
-        full_command = (
-            f"{veth_pair} && {attach_to_bridge} && {down_interfaces} && "
-            f"{create_bridge} && {up_interfaces}"
-        )
-
-        subprocess.Popen(
-            ["gnome-terminal", "--", "bash", "-c", full_command + "; exec bash"]
-        )
-
-        # ### Configure the interfaces ###
-
-        # ## On the host side ##
-        # configure_host_side = "sudo ip addr add 10.1.1.1/24 dev veth-host && sudo ip link set veth-host up"
-
-        # ## On the container side ##
-        # configure_container_side = f'sudo nsenter -t {self.container_pid} -n ip addr add 10.1.1.2/24 dev veth-container && sudo nsenter -t {self.container_pid} -n ip link set veth-container up'
-
-        # ### Append the commands together ###
-        # full_command = f"{veth_pair} && {attach_to_bridge} && {configure_host_side} && {configure_container_side}"
-
-        # Execute on new shell with sudo privileges
-        # subprocess.Popen(['gnome-terminal', '--', 'bash', '-c', full_command + '; exec bash'])
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, Node):

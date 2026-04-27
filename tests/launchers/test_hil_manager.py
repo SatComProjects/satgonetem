@@ -45,7 +45,6 @@ def _make_link(src_name: str, tgt_name: str, link_type: str, delay: int = 10, sr
     link.is_active = True
     link.peer1_capacity = 0
     link.peer2_capacity = 0
-    link.capacity = 0
     return link
 
 
@@ -273,17 +272,9 @@ class TestLinkCapacity:
     def test_uses_peer1_capacity_when_set(self, manager):
         link = MagicMock()
         link.peer1_capacity = 30_000
-        link.capacity = 0
         assert manager._link_capacity_kbps(link) == 30_000
 
-    def test_falls_back_to_capacity_when_peer1_zero(self, manager):
+    def test_falls_back_to_gnd_capacity_when_peer1_zero(self, manager):
         link = MagicMock()
         link.peer1_capacity = 0
-        link.capacity = 20_000
-        assert manager._link_capacity_kbps(link) == 20_000
-
-    def test_falls_back_to_gnd_capacity_when_all_zero(self, manager):
-        link = MagicMock()
-        link.peer1_capacity = 0
-        link.capacity = 0
         assert manager._link_capacity_kbps(link) == manager._gnd_capacity_kbps

@@ -69,37 +69,6 @@ class TestGroundStationSyncPositionFromSatcom:
         assert gs.position == {}
 
 
-class TestGroundStationAddTraffic:
-    """Tests for GroundStation.add_traffic."""
-
-    def test_add_single_traffic_model(self):
-        gs = GroundStation("Gnd0")
-        model = object()
-        gs.add_traffic(model)
-        assert gs.traffic_models == [model]
-
-    def test_add_list_of_traffic_models(self):
-        gs = GroundStation("Gnd0")
-        models = [object(), object()]
-        gs.add_traffic(models)
-        assert gs.traffic_models == models
-
-    def test_add_traffic_multiple_times(self):
-        gs = GroundStation("Gnd0")
-        m1 = object()
-        m2 = object()
-        gs.add_traffic(m1)
-        gs.add_traffic(m2)
-        assert len(gs.traffic_models) == 2
-        assert m1 in gs.traffic_models
-        assert m2 in gs.traffic_models
-
-    def test_add_empty_list_does_not_change_models(self):
-        gs = GroundStation("Gnd0")
-        gs.add_traffic([])
-        assert gs.traffic_models == []
-
-
 class TestGroundStationEquality:
     """GroundStation equality is inherited from Node."""
 

@@ -53,7 +53,6 @@ class Iperf3Config:
         bidir: Run bidirectional test simultaneously. Maps to --bidir.
         tos: IP Type of Service / DSCP byte value. Maps to -S.
         ttl: IP time-to-live. Maps to --ttl.
-        ipv6: Use IPv6 transport. Maps to -6.
         num_bytes: Number of bytes to transmit instead of a timed run.
             When set, duration is ignored. Maps to -n.
         omit: Seconds to omit from the start (warm-up period). Maps to -O.
@@ -77,7 +76,6 @@ class Iperf3Config:
     bidir: bool = False
     tos: Optional[int] = None
     ttl: Optional[int] = None
-    ipv6: bool = False
     num_bytes: Optional[int] = None
     omit: int = 0
     affinity: Optional[str] = None
@@ -146,8 +144,6 @@ class Iperf3Config:
             parts.append(f"-S {self.tos}")
         if self.ttl is not None:
             parts.append(f"--ttl {self.ttl}")
-        if self.ipv6:
-            parts.append("-6")
         if self.omit > 0:
             parts.append(f"-O {self.omit}")
         if self.affinity:

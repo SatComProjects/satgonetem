@@ -176,8 +176,7 @@ class HILManager:
     def _link_capacity_kbps(self, link) -> int:
         """Return the satellite-side capacity for a link in kbps."""
         p1 = int(getattr(link, "peer1_capacity", 0) or 0)
-        fb = int(getattr(link, "capacity", 0) or 0)
-        return p1 or fb or self._gnd_capacity_kbps
+        return p1 or self._gnd_capacity_kbps
 
     def _create_veth(self, sat_name: str, sat_pid: int, gnd_id: int) -> bool:
         """

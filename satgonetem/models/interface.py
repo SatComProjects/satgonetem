@@ -10,7 +10,6 @@ class Interface:
     def __init__(self, name: str = "Default", iface_type: str = ""):
 
         self.ipv4: str = ""
-        self.ipv6: str = ""
         self.name: str = name
         self.peer: Interface
         self.is_monitored: bool = False
@@ -31,12 +30,6 @@ class Interface:
         A method that returns the name of the interface.
         """
         return "lo" if self.type == "lo" else "eth" + self.name.split(".")[1]
-
-    def set_ipv6(self, ip_address: str) -> None:
-        """
-        A method that sets the ipv6 of the Interface.
-        """
-        self.ipv6 = ip_address
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, Interface):

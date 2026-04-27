@@ -40,7 +40,6 @@ class TestSatelliteInit:
     def test_routing_tables_empty(self):
         sat = Satellite("Sat0")
         assert sat.ipv4_routing_table == []
-        assert sat.ipv6_routing_table == []
 
 
 class TestSatelliteSyncPositionFromSatcom:

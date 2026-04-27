@@ -38,6 +38,7 @@ from satgonetem.models.node import Node
 from satgonetem.models.ground_station import GroundStation
 from satgonetem.models.link import Link
 from satgonetem.models.satellite import Satellite
+from satgonetem.link_budget.config import AntennaConfig, LinkBudgetConfig
 from satgonetem.utils.coverage import coverage_percentage_fast
 from satgonetem.traffic import (
     Hping3Config,
@@ -106,6 +107,7 @@ class NetworkConfig:
     satellite_image: str = "jariassuarez/sgnt:satellite"
     network_launcher: str = "GONETEM"
     gonetem_server: str = "localhost:10110"
+    use_budget: bool = False
 
 
 class TopologyManager(SatComModel):
@@ -150,7 +152,11 @@ class TopologyManager(SatComModel):
         cls._daemon_registry[name] = daemon_class
 
     @classmethod
-    def from_satcom(cls, simulation_property: SimulationProperty) -> "TopologyManager":
+    def from_satcom(
+        cls,
+        simulation_property: SimulationProperty,
+        network_config: Optional[NetworkConfig] = None,
+    ) -> "TopologyManager":
         """Create a TopologyManager from a SimulationProperty.
 
         Builds the SimulationManager from the project configuration in memory
@@ -160,14 +166,16 @@ class TopologyManager(SatComModel):
 
         Args:
             simulation_property: A configured SimulationProperty instance.
-
+            network_config: A NetworkConfig instance to override default values.
         Returns:
             An initialised TopologyManager backed by the project's SimulationManager.
         """
         sim_manager = create_and_load_simulation(
             simulation_property.model_dump(), simulation_property.simulation_name
         )
-        instance = cls(simulation_manager=sim_manager)
+        if network_config is None:
+            network_config = NetworkConfig()
+        instance = cls(simulation_manager=sim_manager, network_config=network_config)
         instance.simulation_property = simulation_property
         return instance
 
@@ -200,6 +208,7 @@ class TopologyManager(SatComModel):
                 satellite_image=self.satellite_image,
                 network_launcher=self.network_launcher,
                 gonetem_server=self.gonetem_server,
+                use_budget=self.use_budget,
             )
 
         if self.simulation_property is not None:
@@ -271,8 +280,7 @@ class TopologyManager(SatComModel):
         simulation_property = SimulationProperty.model_validate(sim_prop_data)
         network_config = NetworkConfig(**payload["network_config"])
 
-        instance = cls.from_satcom(simulation_property)
-        instance._apply_network_config(network_config)
+        instance = cls.from_satcom(simulation_property, network_config)
         return instance
 
     def __init__(
@@ -313,6 +321,9 @@ class TopologyManager(SatComModel):
         # Optional HIL manager. Set this before calling start_gonetem() to
         # replace specific ground stations with host-bridged hardware.
         self.hil_manager = None
+
+        # Link budget configuration applied automatically to new links.
+        self.link_budget_config: Optional[LinkBudgetConfig] = None
 
         self.status = False
         self.gonetem_is_on = False
@@ -384,7 +395,7 @@ class TopologyManager(SatComModel):
         self.satellite_image = config.satellite_image
         self.network_launcher = config.network_launcher
         self.gonetem_server = config.gonetem_server
-        self.set_link_capacities(config.isl_link_capacity, config.gnd_link_capacity)
+        self.use_budget = config.use_budget
 
     def load_config(self) -> None:
         """No-op implementation satisfying the DynamicsModel ABC contract.
@@ -423,7 +434,7 @@ class TopologyManager(SatComModel):
         self._sync_ground_stations()
         self._sync_links()
         self._assign_interfaces_to_nodes()
-        self._set_IPs_to_nodes()
+        self._set_ips_to_nodes()
         self._add_loopback_interfaces_to_list()
         _ = self.check_for_updates()  # Init hashes
 
@@ -693,7 +704,6 @@ class TopologyManager(SatComModel):
                     f"Expected Satellite in satellites, got {type(unexpected)}"
                 )
 
-        link_capacity = getattr(sat_com_link, "capacity", 1000) * 1024
         link_type = getattr(sat_com_link, "type", "Link")
         link_is_active = not getattr(sat_com_link, "disabled", True)
 
@@ -709,7 +719,7 @@ class TopologyManager(SatComModel):
             * 1000
         )
 
-        link_direction_ID = getattr(
+        link_direction_id = getattr(
             sat_com_link,
             "inter_satellite_direction",
             InterSatelliteLinkDirection.UNDEFINED,
@@ -720,14 +730,22 @@ class TopologyManager(SatComModel):
             InterSatelliteLinkDirection.UNDEFINED: "Undefined",
         }
 
+        default_capacity_kbps = (
+            self.isl_link_capacity
+            if link_type == "InterSatelliteLink"
+            else self.gnd_link_capacity
+        )
+
         link = Link(
             source=link_source,
             target=link_destination,
             distance=link_distance,
             type=link_type,
-            direction=link_direction_map.get(link_direction_ID, "Undefined"),
+            direction=link_direction_map.get(link_direction_id, "Undefined"),
             is_active=link_is_active,
-            capacities=[self.gnd_link_capacity, self.isl_link_capacity],
+            default_capacity_kbps=default_capacity_kbps,
+            use_budget=self.use_budget,
+            link_budget_config=self.link_budget_config,
         )
         link.satcom_object = sat_com_link
         return link
@@ -875,6 +893,35 @@ class TopologyManager(SatComModel):
             value: True after init_routing() succeeds, False after routing is torn down.
         """
         self.routing_initiated = value
+
+    def set_link_budget_config(self, config: LinkBudgetConfig) -> None:
+        """Apply a link-budget configuration to all existing and future links.
+
+        The configuration is stored on the manager and propagated to every
+        link currently in ``self.links``.  New links created afterwards
+        automatically inherit it.
+
+        Args:
+            config: ``LinkBudgetConfig`` instance with downlink/uplink frequencies.
+        """
+        self.link_budget_config = config
+        for link in self.links.values():
+            link.link_budget_config = config
+            if link.use_budget and link.type == "GroundStationLink":
+                link.update_link_capacities()
+
+    def set_antenna(
+        self, nodes: list[Satellite] | list[GroundStation], config: AntennaConfig
+    ) -> None:
+        """Attach an antenna built from *config* to every node in *nodes*.
+
+        Args:
+            nodes: Iterable of :class:`~satgonetem.models.node.Node` instances.
+            config: ``AntennaConfig`` describing the antenna to create.
+        """
+        antenna = config.to_antenna()
+        for node in nodes:
+            node.antenna = antenna
 
     def get_path_between_nodes(self, source: Node, target: Node) -> List[Node]:
         """
@@ -1109,8 +1156,10 @@ class TopologyManager(SatComModel):
                 distance=distance,
                 type=link_type,
                 direction="",
-                capacities=[int(10000)],
+                default_capacity_kbps=int(10000),
                 is_active=True,
+                use_budget=self.use_budget,
+                link_budget_config=self.link_budget_config,
             )
 
             # Ensure delay is an integer
@@ -1321,22 +1370,6 @@ class TopologyManager(SatComModel):
             logging.error(
                 f"Unable to update link {link.source.name}--{link.target.name}: {err}"
             )
-
-    def set_link_capacities(self, isl_kbps: int, gnd_kbps: int) -> None:
-        """Update ISL and GSL capacities on all links.
-
-        Args:
-            isl_kbps: New capacity in kbps for inter-satellite links.
-            gnd_kbps: New capacity in kbps for ground station links.
-        """
-        for link in getattr(self, "links", {}).values():
-            link.capacity = gnd_kbps if link.type == "GroundStationLink" else isl_kbps
-        logging.info(
-            "Updated link capacities: ISL=%d kbps, GSL=%d kbps (%d links)",
-            isl_kbps,
-            gnd_kbps,
-            len(getattr(self, "links", {})),
-        )
 
     def _execute_link_add(self, link) -> None:
         """Add a link by creating a veth pair and applying qdiscs directly."""
@@ -1584,10 +1617,10 @@ class TopologyManager(SatComModel):
             int2.set_ipv4_address()
 
         if sync_to_node and set_ip:
-            source.set_ipv4s_to_containers(interface=int1, set_lo=False)
-            target.set_ipv4s_to_containers(interface=int2, set_lo=False)
+            source.set_ipv4_to_containers(interface=int1, set_lo=False)
+            target.set_ipv4_to_containers(interface=int2, set_lo=False)
 
-    def _set_IPs_to_nodes(self) -> None:
+    def _set_ips_to_nodes(self) -> None:
         """
         Method to set IPs to nodes
         """
@@ -1625,7 +1658,7 @@ class TopologyManager(SatComModel):
         with ThreadPoolExecutor(max_workers=max_workers) as pool:
             futures = {
                 pool.submit(
-                    node.set_ipv4s_to_containers, interface=None, set_lo=set_lo
+                    node.set_ipv4_to_containers, interface=None, set_lo=set_lo
                 ): node
                 for node in nodes
             }
@@ -1851,7 +1884,12 @@ class TopologyManager(SatComModel):
                                 link.tx = usage_bps
                                 link.rx = 0  # Not measured
 
-                            except (AttributeError, KeyError, TypeError, ValueError) as e:
+                            except (
+                                AttributeError,
+                                KeyError,
+                                TypeError,
+                                ValueError,
+                            ) as e:
                                 logging.warning(
                                     f"Error processing interface {iface} on {sat_name}: {e}"
                                 )
@@ -2193,7 +2231,7 @@ class TopologyManager(SatComModel):
         finally:
             self.set_running(False)
 
-    def set_IP_addresses(self) -> float:
+    def set_ip_addresses(self) -> float:
         """Set IPv4 addresses for all interfaces in the topology."""
         tic: float = time.perf_counter()
         self.set_ipv4s_for_all_nodes(set_lo=True, max_workers=MAX_WORKERS)
@@ -2381,7 +2419,7 @@ class TopologyManager(SatComModel):
                     f"Expected Satellite in satellites, got {type(unexpected)}"
                 )
 
-    def get_node_IP_addresses(self, name: str) -> List[str]:
+    def get_node_ip_addresses(self, name: str) -> List[str]:
         """Get the list of IPv4 addresses assigned to a node."""
         node = self.get_node_by_name(name)
         if not node:
@@ -2627,7 +2665,7 @@ class TopologyManager(SatComModel):
                             Must be one of the allowed routing methods.
         """
         self.start_gonetem()
-        self.set_IP_addresses()
+        self.set_ip_addresses()
         self.init_routing(routing_method=routing_method)
 
 
@@ -2644,66 +2682,89 @@ def main():
     tic = time.perf_counter()
 
     project = create_test_project()
+    print(f"Project created in {time.perf_counter() - tic:.2f} seconds")
 
-    topology_manager = TopologyManager.from_satcom(project)
-
-    topology_manager.start_gonetem()
-
-    topology_manager.set_IP_addresses()
-
-    topology_manager.init_routing(routing_method="static")
-
-    # Start a ping
-    iperf3_config = Iperf3Config(
-        protocol="UDP",
-        duration=1800,
-        interval=0.1,
-        bandwidth_mbps=80,
-        length="1000",
+    custom_network_config = NetworkConfig(
+        use_budget=True,
     )
 
-    update_time = 1
+    tic = time.perf_counter()
+    topology_manager = TopologyManager.from_satcom(project, custom_network_config)
+    print(f"TopologyManager initialized in {time.perf_counter() - tic:.2f} seconds")
 
-    src = topology_manager.get_ground_stations()[1]
-    dst = topology_manager.get_ground_stations()[2]
+    for link in topology_manager.links.values():
+        if link.type == "GroundStationLink":
+            print(
+                f"Peer1 throughput: {link.peer1_capacity} kbps, Peer2 throughput: {link.peer2_capacity} kbps"
+            )
 
-    topology_manager.set_update_time(update_time)  # Set tick interval to 10 seconds
+    ## Create antennas
+    satellites = topology_manager.get_satellites()
+    antenna_satellite_config = AntennaConfig(
+        diameter=0.3,  # meters
+        efficiency=0.6,  # unitless
+    )
+    topology_manager.set_antenna(
+        satellites,
+        antenna_satellite_config,
+    )
 
-    iperf3_flow = Iperf3Flow(src, dst, iperf3_config)
-    iperf3_flow.start()
+    ground_stations = topology_manager.get_ground_stations()
+    antenna_gnd_config = AntennaConfig(
+        diameter=2.0,  # meters
+        efficiency=0.7,  # unitless
+    )
+    topology_manager.set_antenna(
+        ground_stations,
+        antenna_gnd_config,
+    )
 
-    while True:
-        print(f"Current time step: {topology_manager.get_current_time_step()}")
+    topology_manager.set_link_budget_config(
+        LinkBudgetConfig(
+            downlink_freq_ghz=19.0,
+            uplink_freq_ghz=14.25,
+            bandwidth_hz_downlink=100e6,
+            bandwidth_hz_uplink=100e6,
+        )
+    )
 
-        current_time_step = topology_manager.get_current_time_step()
+    for link in topology_manager.links.values():
+        if link.type == "GroundStationLink":
+            print(
+                f"Peer1 throughput: {link.peer1_capacity} kbps, Peer2 throughput: {link.peer2_capacity} kbps"
+            )
 
-        if iperf3_flow.status() in [FlowStatus.DONE, FlowStatus.ERROR]:
-            break
-        if current_time_step % 5 == 0:
+    # tic = time.perf_counter()
+    # topology_manager.start_gonetem()
+    # print(f"GoNetEm started in {time.perf_counter() - tic:.2f} seconds")
 
-            print(iperf3_flow.status())
+    # tic = time.perf_counter()
+    # topology_manager.set_ip_addresses()
+    # print(f"IP addresses set in {time.perf_counter() - tic:.2f} seconds")
 
-        try:
-            update = topology_manager.next_step()  # Advance simulation by one step
-            if update > update_time:
-                update = (
-                    update_time - 0.01
-                )  # Clamp update time to just under the tick interval
-            time.sleep(
-                update_time - update
-            )  # Sleep for the remainder of the tick interval
-        except KeyboardInterrupt:
-            print("Simulation interrupted by user.")
-            break
+    # tic = time.perf_counter()
+    # topology_manager.init_routing(routing_method="static")
+    # print(f"Static routing initialized in {time.perf_counter() - tic:.2f} seconds")
 
-    iperf3_flow.stop()  # Ensure the flow is stopped
+    # # Start a ping
+    # ping_config = PingConfig(
+    #     count=10,
+    #     interval_sec=1,
+    #     timeout_sec=2,
+    # )
 
-    data = json.dumps(iperf3_flow.results().to_json(), indent=2)
+    # src = list(topology_manager.get_ground_stations())[1]
+    # dst = list(topology_manager.get_ground_stations())[2]
 
-    with open("iperf3_results.json", "w") as f:
-        f.write(data)
+    # ping_flow = PingFlow(src, dst, ping_config)
+    # ping_flow.start()
 
-    topology_manager.stop_gonetem()
+    # while ping_flow.status() == PingStatus.RUNNING:
+    #     time.sleep(0.5)
+    # ping_results = ping_flow.results()
+    # ping_results.print_summary()
+
+    # topology_manager.stop_gonetem()
 
 
 if __name__ == "__main__":

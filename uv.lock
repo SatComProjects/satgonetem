@@ -1012,6 +1012,25 @@ wheels = [
 ]
 
 [[package]]
+name = "itur"
+version = "0.4.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "astropy", version = "6.1.7", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "astropy", version = "7.2.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "numpy", version = "2.4.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "pyproj", version = "3.7.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "pyproj", version = "3.7.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "scipy", version = "1.15.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "scipy", version = "1.17.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/9c/57/d0eaedc1829a410b2c17e12259c423993186de0af233da5f83a2ea0674a1/itur-0.4.0.tar.gz", hash = "sha256:b833021dc11321f28a03560ec4ee27cdff60234bf4ec25642f013e33d254411e", size = 163362049, upload-time = "2023-02-04T23:59:51.293Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/61/7b/e682678c0a6fcdd4529abc5f22324149cd7a725138465d76885a3a53c88f/itur-0.4.0-py2.py3-none-any.whl", hash = "sha256:d7a357172216075b9f0b8f38cd68ce975dba1b7e22db8329f013e6ef651db9b2", size = 163384630, upload-time = "2023-02-04T23:59:40.95Z" },
+]
+
+[[package]]
 name = "jinja2"
 version = "3.1.6"
 source = { registry = "https://pypi.org/simple" }
@@ -2527,7 +2546,7 @@ wheels = [
 [[package]]
 name = "sat-com-topology"
 version = "4.2.0"
-source = { git = "https://gitlab.isae-supaero.fr/eqospace/sat-com-topology.git?rev=main#602aca76c2e1acca6a23cadf1b2fb0ac9c2e51a2" }
+source = { git = "https://gitlab.isae-supaero.fr/eqospace/sat-com-topology.git?rev=sat_com_topology_v4#f43f6f063a11a91c1e4f3de410f03df548634b02" }
 dependencies = [
     { name = "geopy" },
     { name = "networkx", version = "3.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
@@ -2580,6 +2599,9 @@ dev = [
     { name = "pytest" },
     { name = "pytest-cov" },
 ]
+extra = [
+    { name = "itur" },
+]
 
 [package.metadata]
 requires-dist = [
@@ -2589,6 +2611,7 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.110.0" },
     { name = "flake8", marker = "extra == 'dev'", specifier = ">=6.0" },
     { name = "grpcio", specifier = ">=1.62.0" },
+    { name = "itur", marker = "extra == 'extra'", specifier = ">=0.4.0" },
     { name = "jinja2", specifier = ">=3.1.0" },
     { name = "matplotlib", specifier = ">=3.10.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.0" },
@@ -2604,12 +2627,12 @@ requires-dist = [
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.0" },
     { name = "python-multipart", specifier = ">=0.0.9" },
     { name = "pyyaml", specifier = ">=6.0.0" },
-    { name = "sat-com-topology", git = "https://gitlab.isae-supaero.fr/eqospace/sat-com-topology.git?rev=main" },
+    { name = "sat-com-topology", git = "https://gitlab.isae-supaero.fr/eqospace/sat-com-topology.git?rev=sat_com_topology_v4" },
     { name = "sgp4", specifier = ">=2.23" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.29.0" },
     { name = "yaspin", specifier = ">=3.0.0" },
 ]
-provides-extras = ["dev"]
+provides-extras = ["extra", "dev"]
 
 [[package]]
 name = "scikit-learn"

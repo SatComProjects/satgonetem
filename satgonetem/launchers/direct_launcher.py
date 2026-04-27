@@ -96,8 +96,7 @@ class DirectLauncher(NetworkLauncher):
         link.capacity / peer1_capacity / peer2_capacity are all in kbps."""
         p1 = int(getattr(link, "peer1_capacity", 0) or 0)
         p2 = int(getattr(link, "peer2_capacity", 0) or 0)
-        fb = int(getattr(link, "capacity", 0) or 0)
-        return (p1 or fb), (p2 or fb)
+        return p1, p2
 
     #  Container startup
 

@@ -1,15 +1,26 @@
 import logging
-from functools import lru_cache
 from typing import Optional
 
-from satgonetem.utils.utils import distance_3d_km
-
+from satgonetem.link_budget.config import LinkBudgetConfig
+from satgonetem.link_budget.geometry import get_elevation_angle
+from satgonetem.link_budget.service import LinkBudgetInputs, LinkBudgetService
+from satgonetem.link_budget.strategies import (
+    ModCodCapacityStrategy,
+    ShannonCapacityStrategy,
+)
+from satgonetem.link_budget.antenna import Antenna
+from satgonetem.models.interface import Interface
 from satgonetem.models.node import Node
+from satgonetem.utils.utils import distance_3d_km
 
 from sat_com_model.models import Link as SatComLink
 
 # Use a module logger to control verbosity more easily
 logger = logging.getLogger(__name__)
+
+# Default frequencies for satellite-ground links (GHz)
+DEFAULT_DOWNLINK_FREQ_GHZ = 19.0
+DEFAULT_UPLINK_FREQ_GHZ = 14.25
 
 
 class Link:
@@ -22,7 +33,9 @@ class Link:
         type: str,
         direction: str = "",
         is_active: bool = True,
-        capacities: list = list(),
+        default_capacity_kbps: int = 1000,
+        use_budget: bool = False,
+        link_budget_config: Optional[LinkBudgetConfig] = None,
     ):
         self.source: Node = source
         self.target: Node = target
@@ -30,19 +43,16 @@ class Link:
         self.type: str = type
         self.is_active: bool = is_active
         self.direction: str = direction
-        # Compute capacities (directional + aggregate)
-        self.peer1_capacity = 0
-        self.peer2_capacity = 0
+        self.use_budget: bool = use_budget
+        self.link_budget_config: Optional[LinkBudgetConfig] = link_budget_config
 
-        self.capacities = capacities
+        self.default_capacity_kbps = default_capacity_kbps
+        self.peer1_capacity: int = 0
+        self.peer2_capacity: int = 0
 
-        self.capacity: int = self.get_link_capacity()
-
-        self.peer_interfaces = []
+        self.peer_interfaces: list["Interface"] = []
 
         self.delay = int((self.distance / 299_792_458) * 1000)  # in ms, speed of light
-
-        # self.calculate_link_budget()
 
         # gRPC related flags
         self.to_update = False
@@ -56,6 +66,146 @@ class Link:
         # Network usage
         self.rx = 0
         self.tx = 0
+
+        self.update_link_capacities()
+
+    # ------------------------------------------------------------------
+
+    def update_link_capacities(self) -> None:
+        """A method that updates the link capacities based on the link budget if enabled."""
+        if self.use_budget and self.type == "GroundStationLink":
+            self._compute_budget_capacity()
+        else:
+            self.peer1_capacity = self.default_capacity_kbps
+            self.peer2_capacity = self.default_capacity_kbps
+
+    # ------------------------------------------------------------------
+    # Budget helpers (SOLID: thin wrappers around LinkBudgetService)
+    # ------------------------------------------------------------------
+
+    def _identify_sat_and_gs(self) -> tuple[Node, Node]:
+        """Return *(satellite, ground_station)* regardless of link direction."""
+        if getattr(self.source, "type", "") == "GroundStation":
+            return self.target, self.source
+
+        return self.source, self.target
+
+    def _compute_elevation_angle(self, sat: Node, gs: Node) -> float:
+        """Compute the elevation angle from the ground station to the satellite."""
+        try:
+            central_angle = get_elevation_angle(
+                sat_coordinates=(
+                    sat.position["latitude"],
+                    sat.position["longitude"],
+                    sat.position["altitude"],
+                ),
+                gnd_coordinates=(
+                    gs.position["latitude"],
+                    gs.position["longitude"],
+                    gs.position["altitude"],
+                ),
+            )
+            return 90.0 - central_angle
+        except (KeyError, TypeError, ValueError) as exc:
+            logger.warning(
+                "Failed to compute elevation angle for %s->%s: %s",
+                sat.name,
+                gs.name,
+                exc,
+            )
+            return 30.0  # fallback typical elevation
+
+    def _compute_budget_capacity(self) -> None:
+        """Compute capacity for a *GroundStationLink* using the link budget.
+
+        Downlink (SAT -> GS) is computed with a ModCodCapacityStrategy and
+        stored as peer1_capacity.  Uplink (GS -> SAT) is computed with a
+        ShannonCapacityStrategy and stored as peer2_capacity.
+
+        If either node lacks an antenna the method falls back to the default
+        static capacity from get_link_capacity, setting both peers equally.
+        """
+        sat, gs = self._identify_sat_and_gs()
+
+        if sat.antenna is None or gs.antenna is None:
+            logger.debug(
+                "Missing antenna on %s or %s; falling back to default capacity.",
+                sat.name,
+                gs.name,
+            )
+            self.peer1_capacity = self.default_capacity_kbps
+            self.peer2_capacity = self.default_capacity_kbps
+            return
+
+        elevation = self._compute_elevation_angle(sat, gs)
+        gs_lat = float(gs.position.get("latitude", 0.0))
+        gs_lon = float(gs.position.get("longitude", 0.0))
+        gs_diam = gs.antenna.diameter if gs.antenna else 2.0
+
+        if self.link_budget_config is not None:
+            bw_dl = float(self.link_budget_config.bandwidth_hz_downlink)
+            bw_ul = float(self.link_budget_config.bandwidth_hz_uplink)
+        else:
+            bw_dl = 500e6
+            bw_ul = 500e6
+        rx_tsys = float(getattr(self, "rx_tsys_k", 100.0))
+        unav = float(getattr(self, "unavailability_percent", 0.1))
+
+        dl_freq = (
+            self.link_budget_config.downlink_freq_ghz
+            if self.link_budget_config
+            else DEFAULT_DOWNLINK_FREQ_GHZ
+        )
+        ul_freq = (
+            self.link_budget_config.uplink_freq_ghz
+            if self.link_budget_config
+            else DEFAULT_UPLINK_FREQ_GHZ
+        )
+
+        # Downlink (SAT → GS) – MODCOD-based
+        dl_inputs = LinkBudgetInputs(
+            tx_antenna=sat.antenna,
+            rx_antenna=gs.antenna,
+            frequency_ghz=dl_freq,
+            distance_km=self.distance / 1000.0,
+            elevation_angle=elevation,
+            gs_lat=gs_lat,
+            gs_lon=gs_lon,
+            gs_diameter=gs_diam,
+            bandwidth_hz=bw_dl,
+            rx_tsys_k=rx_tsys,
+            unavailability_percent=unav,
+        )
+        dl_service = LinkBudgetService(capacity_strategy=ModCodCapacityStrategy())
+        self.peer1_capacity = dl_service.compute_one_way(dl_inputs)
+
+        # Uplink (GS → SAT) – Shannon upper bound
+        ul_inputs = LinkBudgetInputs(
+            tx_antenna=gs.antenna,
+            rx_antenna=sat.antenna,
+            frequency_ghz=ul_freq,
+            distance_km=self.distance / 1000.0,
+            elevation_angle=elevation,
+            gs_lat=gs_lat,
+            gs_lon=gs_lon,
+            gs_diameter=gs_diam,
+            bandwidth_hz=bw_ul,
+            rx_tsys_k=rx_tsys,
+            unavailability_percent=unav,
+        )
+        ul_service = LinkBudgetService(capacity_strategy=ShannonCapacityStrategy())
+        self.peer2_capacity = ul_service.compute_one_way(ul_inputs)
+
+        logger.info(
+            "Link budget %s->%s | elev=%.2f deg, DL=%d kbps, UL=%d kbps",
+            sat.name,
+            gs.name,
+            elevation,
+            self.peer1_capacity,
+            self.peer2_capacity,
+        )
+
+    # Sync helpers
 
     def sync_distance_from_satcom_and_delay(self) -> None:
         """
@@ -84,357 +234,9 @@ class Link:
             self.to_update = True
         return None
 
-    def sync_status_from_satcom(self) -> None:
-        """
-        A method that syncs the status from the satcom object.
-        """
-        if self.satcom_object is None:
-            raise ValueError("Satcom object is not set")
-
-        self.is_active = not getattr(self.satcom_object, "is_active", True)
-        return None
-
-    def init_telecom_parameters(self) -> None:
-        """
-        A method that initializes the telecom parameters for the link.
-        """
-        if not self.type == "GroundStationLink":
-            return
-        # Let's start implementing telecom
-        self.frequency_ghz = {
-            "uplink": 14.25,  # Placeholder for uplink frequency
-            "downlink": 19.0,  # Placeholder for downlink frequency
-        }
-
-        self.free_space_loss_db = {
-            "uplink": calculate_free_space_loss_db(
-                self.frequency_ghz["uplink"], self.distance / 1000
-            ),  # Convert distance to km
-            "downlink": calculate_free_space_loss_db(
-                self.frequency_ghz["downlink"], self.distance / 1000
-            ),  # Convert distance to km
-        }
-
-    def _compute_capacity_one_way(
-        self,
-        tx: Node,
-        rx: Node,
-        frequency_ghz: float,
-        elevation_angle: float,
-        gs_lat: float,
-        gs_lon: float,
-        gs_diameter: float,
-        bandwidth_hz: float = 100e6,
-        rx_tsys_k: float = 290.0,
-        unavailability_percent: float = 0.1,
-    ) -> int:
-        """Compute one-way capacity (kbps) from tx->rx using a simplified link budget.
-
-        Steps:
-        1) Compute TX EIRP from antenna parameters at the given frequency.
-        2) Compute RX G/T from receive antenna gain and an approximate Tsys.
-        3) Compute path loss (free space) and other losses (atmosphere).
-        4) Compute C/N0 (dB-Hz), then C/N over noise bandwidth.
-        5) Convert to SNR and use Shannon capacity C = B * log2(1+SNR) as an upper bound.
-        """
-        # TX EIRP
-        ant = getattr(tx, "antenna", None)
-        if ant is None:
-            return 0
-        try:
-            ant.calculate_gain_db(frequency_ghz)
-        except (AttributeError, TypeError, ValueError):
-            logger.debug("TX antenna gain calculation failed, using cached value")
-        gdb = getattr(ant, "gain_db", 0.0)
-        sspa = getattr(ant, "sspa_output_power_db", 0.0)
-        losses = getattr(ant, "losses_db", 0.0)
-        eirp_db = calculate_transmitter_eirp(sspa, gdb, losses)
-
-        # RX G/T (approximate using antenna gain and 290K system temperature)
-        if hasattr(rx, "antenna"):
-            try:
-                rx.antenna.calculate_gain_db(frequency_ghz)
-            except (AttributeError, TypeError, ValueError):
-                logger.debug("RX antenna gain calculation failed, using cached value")
-        rx_gain_db = getattr(getattr(rx, "antenna", None), "gain_db", 0.0)
-        g_over_t_db = rx_gain_db - linear_to_db(rx_tsys_k)
-
-        # Free-space loss
-        fsl_db = calculate_free_space_loss_db(frequency_ghz, self.distance / 1000.0)
-
-        # Other propagation losses (atmospheric)
-        att = calculate_atmospheric_attenuation_dB(
-            lat_GS=gs_lat,
-            lon_GS=gs_lon,
-            frequency_ghz=frequency_ghz,
-            elevation_angle=elevation_angle,
-            unavailability=unavailability_percent,
-            antenna_diameter=gs_diameter,
-        )
-        other_losses_db = att[0] if isinstance(att, (list, tuple)) else float(att)
-
-        # C/N0 (dB-Hz)
-        cn0_dbhz = calculate_carrier_to_noise_power_spectral_density_ratio(
-            eirp_db=eirp_db,
-            g_over_t_db=g_over_t_db,
-            free_space_loss_db=fsl_db,
-            other_losses_db=other_losses_db,
-        )
-
-        # Noise bandwidth (Hz). Use occupied signal bandwidth (configurable)
-        # Convert C/N0 to C/N over bandwidth: C/N [dB] = C/N0 [dB-Hz] - 10*log10(B)
-        cn_db = cn0_dbhz - linear_to_db(bandwidth_hz)
-        # Linear SNR
-        snr_lin = 10.0 ** (cn_db / 10.0)
-        # Shannon capacity upper bound
-        import math
-
-        capacity_bps = bandwidth_hz * math.log2(1.0 + max(0.0, snr_lin))
-        return int(capacity_bps / 1000.0)
-
-    def _compute_ground_link_capacities(self) -> tuple[int, int]:
-        """Compute (downlink_kbps, uplink_kbps) for Satellite<->GroundStation."""
-        if self.type != "GroundStationLink":
-            return (0, 0)
-        self.init_telecom_parameters()
-        # Identify GS and SAT nodes
-        if getattr(self.source, "type", "") == "GroundStation":
-            gs = self.source
-            sat = self.target
-        else:
-            gs = self.target
-            sat = self.source
-
-        # Geometry (degrees)
-        try:
-            elevation_angle = 90 - get_elevation_angle(
-                sat_coordinates=(
-                    sat.position["latitude"],
-                    sat.position["longitude"],
-                    sat.position["altitude"],
-                ),
-                gnd_coordinates=(
-                    gs.position["latitude"],
-                    gs.position["longitude"],
-                    gs.position["altitude"],
-                ),
-            )
-        except (KeyError, TypeError, ValueError) as exc:
-            logger.warning(
-                "Failed to compute elevation angle for %s->%s: %s",
-                sat.name,
-                gs.name,
-                exc,
-            )
-            elevation_angle = 30.0  # fallback typical elevation
-
-        gs_lat = float(gs.position.get("latitude", 0.0))
-        gs_lon = float(gs.position.get("longitude", 0.0))
-        gs_diam = getattr(getattr(gs, "antenna", None), "diameter", 2.0)
-
-        # Parameters from instance (set by service from config) with fallbacks
-        bw_dl = float(getattr(self, "bandwidth_hz_downlink", 100_000_000))
-        bw_ul = float(getattr(self, "bandwidth_hz_uplink", 100_000_000))
-        rx_tsys = float(getattr(self, "rx_tsys_k", 290.0))
-        unav = float(getattr(self, "unavailability_percent", 0.1))
-
-        # Downlink (SAT -> GS)
-        dl_kbps = self._compute_capacity_one_way(
-            tx=sat,
-            rx=gs,
-            frequency_ghz=self.frequency_ghz["downlink"],
-            elevation_angle=elevation_angle,
-            gs_lat=gs_lat,
-            gs_lon=gs_lon,
-            gs_diameter=gs_diam,
-            bandwidth_hz=bw_dl,
-            rx_tsys_k=rx_tsys,
-            unavailability_percent=unav,
-        )
-        # Uplink (GS -> SAT)
-        ul_kbps = self._compute_capacity_one_way(
-            tx=gs,
-            rx=sat,
-            frequency_ghz=self.frequency_ghz["uplink"],
-            elevation_angle=elevation_angle,
-            gs_lat=gs_lat,
-            gs_lon=gs_lon,
-            gs_diameter=gs_diam,
-            bandwidth_hz=bw_ul,
-            rx_tsys_k=rx_tsys,
-            unavailability_percent=unav,
-        )
-        return (dl_kbps, ul_kbps)
-
-    def calculate_link_budget(self) -> None:
-        """
-        Calculate the link budget for GroundStation links and update capacity.
-
-        Notes on fixes and optimizations:
-        - Uses the transmitter EIRP from the link source (satellite) for downlink.
-        - Computes/derives receiver G/T if missing on the target (ground station).
-        - Corrects unit handling and symbol rate formula (Rs = BW / (1 + rolloff)).
-        - Reduces logging overhead and improves readability.
-        """
-
-        if self.type != "GroundStationLink":
-            return
-
-        # Initialize link-layer telecom parameters (FSL, frequencies)
-        self.init_telecom_parameters()
-
-        # Validate required attributes
-        if not hasattr(self.source, "antenna") or not hasattr(self.target, "antenna"):
-            logger.debug(
-                "Missing antenna attributes on source/target; skipping link budget."
-            )
-            return
-
-        # Geometry: elevation angle (degrees). Keep historical behavior using 90 - elevation.
-        try:
-            elevation_angle = 90 - get_elevation_angle(
-                sat_coordinates=(
-                    self.source.position["latitude"],
-                    self.source.position["longitude"],
-                    self.source.position["altitude"],
-                ),
-                gnd_coordinates=(
-                    self.target.position["latitude"],
-                    self.target.position["longitude"],
-                    self.target.position["altitude"],
-                ),
-            )
-        except (KeyError, TypeError, ValueError) as exc:
-            logger.warning(
-                "Failed to compute elevation angle for %s->%s: %s",
-                self.source.name,
-                self.target.name,
-                exc,
-            )
-            return
-
-        # Atmospheric attenuations (dB). Use total attenuation (index 0) if a tuple/list is returned.
-        try:
-            attenuations = calculate_atmospheric_attenuation_dB(
-                lat_GS=self.target.position["latitude"],
-                lon_GS=self.target.position["longitude"],
-                frequency_ghz=self.frequency_ghz["downlink"],
-                elevation_angle=elevation_angle,
-                unavailability=0.1,  # percentage
-                antenna_diameter=self.target.antenna.diameter,
-            )
-            other_losses_db = (
-                attenuations[0]
-                if isinstance(attenuations, (list, tuple))
-                else float(attenuations)
-            )
-        except (AttributeError, TypeError, ValueError) as exc:
-            logger.warning(
-                "Failed to compute atmospheric attenuation for %s->%s: %s",
-                self.source.name,
-                self.target.name,
-                exc,
-            )
-            return
-
-        # Transmit EIRP: use source (satellite) EIRP for downlink
-        eirp_db = getattr(self.source.antenna, "eirp_db", None)
-        if eirp_db is None:
-            logger.debug(
-                "Source EIRP not available on %s; skipping link budget.", self.source
-            )
-            return
-
-        # Receiver G/T (dB/K): if not present on target, approximate using antenna gain and 290K system noise
-        g_over_t_db: Optional[float] = getattr(self.target, "g_over_t_db", None)
-        if g_over_t_db is None:
-            try:
-                rx_gain_db = self.target.antenna.calculate_gain_db(
-                    self.frequency_ghz["downlink"]
-                )
-                # Approximate Tsys at 290K if not provided
-                g_over_t_db = rx_gain_db - linear_to_db(290.0)
-            except (AttributeError, TypeError, ValueError) as exc:
-                logger.warning(
-                    "Failed to derive G/T for %s: %s", self.target.name, exc
-                )
-                return
-
-        # Free-space loss (dB) computed during init for downlink
-        fsl_db = self.free_space_loss_db["downlink"]
-
-        # C/N0 in dB-Hz
-        try:
-            cn0_dbhz = calculate_carrier_to_noise_power_spectral_density_ratio(
-                eirp_db=eirp_db,
-                g_over_t_db=g_over_t_db,
-                free_space_loss_db=fsl_db,
-                other_losses_db=other_losses_db,
-            )
-        except (TypeError, ValueError) as exc:
-            logger.warning(
-                "Failed to compute C/N0 for %s->%s: %s",
-                self.source.name,
-                self.target.name,
-                exc,
-            )
-            return
-
-        # Link bandwidth and roll-off
-        rolloff = 0.25
-        bandwidth_hz = 500e6  # 500 MHz placeholder; adjust as needed
-
-        # C/N (dB) over the occupied bandwidth
-        try:
-            _ = calculate_carrier_to_noise_ratio(
-                c_over_n0_dbhz=cn0_dbhz,
-                bandwidth_hz=bandwidth_hz,
-            )
-        except (TypeError, ValueError):
-            # Some callers may not need C/N explicitly; compute continues with Rs for ModCod selection
-            pass
-
-        # Symbol rate (Hz) for RRC shaping: Rs = BW / (1 + rolloff)
-        symbol_rate_hz = bandwidth_hz / (1.0 + rolloff)
-
-        # Convert to the metric expected by ModCod helper (historical behavior): C/N0 - 10log10(Rs)
-        cn_or_esn0_db = cn0_dbhz - linear_to_db(symbol_rate_hz)
-
-        best_modcod = ModCod.best_for_csat_n0_rs(cn_or_esn0_db)
-        if best_modcod is None:
-            logger.debug(
-                "No suitable ModCod for metric %.2f dB on %s", cn_or_esn0_db, self
-            )
-            return
-
-        # Capacity (bps)
-        try:
-            capacity_bps = calculate_link_capacity(
-                bandwidth_hz=bandwidth_hz,
-                rolloff_factor=rolloff,
-                bits_per_symbol=best_modcod.spectral_efficiency,
-            )
-        except (TypeError, ValueError) as exc:
-            logger.warning(
-                "Failed to compute capacity for %s->%s: %s",
-                self.source.name,
-                self.target.name,
-                exc,
-            )
-            return
-
-        # Save as kbps for consistency with other link types
-        self.capacity = int(capacity_bps / 1000.0)
-        logger.info(
-            "Link budget %s->%s | elev=%.2f°, C/N0=%.2f dBHz, Rs=%.2f Msps, ModCod=%s, cap=%.2f Mbps",
-            self.source.name,
-            self.target.name,
-            elevation_angle,
-            cn0_dbhz,
-            symbol_rate_hz / 1e6,
-            best_modcod,
-            capacity_bps / 1e6,
-        )
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, Link):
@@ -455,24 +257,10 @@ class Link:
 
         return None
 
-    def get_link_capacity(self) -> int:
-        """
-        A method that returns the link capacity based on the type of link.
-        """
-        if self.type == "InterSatelliteLink":
-            return self.capacities[0]
-        elif self.type == "GroundStationLink":
-            return self.capacities[0]
-        elif self.type == "UserTerminalLink":
-            return self.capacities[0]
-
-        return self.capacities[0]
-
     def get_capacity(self) -> int:
-        """Return the current link capacity in kbps.
+        """Return peer1_capacity (downlink for SAT->GS links, uplink otherwise).
 
         Returns:
-            The capacity in kbps as set by the topology manager, or the
-            initial value from get_link_capacity if never overridden.
+            peer1_capacity in kbps.
         """
-        return self.capacity
+        return self.peer1_capacity

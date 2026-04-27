@@ -21,7 +21,6 @@ class TestInterfaceInit:
     def test_initial_ip_fields_empty(self):
         iface = Interface()
         assert iface.ipv4 == ""
-        assert iface.ipv6 == ""
 
     def test_initial_flags(self):
         iface = Interface()
@@ -32,17 +31,12 @@ class TestInterfaceInit:
 
 
 class TestInterfaceSetIp:
-    """Tests for Interface.set_ip and set_ipv6."""
+    """Tests for Interface.set_ip."""
 
     def test_set_ip(self):
         iface = Interface(name="Sat0.1")
         iface.set_ip("10.0.0.1")
         assert iface.ipv4 == "10.0.0.1"
-
-    def test_set_ipv6(self):
-        iface = Interface(name="Sat0.1")
-        iface.set_ipv6("2001:db8::1")
-        assert iface.ipv6 == "2001:db8::1"
 
     def test_set_ip_overwrites_previous(self):
         iface = Interface(name="Sat0.1")

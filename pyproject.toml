@@ -46,6 +46,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+extra = [
+    "itur>=0.4.0",
+]
 dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",
