@@ -73,7 +73,6 @@ from sat_com_application.simulation_manager import SimulationManager
 from sat_com_builder.models import SimulationProperty
 from satgonetem.utils.project_builder import create_and_load_simulation
 
-TI_LFA_ENABLED = True  # Global flag to enable/disable TI-LFA in SR-ISIS initialization
 MAX_WORKERS = os.cpu_count() or 4
 
 
@@ -1705,66 +1704,6 @@ class TopologyManager(SatComModel):
             except (ValueError, IndexError):
                 continue
         return None
-
-    def init_mpls_on_all_nodes(self, max_workers: int = MAX_WORKERS) -> None:
-        """Enable MPLS forwarding on all satellites and ground stations.
-
-        Args:
-            max_workers: Maximum number of parallel worker threads.
-        """
-        if isinstance(self.routing_daemon, SRMPLSDaemon):
-            self.routing_daemon._enable_mpls_on_all_nodes(max_workers=max_workers)
-
-    def set_sr_custom_path(
-        self, source_id: int, dest_id: int, path: List[int]
-    ) -> Dict[str, Any]:
-        """Set a custom SR-MPLS path for a source-destination ground station pair.
-
-        Args:
-            source_id: Source ground station ID.
-            dest_id: Destination ground station ID.
-            path: Ordered list of node IDs from source to destination.
-
-        Returns:
-            Dict with status, message, path, label_stack, and hop_count.
-        """
-        if not isinstance(self.routing_daemon, SRMPLSDaemon):
-            raise RuntimeError("SR-MPLS daemon is not active")
-        return self.routing_daemon.set_sr_custom_path(source_id, dest_id, path)
-
-    def clear_sr_custom_path(self, source_id: int, dest_id: int) -> Dict[str, Any]:
-        """Remove a custom SR-MPLS path and revert to shortest-path routing.
-
-        Args:
-            source_id: Source ground station ID.
-            dest_id: Destination ground station ID.
-
-        Returns:
-            Dict with status, message, and reverted_to_shortest.
-        """
-        if not isinstance(self.routing_daemon, SRMPLSDaemon):
-            raise RuntimeError("SR-MPLS daemon is not active")
-        return self.routing_daemon.clear_sr_custom_path(source_id, dest_id)
-
-    def get_sr_statistics(self) -> Dict[str, Any]:
-        """Return SR-MPLS statistics from the routing manager.
-
-        Returns:
-            Dictionary with SR-MPLS state counters and route information.
-        """
-        if not isinstance(self.routing_daemon, SRMPLSDaemon):
-            return {"enabled": False}
-        return self.routing_daemon.get_sr_statistics()
-
-    def list_sr_custom_paths(self) -> List[Dict[str, Any]]:
-        """List all active custom SR-MPLS paths.
-
-        Returns:
-            List of dicts describing each custom path, its label stack, and hop count.
-        """
-        if not isinstance(self.routing_daemon, SRMPLSDaemon):
-            return []
-        return self.routing_daemon.list_sr_custom_paths()
 
     def monitor_links(self, debug: bool = False):
         """

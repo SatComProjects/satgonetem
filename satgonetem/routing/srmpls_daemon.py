@@ -454,9 +454,7 @@ class SRMPLSDaemon(RoutingDaemon):
         if self.topology.status:
             self._update_sr_route_for_source(source_id)
 
-        use_php = (
-            self.mpls_config.use_php if self.mpls_config else False
-        )
+        use_php = self.mpls_config.use_php if self.mpls_config else False
         label_stack = self._label_manager.get_label_stack_for_path(
             path, use_php=use_php
         )
@@ -527,9 +525,7 @@ class SRMPLSDaemon(RoutingDaemon):
 
         from satgonetem.models.ground_station import GroundStation
 
-        use_php = (
-            self.mpls_config.use_php if self.mpls_config else False
-        )
+        use_php = self.mpls_config.use_php if self.mpls_config else False
         result = []
         for (src_id, dst_id), path in self._label_manager.custom_paths.items():
             label_stack = self._label_manager.get_label_stack_for_path(
@@ -662,9 +658,7 @@ class SRMPLSDaemon(RoutingDaemon):
         gs_array = list(self.topology.get_ground_stations())
         self.sr_lfib = {}
 
-        use_php = (
-            self.mpls_config.use_php if self.mpls_config else False
-        )
+        use_php = self.mpls_config.use_php if self.mpls_config else False
         route_count = 0
 
         for gs_src in gs_array:
@@ -755,6 +749,26 @@ class SRMPLSDaemon(RoutingDaemon):
         toc = time.perf_counter()
         logging.info(f"SR-MPLS routes applied in {(toc - tic) * 1000:.2f}ms")
 
+    def _enable_mpls(self, node: "Node") -> None:
+        """Load kernel MPLS modules and enable MPLS forwarding on a node.
+
+        Loads mpls_router and mpls_iptunnel modules, sets the platform label
+        space size, and enables MPLS input on loopback and every interface.
+
+        Args:
+            node: The node whose MPLS forwarding should be enabled.
+        """
+        commands = [
+            "modprobe mpls_router 2>/dev/null || true",
+            "modprobe mpls_iptunnel 2>/dev/null || true",
+            "sysctl -w net.mpls.platform_labels=1048575",
+            "sysctl -w net.mpls.conf.lo.input=1",
+        ]
+        for iface in node.interfaces:
+            commands.append(f"sysctl -w net.mpls.conf.{iface.get_iname()}.input=1")
+        for cmd in commands:
+            node.execute_command(cmd)
+
     def _enable_mpls_on_all_nodes(self, max_workers: int = 32) -> None:
         """Enable MPLS forwarding on all satellites and ground stations.
 
@@ -774,7 +788,9 @@ class SRMPLSDaemon(RoutingDaemon):
         error = 0
         with ThreadPoolExecutor(max_workers=workers) as pool:
             futures = {
-                pool.submit(node.enable_mpls): node for node in nodes if node.container
+                pool.submit(self._enable_mpls, node): node
+                for node in nodes
+                if node.container
             }
             for fut in as_completed(futures):
                 node = futures[fut]
@@ -896,7 +912,7 @@ class SRMPLSDaemon(RoutingDaemon):
                     parts.append(" && ".join(route_commands))
                 batch_cmd = "; ".join(parts)
                 try:
-                    sat.container.exec_run(["sh", "-lc", batch_cmd], detach=False)
+                    sat.execute_command(["sh", "-lc", batch_cmd], detach=False)
                 except Exception as e:
                     logging.error(f"Failed to install SR forwarding on {sat.name}: {e}")
 
@@ -962,7 +978,7 @@ class SRMPLSDaemon(RoutingDaemon):
                     parts.append(" && ".join(route_commands))
                 batch_cmd = "; ".join(parts)
                 try:
-                    gs.container.exec_run(["sh", "-lc", batch_cmd], detach=False)
+                    gs.execute_command(["sh", "-lc", batch_cmd], detach=False)
                 except Exception as e:
                     logging.error(f"Failed to install SR routes on {gs.name}: {e}")
 
@@ -1011,9 +1027,7 @@ class SRMPLSDaemon(RoutingDaemon):
 
         graph = self.topology.get_current_graph()
         gs_array = list(self.topology.get_ground_stations())
-        use_php = (
-            self.mpls_config.use_php if self.mpls_config else False
-        )
+        use_php = self.mpls_config.use_php if self.mpls_config else False
         new_entries = []
 
         for gs_dst in gs_array:
@@ -1061,7 +1075,7 @@ class SRMPLSDaemon(RoutingDaemon):
 
         self.sr_lfib[source_id] = new_entries
 
-        gs_src.enable_mpls()
+        self._enable_mpls(gs_src)
         if new_entries:
             batch_cmd = " && ".join(
                 entry.to_iproute2_command() for entry in new_entries
