@@ -3,7 +3,7 @@ import re
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 if TYPE_CHECKING:
     from satgonetem.models.node import Node
@@ -161,6 +161,30 @@ class PingResults:
             print(f"RTT mdev:            {self._rtt_mdev:.3f} ms")
         print("=" * 50)
 
+    def to_json(self) -> dict[str, Any]:
+        """Return a JSON-serializable dict of all parsed ping metrics and config.
+
+        Returns:
+            A dict with keys 'config' and the parsed result metrics. Suitable
+            for passing directly to json.dumps().
+        """
+        return {
+            "config": {
+                "count": self.config.count,
+                "timeout_sec": self.config.timeout_sec,
+                "interval_sec": self.config.interval_sec,
+                "packet_size": self.config.packet_size,
+            },
+            "packets_transmitted": self._transmitted,
+            "packets_received": self._received,
+            "packet_loss_percent": self._loss_percent,
+            "reachable": self.reachable,
+            "rtt_min_ms": self._rtt_min,
+            "rtt_avg_ms": self._rtt_avg,
+            "rtt_max_ms": self._rtt_max,
+            "rtt_mdev_ms": self._rtt_mdev,
+        }
+
     def __repr__(self) -> str:
         return (
             f"PingResults(received={self._received}/{self._transmitted}, "
@@ -232,6 +256,7 @@ class PingFlow:
         self._error: Optional[Exception] = None
         self._thread: Optional[threading.Thread] = None
         self._lock = threading.Lock()
+        self._stop_event = threading.Event()
 
     def start(self) -> None:
         """Start the ping in a background daemon thread.
@@ -249,6 +274,20 @@ class PingFlow:
             self._status = PingStatus.RUNNING
             self._thread = threading.Thread(target=self._run, daemon=True)
             self._thread.start()
+
+    def stop(self) -> None:
+        """Send SIGTERM to the running ping process and wait for the thread to exit.
+
+        Any output produced before termination is printed to stdout.
+        No-op if the flow is not currently running.
+        """
+        with self._lock:
+            if self._status != PingStatus.RUNNING:
+                return
+        self._stop_event.set()
+        self.source.execute_command("pkill -x ping", detach=True)
+        if self._thread is not None:
+            self._thread.join(timeout=5.0)
 
     def status(self) -> PingStatus:
         """Return the current lifecycle state.
@@ -285,15 +324,28 @@ class PingFlow:
                     raise TypeError(f"Unexpected PingStatus: {unexpected!r}")
 
     def _run(self) -> None:
-        """Execute run_ping and update status on completion."""
+        """Execute ping and update status on completion."""
         if self.delay > 0.0:
             time.sleep(self.delay)
+        raw: Optional[str] = None
         try:
-            result = run_ping(self.source, self.destination, self.config)
+            dst_ip = self.destination.loopback.ipv4
+            bind_ip = self.source.loopback.ipv4
+            command = self.config.build_command(dst_ip, bind_ip)
+            raw = self.source.execute_command(command)
+            if not isinstance(raw, str):
+                raise RuntimeError(
+                    f"ping from {self.source.name} to {self.destination.name} "
+                    "returned no output; verify both containers are running and "
+                    "a route exists."
+                )
+            result = PingResults(raw_output=raw, config=self.config)
             with self._lock:
                 self._result = result
                 self._status = PingStatus.DONE
         except Exception as exc:
+            if self._stop_event.is_set() and raw:
+                print(raw)
             with self._lock:
                 self._error = exc
                 self._status = PingStatus.ERROR

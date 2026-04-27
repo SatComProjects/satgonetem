@@ -57,7 +57,7 @@ class Node:
         self.loopback = Interface("lo", iface_type="lo")
 
         # New faster way to handle containers
-        self.container: docker.models.containers.Container
+        self.container: docker.models.containers.Container | None = None
         self.container_pid: int | None = None
 
         # Change FRRManager ISIS

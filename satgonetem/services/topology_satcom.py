@@ -167,7 +167,9 @@ class TopologyManager(SatComModel):
         sim_manager = create_and_load_simulation(
             simulation_property.model_dump(), simulation_property.simulation_name
         )
-        return cls(simulation_manager=sim_manager)
+        instance = cls(simulation_manager=sim_manager)
+        instance.simulation_property = simulation_property
+        return instance
 
     def to_file(
         self, path: str, network_config: Optional[NetworkConfig] = None
@@ -200,9 +202,12 @@ class TopologyManager(SatComModel):
                 gonetem_server=self.gonetem_server,
             )
 
-        sim_prop_data = dict(
-            self.simulation_manager.configuration.get("properties", {})
-        )
+        if self.simulation_property is not None:
+            sim_prop_data = self.simulation_property.model_dump()
+        else:
+            sim_prop_data = dict(
+                self.simulation_manager.configuration.get("properties", {})
+            )
 
         ground_files: Dict[str, Dict[str, str]] = {}
         for gop in sim_prop_data.get("ground_objects_properties", []):
@@ -280,6 +285,7 @@ class TopologyManager(SatComModel):
             f"\033[92m=== Starting Topology Manager Initialization === [{start_time}]\033[0m"
         )
         self.simulation_manager = simulation_manager
+        self.simulation_property: Optional[SimulationProperty] = None
         self._setup_update_actions()
         self._apply_network_config(network_config or NetworkConfig())
         self.nx_adapter = NetworkXAdapter(self.simulation_manager)
@@ -446,7 +452,6 @@ class TopologyManager(SatComModel):
             satellite = Satellite(sat_id)
             satellite.satcom_object = sat_com_satellite
             satellite.sync_position_from_satcom()
-            satellite.shell = sat_com_satellite.walker_shell.identifier
             return satellite
 
         max_workers = min(32, (os.cpu_count() or 4) * 4, num_satellites)
@@ -973,16 +978,25 @@ class TopologyManager(SatComModel):
         self._sync_links()
         self._sync_links_to_delete()
 
-        link_stats = self.bulk_link_operations()
+        pending_delete_count = sum(
+            1 for link in self.links.values() if getattr(link, "to_remove", False)
+        )
 
-        self._perform_local_link_operations()
+        link_stats = self.bulk_link_operations(to_del=False)
+        self._perform_local_link_operations(to_del=False)
 
         if (
             link_stats["added_count"]
             or link_stats["updated_count"]
-            or link_stats["deleted_count"]
+            or pending_delete_count
         ):
             self._update_routing_after_link_changes(link_stats["links_to_add"])
+
+        delete_stats = self.bulk_link_operations(to_add=False, to_update=False)
+        self._perform_local_link_operations(to_add=False, to_update=False)
+        link_stats["deleted_count"] = delete_stats["deleted_count"]
+        link_stats["delete_time_total"] = delete_stats["delete_time_total"]
+        link_stats["delete_time_per_link"] = delete_stats["delete_time_per_link"]
 
         if (
             link_stats["added_count"] > 0
@@ -1190,7 +1204,7 @@ class TopologyManager(SatComModel):
         t_update_start = time.perf_counter()
         t_add_start = time.perf_counter()
 
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        with ThreadPoolExecutor(max_workers=1) as executor:
             futures = []
 
             if to_del:
@@ -1354,21 +1368,38 @@ class TopologyManager(SatComModel):
         for link in links_to_add:
             self._execute_link_add(link)
 
-    def _perform_local_link_operations(self, max_workers: int = MAX_WORKERS) -> None:
+    def _perform_local_link_operations(
+        self,
+        to_add: bool = True,
+        to_update: bool = True,
+        to_del: bool = True,
+        max_workers: int = MAX_WORKERS,
+    ) -> None:
         """
         Perform local link operations (interface management, state updates)
         without gRPC calls, using parallel processing where safe.
+
+        Args:
+            to_add: Whether to process link additions.
+            to_update: Whether to process link updates.
+            to_del: Whether to process link deletions.
+            max_workers: Maximum number of parallel workers.
         """
-        # Collect all link operations that need to be performed
-        links_to_remove = [
-            link for link in self.links.values() if getattr(link, "to_remove", False)
-        ]
-        links_to_update = [
-            link for link in self.links.values() if getattr(link, "to_update", False)
-        ]
-        links_to_add = [
-            link for link in self.links.values() if getattr(link, "to_add", False)
-        ]
+        links_to_remove = (
+            [link for link in self.links.values() if getattr(link, "to_remove", False)]
+            if to_del
+            else []
+        )
+        links_to_update = (
+            [link for link in self.links.values() if getattr(link, "to_update", False)]
+            if to_update
+            else []
+        )
+        links_to_add = (
+            [link for link in self.links.values() if getattr(link, "to_add", False)]
+            if to_add
+            else []
+        )
 
         total_operations = (
             len(links_to_remove) + len(links_to_update) + len(links_to_add)
@@ -1376,8 +1407,6 @@ class TopologyManager(SatComModel):
 
         if total_operations == 0:
             return
-
-        # Calculate max workers for local operations (fewer than gRPC operations)
 
         self._perform_local_link_operations_parallel(
             links_to_remove, links_to_update, links_to_add, max_workers
@@ -1467,7 +1496,7 @@ class TopologyManager(SatComModel):
     def _add_link_interfaces(self, link: Link) -> None:
         """Add interfaces for a single link."""
         try:
-            self._build_interfaces_from_link(link, set_ip=True, sync_to_node=False)
+            self._build_interfaces_from_link(link, set_ip=True, sync_to_node=True)
             link.to_add = False
         except Exception as e:
             logging.error(
@@ -2114,12 +2143,16 @@ class TopologyManager(SatComModel):
         if self._sim_thread and self._sim_thread.is_alive():
             self._sim_thread.join()
 
-    def next_step(self) -> None:
+    def next_step(self) -> float:
         """Advance the simulation by one step.
 
         Delegates directly to update_simulation.
         """
+        tic = time.perf_counter()
         self.update_simulation()
+        total = time.perf_counter() - tic
+
+        return total if total > 0 else 0.00
 
     def speed_up(self) -> None:
         """Reduce the update factor to speed up simulation playback.
@@ -2598,6 +2631,12 @@ class TopologyManager(SatComModel):
 
 def main():
     """Demonstrate topology lifecycle and simulation controls."""
+    """
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(message)s",
+    )
+    """
     from satgonetem.utils.project_builder import create_test_project
 
     tic = time.perf_counter()
@@ -2606,116 +2645,63 @@ def main():
 
     topology_manager = TopologyManager.from_satcom(project)
 
-    topology_manager.to_file("test_topology.json")
+    topology_manager.start_gonetem()
 
-    topology_manager = TopologyManager.from_file("test_topology.json")
+    topology_manager.set_IP_addresses()
 
-    nodes_and_links = topology_manager.start_gonetem()
+    topology_manager.init_routing(routing_method="static")
 
-    toc = time.perf_counter()
-
-    print(f"Nodes and links: {nodes_and_links}, startup time: {toc - tic:.2f}s")
-
-    close = topology_manager.stop_gonetem()
-
-    end = time.perf_counter()
-
-    total = end - tic
-
-    print(f"GoNetEm stopped, cleanup time: {close:.2f}s")
-    print(f"Total time from start to stop: {total:.2f}s")
-
-    # static_tbf_validation(topology_manager, debug=True)
-
-
-def static_tbf_validation(
-    topology_manager: TopologyManager, debug: bool = False
-) -> None:
-    """Validate that the current traffic matches the configured TBF limits on each link.
-
-    This method reads the latest interface usage data from the monitoring files,
-    compares it against the configured TBF limits for each link, and returns a list
-    of links that are currently exceeding their limits.
-
-    Args:
-        topology_manager: The TopologyManager instance to validate.
-        debug: If True, logs detailed information about link usage and top offenders.
-
-    """
-
-    network_config_5mbps = NetworkConfig(
-        project_name="Iridium",
-        network_launcher="GONETEM",
-        isl_link_capacity=5000,  # 5 Mbps
-        gnd_link_capacity=5000,  # 5 Mbps
-    )
-    network_config_10mbps = NetworkConfig(
-        project_name="Iridium",
-        network_launcher="GONETEM",
-        isl_link_capacity=10000,  # 10 Mbps
-        gnd_link_capacity=10000,  # 10 Mbps
-    )
-    network_config_50mbps = NetworkConfig(
-        project_name="Iridium",
-        network_launcher="GONETEM",
-        isl_link_capacity=50000,  # 50 Mbps
-        gnd_link_capacity=50000,  # 50 Mbps
-    )
-    network_config_100mbps = NetworkConfig(
-        project_name="Iridium",
-        network_launcher="GONETEM",
-        isl_link_capacity=100000,  # 100 Mbps
-        gnd_link_capacity=100000,  # 100 Mbps
-    )
-    network_config_500mbps = NetworkConfig(
-        project_name="Iridium",
-        network_launcher="GONETEM",
-        isl_link_capacity=500000,  # 500 Mbps
-        gnd_link_capacity=500000,  # 500 Mbps
+    # Start a ping
+    iperf3_config = Iperf3Config(
+        protocol="UDP",
+        duration=1800,
+        interval=0.1,
+        bandwidth_mbps=80,
+        length="1000",
     )
 
-    network_configs = [
-        network_config_5mbps,
-        network_config_10mbps,
-        network_config_50mbps,
-        network_config_100mbps,
-        network_config_500mbps,
-    ]
+    update_time = 1
 
-    src = list(topology_manager.ground_stations.values())[0]
-    dst = list(topology_manager.ground_stations.values())[1]
+    src = topology_manager.get_ground_stations()[1]
+    dst = topology_manager.get_ground_stations()[2]
 
-    for config in network_configs:
-        topology_manager._apply_network_config(config)
-        topology_manager.fast_start(routing_method="static")
+    topology_manager.set_update_time(update_time)  # Set tick interval to 10 seconds
 
-        iperf3_conf = Iperf3Config(
-            protocol="UDP", duration=10, bandwidth_mbps=config.isl_link_capacity / 1000
-        )
+    iperf3_flow = Iperf3Flow(src, dst, iperf3_config)
+    iperf3_flow.start()
 
-        flows = [
-            Iperf3Flow(src, dst, iperf3_conf),
-            Iperf3Flow(src, dst, iperf3_conf, 15),
-            Iperf3Flow(src, dst, iperf3_conf, 30),
-            Iperf3Flow(src, dst, iperf3_conf, 45),
-            Iperf3Flow(src, dst, iperf3_conf, 60),
-        ]
+    while True:
+        print(f"Current time step: {topology_manager.get_current_time_step()}")
 
-        scheduler = FlowScheduler(flows)
+        current_time_step = topology_manager.get_current_time_step()
 
-        scheduler.run()
+        if iperf3_flow.status() in [FlowStatus.DONE, FlowStatus.ERROR]:
+            break
+        if current_time_step % 5 == 0:
 
-        results = [scheduler.results(flow) for flow in flows]
+            print(iperf3_flow.status())
 
-        print(f"Results for config {config.isl_link_capacity} kbps:")
-        for res in results:
-            if isinstance(res, Iperf3Results):
-                throughput = res.avg_throughput_mbps
-                loss_percent = res.avg_loss_percent
+        try:
+            update = topology_manager.next_step()  # Advance simulation by one step
+            if update > update_time:
+                update = (
+                    update_time - 0.01
+                )  # Clamp update time to just under the tick interval
+            time.sleep(
+                update_time - update
+            )  # Sleep for the remainder of the tick interval
+        except KeyboardInterrupt:
+            print("Simulation interrupted by user.")
+            break
 
-                print(f"  Throughput={throughput:.2f} Mbps, Loss={loss_percent:.2f}%")
+    iperf3_flow.stop()  # Ensure the flow is stopped
 
-        topology_manager.stop_gonetem()
+    data = json.dumps(iperf3_flow.results().to_json(), indent=2)
+
+    with open("iperf3_results.json", "w") as f:
+        f.write(data)
+
+    topology_manager.stop_gonetem()
 
 
 if __name__ == "__main__":

@@ -379,9 +379,9 @@ def create_test_project(
         type="star",
         constellation_property=WalkerConstellationProperty(
             identifier="LEO",
-            amount_of_orbit_plane=18,
-            amount_of_satellite_per_orbit_plane=40,
-            inclination=53.0,
+            amount_of_orbit_plane=12,
+            amount_of_satellite_per_orbit_plane=22,
+            inclination=70,
             mean_revolution_per_day=14.35,
             phase_difference_between_satellites=True,
         ),

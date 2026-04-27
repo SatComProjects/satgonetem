@@ -4,7 +4,7 @@ import re
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, List, Optional
+from typing import TYPE_CHECKING, Any, List, Optional
 
 if TYPE_CHECKING:
     from satgonetem.models.node import Node
@@ -264,6 +264,39 @@ class Hping3Results:
             print(f"RTT max:             {self._rtt_max:.3f} ms")
         print("=" * 50)
 
+    def to_json(self) -> dict[str, Any]:
+        """Return a JSON-serializable dict of all parsed hping3 metrics and config.
+
+        Per-packet RTT values that are NaN (no reply received) are mapped to null.
+
+        Returns:
+            A dict with keys 'config' and the parsed result metrics. Suitable
+            for passing directly to json.dumps().
+        """
+        return {
+            "config": {
+                "proto": self.config.proto,
+                "dport": self.config.dport,
+                "sport": self.config.sport,
+                "count": self.config.count,
+                "size": self.config.size,
+                "ttl": self.config.ttl,
+                "rate_type": self.config.rate_type,
+                "interval": self.config.interval,
+                "flags": list(self.config.flags),
+                "spoof_src": self.config.spoof_src,
+            },
+            "packets_transmitted": self._transmitted,
+            "packets_received": self._received,
+            "packet_loss_percent": self._loss_percent,
+            "reachable": self.reachable,
+            "payload_bytes": self._payload_bytes,
+            "rtt_min_ms": self._rtt_min,
+            "rtt_avg_ms": self._rtt_avg,
+            "rtt_max_ms": self._rtt_max,
+            "rtt_ms": [None if math.isnan(x) else x for x in self._rtt_ms],
+        }
+
     def __repr__(self) -> str:
         return (
             f"Hping3Results(received={self._received}, "
@@ -334,6 +367,7 @@ class Hping3Flow:
         self._error: Optional[Exception] = None
         self._thread: Optional[threading.Thread] = None
         self._lock = threading.Lock()
+        self._stop_event = threading.Event()
 
     def start(self) -> None:
         """Start hping3 in a background daemon thread.
@@ -351,6 +385,20 @@ class Hping3Flow:
             self._status = Hping3Status.RUNNING
             self._thread = threading.Thread(target=self._run, daemon=True)
             self._thread.start()
+
+    def stop(self) -> None:
+        """Send SIGTERM to the running hping3 process and wait for the thread to exit.
+
+        Any output produced before termination is printed to stdout.
+        No-op if the flow is not currently running.
+        """
+        with self._lock:
+            if self._status != Hping3Status.RUNNING:
+                return
+        self._stop_event.set()
+        self.source.execute_command("pkill -x hping3", detach=True)
+        if self._thread is not None:
+            self._thread.join(timeout=5.0)
 
     def status(self) -> Hping3Status:
         """Return the current lifecycle state.
@@ -387,15 +435,28 @@ class Hping3Flow:
                     raise TypeError(f"Unexpected Hping3Status: {unexpected!r}")
 
     def _run(self) -> None:
-        """Execute run_hping3 and update status on completion."""
+        """Execute hping3 and update status on completion."""
         if self.delay > 0.0:
             time.sleep(self.delay)
+        raw: Optional[str] = None
         try:
-            result = run_hping3(self.source, self.destination, self.config)
+            dst_ip = self.destination.loopback.ipv4
+            bind_ip = self.source.loopback.ipv4
+            command = self.config.build_command(dst_ip, bind_ip)
+            raw = self.source.execute_command(command)
+            if not isinstance(raw, str):
+                raise RuntimeError(
+                    f"hping3 from {self.source.name} to {self.destination.name} "
+                    "returned no output; verify both containers are running and "
+                    "a route exists."
+                )
+            result = Hping3Results(raw_output=raw, config=self.config)
             with self._lock:
                 self._result = result
                 self._status = Hping3Status.DONE
         except Exception as exc:
+            if self._stop_event.is_set() and raw:
+                print(raw)
             with self._lock:
                 self._error = exc
                 self._status = Hping3Status.ERROR

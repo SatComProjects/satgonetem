@@ -126,12 +126,18 @@ class GoNetEmLauncher(NetworkLauncher):
 
     def _link_request(self, link) -> netem_pb2.LinkRequest:
         delay_ms = max(int(link.delay), 1)
+        loss = float(getattr(link, "loss", 0) or 0)
+        jitter = int(getattr(link, "jitter", 0) or 0)
         p1_kbps, p2_kbps = self._link_capacities_for(link)
-        qos1 = netem_pb2.LinkConfig.QoSConfig(delay=delay_ms, rate=p1_kbps)
-        qos2 = netem_pb2.LinkConfig.QoSConfig(delay=delay_ms, rate=p2_kbps)
+        qos1 = netem_pb2.LinkConfig.QoSConfig(
+            delay=delay_ms, rate=p1_kbps, loss=loss, jitter=jitter
+        )
+        qos2 = netem_pb2.LinkConfig.QoSConfig(
+            delay=delay_ms, rate=p2_kbps, loss=loss, jitter=jitter
+        )
         link_cfg = netem_pb2.LinkConfig(
-            peer1=link.source.name,
-            peer2=link.target.name,
+            peer1=f"{link.source.name}.{link.target.id}",
+            peer2=f"{link.target.name}.{link.source.id}",
             peer1qos=qos1,
             peer2qos=qos2,
         )

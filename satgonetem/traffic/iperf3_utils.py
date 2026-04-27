@@ -617,6 +617,60 @@ class Iperf3Results:
             print(f"Path MTU:              {self.pmtu} bytes")
         print("=" * 60)
 
+    def to_json(self) -> dict[str, Any]:
+        """Return a JSON-serializable dict of iperf3 results and configuration.
+
+        The 'summary' key holds the computed scalar metrics derived from the
+        iperf3 'end' section. Protocol-specific keys are included only for the
+        relevant protocol. The 'raw' key holds the complete iperf3 JSON output
+        as a dict.
+
+        Returns:
+            A dict with keys 'config', 'summary', and 'raw'. Suitable for
+            passing directly to json.dumps().
+        """
+        summary: dict[str, Any] = {
+            "protocol": self._protocol,
+            "duration_seconds": self.duration_seconds,
+            "num_streams": self.num_streams,
+            "avg_throughput_mbps": self.avg_throughput_mbps,
+            "max_throughput_mbps": self.max_throughput_mbps,
+            "min_throughput_mbps": self.min_throughput_mbps,
+            "pmtu": self.pmtu,
+        }
+        if self._protocol == "TCP":
+            summary.update({
+                "total_bytes_sent": self.total_bytes_sent,
+                "total_bytes_received": self.total_bytes_received,
+                "total_retransmits": self.total_retransmits,
+                "avg_rtt_ms": self.avg_rtt_ms,
+                "max_rtt_ms": self.max_rtt_ms,
+                "avg_rtt_var_us": self.avg_rtt_var_us,
+                "avg_cwnd_bytes": self.avg_cwnd_bytes,
+                "avg_snd_wnd_bytes": self.avg_snd_wnd_bytes,
+            })
+        elif self._protocol == "UDP":
+            summary.update({
+                "total_bytes": self.total_bytes,
+                "total_packets": self.total_packets,
+                "avg_jitter_ms": self.avg_jitter_ms,
+                "total_lost_packets": self.total_lost_packets,
+                "avg_loss_percent": self.avg_loss_percent,
+                "total_out_of_order": self.total_out_of_order,
+            })
+        return {
+            "config": {
+                "protocol": self._config.protocol,
+                "duration": self._config.duration,
+                "bandwidth_mbps": self._config.bandwidth_mbps,
+                "parallel": self._config.parallel,
+                "interval": self._config.interval,
+                "port": self._config.port,
+            },
+            "summary": summary,
+            "raw": self._data,
+        }
+
     def __repr__(self) -> str:
         return (
             f"Iperf3Results(protocol={self._protocol!r}, "
@@ -687,6 +741,7 @@ class Iperf3Flow:
         self._error: Optional[Exception] = None
         self._thread: Optional[threading.Thread] = None
         self._lock = threading.Lock()
+        self._stop_event = threading.Event()
 
     def start(self) -> None:
         """Start the iperf3 flow in a background daemon thread.
@@ -704,6 +759,21 @@ class Iperf3Flow:
             self._status = FlowStatus.RUNNING
             self._thread = threading.Thread(target=self._run, daemon=True)
             self._thread.start()
+
+    def stop(self) -> None:
+        """Send SIGTERM to the running iperf3 client and server and wait for the thread.
+
+        Any partial JSON output retrieved from the output file is printed to stdout.
+        Both client and server processes are terminated. No-op if not running.
+        """
+        with self._lock:
+            if self._status != FlowStatus.RUNNING:
+                return
+        self._stop_event.set()
+        self.source.execute_command("pkill -x iperf3", detach=True)
+        self.destination.execute_command("pkill -x iperf3", detach=True)
+        if self._thread is not None:
+            self._thread.join(timeout=5.0)
 
     def status(self) -> FlowStatus:
         """Return the current lifecycle state of the flow.
@@ -740,15 +810,61 @@ class Iperf3Flow:
                     raise TypeError(f"Unexpected FlowStatus: {unexpected!r}")
 
     def _run(self) -> None:
-        """Execute run_iperf3_flow and update status on completion."""
+        """Execute the iperf3 flow and update status on completion."""
         if self.delay > 0.0:
             time.sleep(self.delay)
+
+        run_id = uuid.uuid4().hex[:8]
+        client_json = (
+            f"/tmp/iperf3_cli_{self.source.name}_{self.destination.name}_{run_id}.json"
+        )
+        server_json = (
+            f"/tmp/iperf3_srv_{self.source.name}_{self.destination.name}_{run_id}.json"
+        )
+        dst_ip = self.destination.loopback.ipv4
+        src_ip = self.source.loopback.ipv4
+
+        raw: Optional[str] = None
         try:
-            result = run_iperf3_flow(self.source, self.destination, self.config)
+            server_cmd = (
+                f'sh -c "iperf3 -s -1 -B {dst_ip} -p {self.config.port} '
+                f'--json > {server_json} 2>&1"'
+            )
+            self.destination.execute_command(server_cmd, detach=True)
+            time.sleep(0.5)
+
+            client_cmd = self.config.build_client_command(dst_ip, src_ip, client_json)
+            self.source.execute_command(client_cmd, detach=False)
+            time.sleep(0.3)
+
+            if self.config.protocol.upper() == "UDP":
+                raw = self.destination.execute_command(f"cat {server_json}")
+                if not isinstance(raw, str) or not raw.strip().startswith("{"):
+                    raw = self.source.execute_command(f"cat {client_json}")
+            else:
+                raw = self.source.execute_command(f"cat {client_json}")
+                if not isinstance(raw, str) or not raw.strip().startswith("{"):
+                    raw = self.destination.execute_command(f"cat {server_json}")
+
+            self.source.execute_command(f"rm -f {client_json}", detach=True)
+            self.destination.execute_command(f"rm -f {server_json}", detach=True)
+
+            if not isinstance(raw, str) or not raw.strip().startswith("{"):
+                raise RuntimeError(
+                    f"Could not retrieve iperf3 JSON output for flow "
+                    f"{self.source.name} -> {self.destination.name}. "
+                    "Verify iperf3 is installed in both containers and a route exists."
+                )
+
+            result = Iperf3Results(raw_json=raw, config=self.config)
             with self._lock:
                 self._result = result
                 self._status = FlowStatus.DONE
         except Exception as exc:
+            if self._stop_event.is_set() and raw:
+                print(raw)
+            self.source.execute_command(f"rm -f {client_json}", detach=True)
+            self.destination.execute_command(f"rm -f {server_json}", detach=True)
             with self._lock:
                 self._error = exc
                 self._status = FlowStatus.ERROR
