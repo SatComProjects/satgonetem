@@ -14,6 +14,7 @@ import re
 import sys
 import tarfile
 import subprocess
+import time
 from typing import Callable, Optional
 
 import grpc
@@ -164,12 +165,17 @@ class GoNetEmLauncher(NetworkLauncher):
         nodes: list,
         workers: int = 64,
         progress_cb: Optional[Callable[[str, int, int], None]] = None,
-    ) -> None:
+    ) -> tuple[float, float]:
         """Open the project on the GoNetem server and run TopologyRun.
 
         GoNetem starts containers and wires links in a single streaming call,
         so start_containers handles both NODE_START and LINK_SETUP progress.
         wire_links() is therefore a no-op for this launcher.
+
+        Returns:
+            A tuple of (container_time, link_time) in seconds, where
+            container_time is the elapsed time across all NODE_START events
+            and link_time is the elapsed time across all LINK_SETUP events.
         """
         client = self._get_client()
 
@@ -194,6 +200,8 @@ class GoNetEmLauncher(NetworkLauncher):
         logging.info("GoNetEmLauncher: project opened with id=%s", project_id)
 
         node_count = link_count = node_start = link_setup = node_config = 0
+        container_start_t = link_start_t = None
+        container_time = link_time = 0.0
         try:
             for msg in client.TopologyRun(self._request):
                 code = msg.code
@@ -206,11 +214,17 @@ class GoNetEmLauncher(NetworkLauncher):
                     if progress_cb:
                         progress_cb("LINK_COUNT", 0, link_count)
                 elif code == netem_pb2.TopologyRunMsg.NODE_START:
+                    if container_start_t is None:
+                        container_start_t = time.monotonic()
                     node_start += 1
+                    container_time = time.monotonic() - container_start_t
                     if progress_cb:
                         progress_cb("NODE_START", node_start, node_count)
                 elif code == netem_pb2.TopologyRunMsg.LINK_SETUP:
+                    if link_start_t is None:
+                        link_start_t = time.monotonic()
                     link_setup += 1
+                    link_time = time.monotonic() - link_start_t
                     if progress_cb:
                         progress_cb("LINK_SETUP", link_setup, link_count)
                 elif code == netem_pb2.TopologyRunMsg.NODE_LOADCONFIG:
@@ -237,6 +251,8 @@ class GoNetEmLauncher(NetworkLauncher):
         # Attach docker-py container objects and PIDs to each node so that
         # subsequent operations (exec_run, enable_mpls, FRR init, etc.) work.
         self._attach_containers(nodes, project_id)
+
+        return (container_time, link_time)
 
     def _attach_containers(self, nodes: list, project_id: str) -> None:
         """Resolve docker-py Container objects and PIDs for each node after TopologyRun."""
