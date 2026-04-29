@@ -120,15 +120,15 @@ topology.start()                 # begins simulation loop (topology updates ever
 from satgonetem.utils.project_builder import (
     GroundStationEntry,
     GroundObjectFile,
-    GroundObject,
-    SatcomProject,
 )
 from sat_com_builder.models import (
-    WalkerShellProperty,
-    WalkerConstellationProperty,
+    SimulationProperty,
+    GroundObjectProperty,
     GroundConnectivityProperty,
+    WalkerShellProperty,
     OrbitalConnectivityProperty,
 )
+from sat_com_constellation.models import WalkerConstellationProperty
 
 # Ground stations
 entries = [
@@ -136,10 +136,11 @@ entries = [
     GroundStationEntry(1, "London", 51.507, -0.127, 0.011),
 ]
 gs_file = GroundObjectFile("Ground Stations", entries)
-ground_obj = GroundObject(
-    gs_file,
-    "ground_station",
-    GroundConnectivityProperty(
+ground_obj = GroundObjectProperty(
+    identifier=gs_file.identifier,
+    data_file=gs_file.write("/tmp"),
+    type="ground_station",
+    connectivity_properties=GroundConnectivityProperty(
         ground_to_space_connections_strategy="best-angle-until-disconnection",
         elevation_above_horizon=10,
         maximum_satellite_range_distance=1500.0,
@@ -163,12 +164,12 @@ shell = WalkerShellProperty(
     ground_object_white_list=["Ground Stations"],
 )
 
-project = SatcomProject(
+project = SimulationProperty(
     simulation_name="MyNet",
     start_date="01/01/2024 00:00:00",
     end_date="01/01/2024 00:10:00",
     walker_shells=[shell],
-    ground_objects=[ground_obj],
+    ground_objects_properties=[ground_obj],
 )
 
 topology = TopologyManager.from_satcom(project)
@@ -208,17 +209,21 @@ topology.stop_gonetem()  # remove containers, veth pairs, and qdiscs
 ```
 satgonetem/
   models/        Node, Satellite, GroundStation, Link, Interface
+                 MPLS entries, routing entries, sat_com Pydantic models
   dynamics/      DynamicsModel (abstract) + SatComModel (orbital mechanics integration)
   launchers/     NetworkLauncher (abstract) + DirectLauncher (Docker + pyroute2)
                  GoNetEmLauncher (gRPC legacy), HILManager (hardware-in-the-loop)
   routing/       RoutingDaemon (abstract) + static, OSPF, ISIS-SR, SR-MPLS
-  traffic/       PingFlow, Iperf3Flow, Hping3Flow, FlowScheduler
+  traffic/       Ping, iperf2, iperf3, hping3 traffic tools and FlowScheduler
+  link_budget/   Antenna, transmitter, receiver, propagation, MODCOD, geometry
   services/      TopologyManager (central orchestrator)
-  utils/         project_builder, flow_scheduler, IP utilities
+                 mixins: topology sync, link ops, routing mgr, interface mgr,
+                         network lifecycle, traffic testing, simulation loop, diagnostics
+  utils/         project_builder, flow_scheduler, IP utilities, custom connection strategies
   proto/         gRPC definitions for GoNetem backend
 ```
 
-**TopologyManager** (`satgonetem/services/topology_satcom.py`) is the main entry point. It inherits from `SatComModel` to drive the simulation forward and orchestrates all other components: container lifecycle, veth wiring, qdisc configuration, routing updates, and traffic measurement.
+**TopologyManager** (`satgonetem/services/topology_satcom.py`) is the main entry point. It is composed of mixins under `services/mixins/` that each handle a specific concern: syncing topology data from the orbital simulator, managing Docker containers and virtual interfaces, applying `tc` qdiscs, configuring routing daemons, running traffic tests, and driving the simulation tick loop.
 
 **Delay model:** `delay_ms = distance_km / 299792.458 * 1000` (propagation at speed of light).
 
@@ -244,12 +249,23 @@ See `docs/routing.md` for the `RoutingDaemon` interface.
 
 ## Pre-configured Projects
 
-The `projects/` directory contains YAML configurations for:
+The `topology_files/` directory contains ready-to-use JSON topologies for:
 
 - **Iridium** - Real Iridium constellation parameters with European ground stations
 - **Iris2** - ESA Iris2 constellation parameters
+- **Starlink** - Starlink constellation parameters
+- **Kuiper** - Amazon Kuiper constellation parameters
+- **OneWeb** - OneWeb constellation parameters
 
-Each project includes a `config.yaml` (emulator settings: tick rate, capacities, routing method) and a `sat_com_config.yaml` (constellation definition).
+Load a pre-configured topology directly with `TopologyManager`:
+
+```python
+from satgonetem.services.topology_satcom import TopologyManager
+
+topology = TopologyManager.from_file("topology_files/iridium_topology.json")
+```
+
+These files are self-contained (ground station data is embedded) and can be moved or shared without additional dependencies.
 
 ## Configuration Reference
 
@@ -263,17 +279,6 @@ Key parameters on `TopologyManager`:
 | `gnd_link_capacity` | - | Ground-space link capacity in kbps |
 | `satellite_image` | - | Docker image used for satellite containers |
 | `network_launcher` | `"DIRECT"` | `"GONETEM"` to use legacy gRPC backend |
-
-## Documentation
-
-Detailed guides are in `docs/`:
-
-- [`topology_manager_api.md`](docs/topology_manager_api.md) - Full TopologyManager API reference
-- [`routing.md`](docs/routing.md) - Routing daemon architecture and custom daemon registration
-- [`traffic.md`](docs/traffic.md) - Ping, iperf3, hping3 tools and FlowScheduler
-- [`project_creation.md`](docs/project_creation.md) - End-to-end constellation design guide
-- [`hil_manager.md`](docs/hil_manager.md) - Hardware-in-the-loop integration
-- [`link_budget.md`](docs/link_budget.md) - Link budget calculations and parameters
 
 ## Testing
 
