@@ -34,13 +34,13 @@ SatGoNetem bridges orbital mechanics and Linux network emulation. It computes sa
 ## Installation
 
 ```bash
-pip install -e .
+pip install git+https://github.com/satcomprojects/satgonetem
 ```
 
-The primary external dependency is `sat_com_topology`, fetched from the ISAE-Supaero GitLab:
+The primary external dependency is `sat_com_topology`:
 
 ```
-git+https://gitlab.isae-supaero.fr/eqospace/sat-com-topology.git@sat_com_topology_v4
+git+https://github.com/{placeholder}/sat-com-topology.git@sat_com_topology_v4
 ```
 
 Access to that repository is required at install time.
@@ -63,11 +63,30 @@ cd gonetem
 make build-amd64   # or armv7 / arm64
 ```
 
+If using the stock gonetem version, make sure to copy the configuration file to use SGNT's custom docker images:
+```
+sudo cp resources/gonetem_config/config.yaml /etc/gonetem/config.yaml
+
+sudo service gonetem restart # If running
+
+docker pull jariassuarez/sgnt:satellite
+docker pull jariassuarez/sgnt:ground-station
+```
+
+or a modified, satgonetem-optimized version:
+```bash
+git clone https://github.com/jariassuarez/gonetem
+cd gonetem
+make install-amd64   # or armv7 / arm64
+```
+
 The compiled binaries are placed in `bin/`. Pull the Docker images GoNetem uses internally:
 
 ```bash
 ./bin/gonetem-console pull
 ```
+
+
 
 Start the server (requires root):
 

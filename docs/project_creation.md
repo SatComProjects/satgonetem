@@ -1,12 +1,12 @@
 # Project Creation
 
 This guide covers how to build a satellite topology project entirely in Python, without
-any YAML files on disk, using `SatcomProject` and `TopologyManager.from_satcom`.
+any YAML files on disk, using `SimulationProperty` and `TopologyManager.from_satcom`.
 
 ## Overview
 
 ```
-SatcomProject  (describes the constellation and ground objects)
+SimulationProperty  (describes the constellation and ground objects)
     |
     +-- TopologyManager.from_satcom(project)
             |
@@ -15,9 +15,10 @@ SatcomProject  (describes the constellation and ground objects)
             +-- links: {frozenset: Link, ...}
 ```
 
-`SatcomProject` is a pure Python builder. It holds all constellation parameters in
-memory and produces the configuration dict that `TopologyManager` needs to initialise
-a `SimulationManager`. No files are required until the topology is launched.
+`SimulationProperty` is imported directly from the `sat_com_topology` dependency
+(`sat_com_builder.models`). It holds all constellation parameters in memory and
+produces the configuration that `TopologyManager` needs to initialise a
+`SimulationManager`. No files are required until the topology is launched.
 
 ---
 
@@ -35,9 +36,10 @@ print(len(topology.ground_stations))  # number of ground stations
 print(len(topology.links))            # number of active links
 ```
 
-`create_test_project` returns a pre-configured Iridium-like Walker Star constellation
-(7 planes x 11 satellites, 86.4 deg inclination) with five European ground stations.
-Use it to prototype or run tests without writing any configuration code.
+`create_test_project` returns a `SimulationProperty` representing a pre-configured
+Iridium-like Walker Star constellation (7 planes x 11 satellites, 86.4 deg
+inclination) with five European ground stations. Use it to prototype or run tests
+without writing any configuration code.
 
 ---
 
@@ -46,8 +48,8 @@ Use it to prototype or run tests without writing any configuration code.
 ### 1. Define ground stations
 
 ```python
-from satgonetem.utils.project_builder import GroundStationEntry, GroundObjectFile, GroundObject
-from satgonetem.models.sat_com_models import ConnectivityProperties
+from satgonetem.utils.project_builder import GroundStationEntry, GroundObjectFile
+from sat_com_builder.models import GroundConnectivityProperty, GroundObjectProperty
 
 entries = [
     GroundStationEntry(index=0, name="Berlin",  latitude=52.52,  longitude=13.405, elevation_km=0.034),
@@ -56,8 +58,9 @@ entries = [
 ]
 
 gs_file = GroundObjectFile("Ground Stations", entries)
+data_file = gs_file.write("/tmp")
 
-conn_props = ConnectivityProperties(
+conn_props = GroundConnectivityProperty(
     ground_to_space_connections_strategy="best-angle-until-disconnection",
     elevation_above_horizon=10,
     maximum_satellite_range_distance=1500.0,
@@ -65,7 +68,12 @@ conn_props = ConnectivityProperties(
     maximum_connected_satellites=3,
 )
 
-ground_obj = GroundObject(gs_file, "ground_station", conn_props)
+ground_obj = GroundObjectProperty(
+    identifier=gs_file.identifier,
+    data_file=data_file,
+    type="ground_station",
+    connectivity_properties=conn_props,
+)
 ```
 
 If your stations are already in a file, you can also build `GroundObjectFile` from
@@ -101,13 +109,10 @@ shell. The identifier string must match exactly.
 ### 2. Define the constellation shell
 
 ```python
-from satgonetem.models.sat_com_models import (
-    ConstellationProperty,
-    OrbitalConnectivityProperty,
-    WalkerShell,
-)
+from sat_com_builder.models import OrbitalConnectivityProperty, WalkerShellProperty
+from sat_com_constellation.models import WalkerConstellationProperty
 
-constellation = ConstellationProperty(
+constellation = WalkerConstellationProperty(
     identifier="LEO",
     amount_of_orbit_plane=7,
     amount_of_satellite_per_orbit_plane=11,
@@ -127,7 +132,7 @@ isl_props = OrbitalConnectivityProperty(
     maximum_connected_ground_station=10,
 )
 
-shell = WalkerShell(
+shell = WalkerShellProperty(
     type="star",
     constellation_property=constellation,
     orbital_connectivity_property=isl_props,
@@ -140,7 +145,7 @@ shell = WalkerShell(
 identifiers of the `GroundObjectFile` objects that satellites in this shell can connect
 to.
 
-**ConstellationProperty fields**
+**WalkerConstellationProperty fields**
 
 | Field | Type | Description |
 |---|---|---|
@@ -153,40 +158,40 @@ to.
 
 **OrbitalConnectivityProperty fields**
 
-| Field | Type | Description |
-|---|---|---|
-| `adjacent_inter_satellite_shifting` | int | Phase offset between adjacent planes for ISLs |
-| `maximum_inter_satellite_count` | int | Max ISLs per satellite |
-| `maximum_inter_satellite_range_distance` | float | Max ISL distance in km |
-| `maximum_ground_station_range` | float | Max ground-station link distance in km |
-| `maximum_user_terminal_range` | float | Max user-terminal link distance in km |
-| `maximum_connected_ground_object` | int | Max ground objects per satellite |
-| `maximum_connected_user_terminal` | int | Max user terminals per satellite |
-| `maximum_connected_ground_station` | int | Max ground stations per satellite |
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `adjacent_inter_satellite_shifting` | int | `0` | Phase offset between adjacent planes for ISLs |
+| `maximum_inter_satellite_count` | int | `4` | Max ISLs per satellite |
+| `maximum_inter_satellite_range_distance` | float | `None` | Max ISL distance in km |
+| `maximum_ground_station_range` | float | `None` | Max ground-station link distance in km |
+| `maximum_user_terminal_range` | float | `None` | Max user-terminal link distance in km |
+| `maximum_connected_ground_object` | int | `None` | Max ground objects per satellite |
+| `maximum_connected_user_terminal` | int | `None` | Max user terminals per satellite |
+| `maximum_connected_ground_station` | int | `None` | Max ground stations per satellite |
 
 ### 3. Assemble the project
 
 ```python
-from satgonetem.utils.project_builder import SatcomProject
+from sat_com_builder.models import SimulationProperty
 
-project = SatcomProject(
+project = SimulationProperty(
     simulation_name="MyConstellation",
     start_date="01/01/2024 00:00:00",
     end_date="01/01/2024 00:10:00",
     walker_shells=[shell],
-    ground_objects=[ground_obj],
+    ground_objects_properties=[ground_obj],
 )
 ```
 
-**SatcomProject parameters**
+**SimulationProperty fields**
 
-| Parameter | Type | Default | Description |
+| Field | Type | Default | Description |
 |---|---|---|---|
 | `simulation_name` | str | required | Project name; also used as the gRPC project label |
 | `start_date` | str | required | Simulation start in format `"DD/MM/YYYY HH:MM:SS"` |
 | `end_date` | str | required | Simulation end in the same format |
-| `walker_shells` | list | required | One or more `WalkerShell` instances |
-| `ground_objects` | list | required | One or more `GroundObject` instances |
+| `walker_shells` | list | required | One or more `WalkerShellProperty` instances |
+| `ground_objects_properties` | list | required | One or more `GroundObjectProperty` instances |
 | `movement_model` | str | `"pyorbital"` | Orbital propagation backend |
 | `distance_model` | str | `"sklearn"` | Distance computation backend |
 | `disable_ground_station_link_preload` | bool | `False` | Disable link preload optimisation |
@@ -200,8 +205,8 @@ from satgonetem.services.topology_satcom import TopologyManager
 topology = TopologyManager.from_satcom(project)
 ```
 
-`from_satcom` calls `project.to_sat_com_config_dict()`, wraps the result in a
-`DictConfigurationManager`, loads a `SimulationManager`, and passes it to
+`from_satcom` calls `create_and_load_simulation` with the serialised
+`SimulationProperty`, loads a `SimulationManager`, and passes it to
 `TopologyManager.__init__`. No YAML file is written or read.
 
 ---
@@ -234,15 +239,16 @@ topology._apply_network_config(net_cfg)
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `project_name` | str or None | None | Human-readable project name; falls back to simulation name |
-| `update_time` | int | 5 | Topology tick interval in seconds |
-| `gnd_link_capacity` | int | 100000 | Ground-station link capacity in kbps |
-| `isl_link_capacity` | int | 100000 | Inter-satellite link capacity in kbps |
+| `project_name` | str or None | `None` | Human-readable project name; falls back to simulation name |
+| `update_time` | int | `5` | Topology tick interval in seconds |
+| `gnd_link_capacity` | int | `100000` | Ground-station link capacity in kbps |
+| `isl_link_capacity` | int | `100000` | Inter-satellite link capacity in kbps |
 | `protocol` | str | `"ipv4"` | Network-layer protocol |
 | `routing` | str | `"static"` | Default routing method |
 | `satellite_image` | str | `"jariassuarez/sgnt:satellite"` | Docker image for satellite containers |
 | `network_launcher` | str | `"GONETEM"` | Emulation backend |
 | `gonetem_server` | str | `"localhost:10110"` | GoNetem gRPC server address |
+| `use_budget` | bool | `False` | Enable link-budget-based capacity calculation |
 
 ---
 
@@ -321,24 +327,32 @@ Node IDs follow these conventions:
 
 ## Multiple shells
 
-Pass multiple `WalkerShell` objects to model multi-orbit constellations. Each shell
-must have a distinct `identifier` in its `ConstellationProperty`. Ground objects
-reference shells by that identifier via `shell_white_lists` (in `ConnectivityProperties`)
-and `ground_object_white_list` (on `WalkerShell`).
+Pass multiple `WalkerShellProperty` objects to model multi-orbit constellations. Each shell
+must have a distinct `identifier` in its `WalkerConstellationProperty`. Ground objects
+reference shells by that identifier via `shell_white_lists` (in `GroundConnectivityProperty`)
+and `ground_object_white_list` (on `WalkerShellProperty`).
 
 ```python
-leo_shell = WalkerShell(type="star", constellation_property=ConstellationProperty(identifier="LEO", ...), ...)
-meo_shell = WalkerShell(type="delta", constellation_property=ConstellationProperty(identifier="MEO", ...), ...)
+leo_shell = WalkerShellProperty(
+    type="star",
+    constellation_property=WalkerConstellationProperty(identifier="LEO", ...),
+    ...
+)
+meo_shell = WalkerShellProperty(
+    type="delta",
+    constellation_property=WalkerConstellationProperty(identifier="MEO", ...),
+    ...
+)
 
-conn_props = ConnectivityProperties(
+conn_props = GroundConnectivityProperty(
     shell_white_lists=["LEO", "MEO"],  # ground stations can connect to both shells
     ...
 )
 
-project = SatcomProject(
+project = SimulationProperty(
     ...,
     walker_shells=[leo_shell, meo_shell],
-    ground_objects=[ground_obj],
+    ground_objects_properties=[ground_obj],
 )
 ```
 
@@ -346,21 +360,26 @@ project = SatcomProject(
 
 ## User terminals
 
-User terminals are defined the same way as ground stations but with `object_type="user_terminal"`:
+User terminals are defined the same way as ground stations but with `type="user_terminal"`:
 
 ```python
 ut_entries = [
     GroundStationEntry(0, "Terminal-A", 48.8, 2.3, 0.05),
 ]
 ut_file = GroundObjectFile("User Terminals", ut_entries)
-ut_conn = ConnectivityProperties(
+ut_conn = GroundConnectivityProperty(
     ground_to_space_connections_strategy="best-angle-until-disconnection",
     elevation_above_horizon=5,
     maximum_satellite_range_distance=1000.0,
     shell_white_lists=["LEO"],
     maximum_connected_satellites=1,
 )
-ut_obj = GroundObject(ut_file, "user_terminal", ut_conn)
+ut_obj = GroundObjectProperty(
+    identifier=ut_file.identifier,
+    data_file=ut_file.write("/tmp"),
+    type="user_terminal",
+    connectivity_properties=ut_conn,
+)
 ```
 
 The shell's `orbital_connectivity_property.maximum_user_terminal_range` and

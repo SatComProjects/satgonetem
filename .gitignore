@@ -53,3 +53,7 @@ MANIFEST
 # Project-specific
 sd/
 projects/
+
+# Paper things
+paper/
+topology_files_no_gnds/

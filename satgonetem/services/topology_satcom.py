@@ -479,79 +479,79 @@ def main():
     topology_manager = TopologyManager.from_satcom(project, custom_network_config)
     print(f"TopologyManager initialized in {time.perf_counter() - tic:.2f} seconds")
 
-    for link in topology_manager.links.values():
-        if link.type == "GroundStationLink":
-            print(
-                f"Peer1 throughput: {link.peer1_capacity} kbps, Peer2 throughput: {link.peer2_capacity} kbps"
-            )
+    # for link in topology_manager.links.values():
+    #     if link.type == "GroundStationLink":
+    #         print(
+    #             f"Peer1 throughput: {link.peer1_capacity} kbps, Peer2 throughput: {link.peer2_capacity} kbps"
+    #         )
 
-    ## Create antennas
-    satellites = topology_manager.get_satellites()
-    antenna_satellite_config = AntennaConfig(
-        diameter=0.3,  # meters
-        efficiency=0.6,  # unitless
-    )
-    topology_manager.set_antenna(
-        satellites,
-        antenna_satellite_config,
-    )
-
-    ground_stations = topology_manager.get_ground_stations()
-    antenna_gnd_config = AntennaConfig(
-        diameter=2.0,  # meters
-        efficiency=0.7,  # unitless
-    )
-    topology_manager.set_antenna(
-        ground_stations,
-        antenna_gnd_config,
-    )
-
-    topology_manager.set_link_budget_config(
-        LinkBudgetConfig(
-            downlink_freq_ghz=19.0,
-            uplink_freq_ghz=14.25,
-            bandwidth_hz_downlink=100e6,
-            bandwidth_hz_uplink=100e6,
-        )
-    )
-
-    for link in topology_manager.links.values():
-        if link.type == "GroundStationLink":
-            print(
-                f"Peer1 throughput: {link.peer1_capacity} kbps, Peer2 throughput: {link.peer2_capacity} kbps"
-            )
-
-    # tic = time.perf_counter()
-    # topology_manager.start_gonetem()
-    # print(f"GoNetEm started in {time.perf_counter() - tic:.2f} seconds")
-
-    # tic = time.perf_counter()
-    # topology_manager.set_ip_addresses()
-    # print(f"IP addresses set in {time.perf_counter() - tic:.2f} seconds")
-
-    # tic = time.perf_counter()
-    # topology_manager.init_routing(routing_method="static")
-    # print(f"Static routing initialized in {time.perf_counter() - tic:.2f} seconds")
-
-    # # Start a ping
-    # ping_config = PingConfig(
-    #     count=10,
-    #     interval_sec=1,
-    #     timeout_sec=2,
+    # ## Create antennas
+    # satellites = topology_manager.get_satellites()
+    # antenna_satellite_config = AntennaConfig(
+    #     diameter=0.3,  # meters
+    #     efficiency=0.6,  # unitless
+    # )
+    # topology_manager.set_antenna(
+    #     satellites,
+    #     antenna_satellite_config,
     # )
 
-    # src = list(topology_manager.get_ground_stations())[1]
-    # dst = list(topology_manager.get_ground_stations())[2]
+    # ground_stations = topology_manager.get_ground_stations()
+    # antenna_gnd_config = AntennaConfig(
+    #     diameter=2.0,  # meters
+    #     efficiency=0.7,  # unitless
+    # )
+    # topology_manager.set_antenna(
+    #     ground_stations,
+    #     antenna_gnd_config,
+    # )
 
-    # ping_flow = PingFlow(src, dst, ping_config)
-    # ping_flow.start()
+    # topology_manager.set_link_budget_config(
+    #     LinkBudgetConfig(
+    #         downlink_freq_ghz=19.0,
+    #         uplink_freq_ghz=14.25,
+    #         bandwidth_hz_downlink=100e6,
+    #         bandwidth_hz_uplink=100e6,
+    #     )
+    # )
 
-    # while ping_flow.status() == PingStatus.RUNNING:
-    #     time.sleep(0.5)
-    # ping_results = ping_flow.results()
-    # ping_results.print_summary()
+    # for link in topology_manager.links.values():
+    #     if link.type == "GroundStationLink":
+    #         print(
+    #             f"Peer1 throughput: {link.peer1_capacity} kbps, Peer2 throughput: {link.peer2_capacity} kbps"
+    #         )
 
-    # topology_manager.stop_gonetem()
+    tic = time.perf_counter()
+    topology_manager.start_gonetem()
+    print(f"GoNetEm started in {time.perf_counter() - tic:.2f} seconds")
+
+    tic = time.perf_counter()
+    topology_manager.set_ip_addresses()
+    print(f"IP addresses set in {time.perf_counter() - tic:.2f} seconds")
+
+    tic = time.perf_counter()
+    topology_manager.init_routing(routing_method="static")
+    print(f"Static routing initialized in {time.perf_counter() - tic:.2f} seconds")
+
+    # Start a ping
+    ping_config = PingConfig(
+        count=10,
+        interval_sec=0.1,
+        timeout_sec=2,
+    )
+
+    src = list(topology_manager.get_ground_stations())[1]
+    dst = list(topology_manager.get_ground_stations())[2]
+
+    ping_flow = PingFlow(src, dst, ping_config)
+    ping_flow.start()
+
+    while ping_flow.status() == PingStatus.RUNNING:
+        time.sleep(0.5)
+    ping_results = ping_flow.results()
+    ping_results.print_summary()
+
+    topology_manager.stop_gonetem()
 
 
 if __name__ == "__main__":
