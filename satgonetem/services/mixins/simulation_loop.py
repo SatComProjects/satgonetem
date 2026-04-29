@@ -103,7 +103,7 @@ class SimulationLoopMixin:
         """
         Jump the simulation to an absolute time and rebuild routing.
 
-        Delegates the time-manager advance to SatComModel, then triggers the
+        Delegates the time-manager advance to TopologyManager, then triggers the
         emulator-level routing rebuild that requires TopologyManager state.
 
         Args:

@@ -210,7 +210,7 @@ topology.stop_gonetem()  # remove containers, veth pairs, and qdiscs
 satgonetem/
   models/        Node, Satellite, GroundStation, Link, Interface
                  MPLS entries, routing entries, sat_com Pydantic models
-  dynamics/      DynamicsModel (abstract) + SatComModel (orbital mechanics integration)
+  dynamics/      DynamicsModel (abstract)
   launchers/     NetworkLauncher (abstract) + DirectLauncher (Docker + pyroute2)
                  GoNetEmLauncher (gRPC legacy), HILManager (hardware-in-the-loop)
   routing/       RoutingDaemon (abstract) + static, OSPF, ISIS-SR, SR-MPLS

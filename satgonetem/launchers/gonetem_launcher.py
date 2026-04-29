@@ -65,17 +65,10 @@ class GoNetEmLauncher(NetworkLauncher):
         return "nodes: \n" + satellites + groundStations + "links: \n" + links
 
     @staticmethod
-    def _write_satellites_old(satellites, sat_type: str) -> str:
-        result = ""
-        for sat in satellites:
-            result += f" Sat{sat.id}:\n  type: {sat_type}\n  volumes:\n  - /tmp:/tmp\n"
-        return result
-
-    @staticmethod
     def _write_satellites(satellites, sat_type: str) -> str:
         result = ""
         for sat in satellites:
-            result += f" Sat{sat.id}:\n  type: docker.host\n  image: jariassuarez/sgnt:satellite\n  volumes:\n  - /tmp:/tmp\n"
+            result += f" Sat{sat.id}:\n  type: {sat_type}\n  volumes:\n  - /tmp:/tmp\n"
         return result
 
     @staticmethod

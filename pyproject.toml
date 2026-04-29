@@ -73,4 +73,4 @@ python_classes = ["Test*"]
 python_functions = ["test_*"]
 
 [tool.uv]
-python = "3.13t"
+required-version = ">=0.11.0"

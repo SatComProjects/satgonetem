@@ -5,6 +5,7 @@ Computes shortest paths via Dijkstra (or loads from a file) and installs them
 on every node. All routing logic is self-contained; the topology manager is
 only used to access node/graph data.
 """
+
 from __future__ import annotations
 
 import base64
@@ -236,9 +237,7 @@ class StaticRoutingDaemon(RoutingDaemon):
             node.ipv4_previous_routing_table = node.ipv4_routing_table.copy()
             node.ipv4_routing_table.clear()
 
-    def _populate_from_file(
-        self, gs_array, sat_array, gs_ifaces, sat_ifaces
-    ) -> None:
+    def _populate_from_file(self, gs_array, sat_array, gs_ifaces, sat_ifaces) -> None:
         """Populate routing tables from a precomputed JSON route file.
 
         Args:
@@ -547,9 +546,7 @@ class StaticRoutingDaemon(RoutingDaemon):
         curr = {self._entry_key(e): e for e in curr_tbl}
         prev = {self._entry_key(e): e for e in prev_tbl}
         return [
-            self._route_line("replace", e)
-            for k, e in curr.items()
-            if k not in prev
+            self._route_line("replace", e) for k, e in curr.items() if k not in prev
         ]
 
     def _exec_batch(self, device, lines: list) -> None:
