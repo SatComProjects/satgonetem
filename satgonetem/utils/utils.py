@@ -1,11 +1,53 @@
 import math
-from typing import Any, Optional
+import time as _time
+from functools import wraps
+from typing import Any, Callable, Optional
 
 from sgp4.api import Satrec, WGS72  # type: ignore
 from sgp4.api import jday  # type: ignore
 from sgp4.exporter import export_tle
 
-from satgonetem.models.interface import Interface
+def time_(func: Callable[..., Any]) -> Callable[..., Any]:
+    """Decorator that prints the execution time of the decorated function.
+
+    Supports regular functions, classmethods and staticmethods.
+    """
+
+    if isinstance(func, classmethod):
+        original = func.__func__
+
+        @wraps(original)
+        def _wrapper(*args: Any, **kwargs: Any) -> Any:
+            start = _time.perf_counter()
+            result = original(*args, **kwargs)
+            elapsed = _time.perf_counter() - start
+            print(f"[time] {original.__name__} executed in {elapsed:.6f}s")
+            return result
+
+        return classmethod(_wrapper)
+
+    if isinstance(func, staticmethod):
+        original = func.__func__
+
+        @wraps(original)
+        def _wrapper(*args: Any, **kwargs: Any) -> Any:
+            start = _time.perf_counter()
+            result = original(*args, **kwargs)
+            elapsed = _time.perf_counter() - start
+            print(f"[time] {original.__name__} executed in {elapsed:.6f}s")
+            return result
+
+        return staticmethod(_wrapper)
+
+    @wraps(func)
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        start = _time.perf_counter()
+        result = func(*args, **kwargs)
+        elapsed = _time.perf_counter() - start
+        print(f"[time] {func.__name__} executed in {elapsed:.6f}s")
+        return result
+
+    return wrapper
 
 
 def generate_satellite_tle(
@@ -92,7 +134,7 @@ def _tle_line_checksum(tle_line_without_checksum: str) -> int:
 
 def get_interface_from_name(
     interface_list: list[Any], intName: str
-) -> Optional[Interface]:
+) -> Optional[Any]:
     """Find an interface in a list by its trailing name segment.
 
     Args:

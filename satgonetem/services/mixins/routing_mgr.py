@@ -56,6 +56,9 @@ class RoutingManagerMixin:
             logging.warning(f"No path found between {source.id} and {target.id}")
             return []
 
+    from satgonetem.utils.utils import time_
+
+    @time_
     def init_routing(
         self, max_workers: int = MAX_WORKERS, routing_method: str = ""
     ) -> float:

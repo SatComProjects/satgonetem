@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 import warnings
 from satgonetem.utils.constants import MAX_WORKERS
-
+from satgonetem.utils.utils import time_
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -15,6 +15,7 @@ if TYPE_CHECKING:
 class NetworkLifecycleMixin:
     """NetworkLifecycle functionality."""
 
+    @time_
     def start_gonetem(self) -> float | None:
         """Start GoNetEm by launching containers and wiring links.
 
@@ -73,6 +74,7 @@ class NetworkLifecycleMixin:
 
         return (container_time, link_time)
 
+    @time_
     def stop_gonetem(self) -> float:
         """Stop GoNetEm and clean up resources.
 
@@ -130,6 +132,7 @@ class NetworkLifecycleMixin:
 
         return time.perf_counter() - tic
 
+    @time_
     def set_ip_addresses(self) -> float:
         """Set IPv4 addresses for all interfaces in the topology."""
         tic: float = time.perf_counter()

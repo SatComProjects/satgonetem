@@ -24,7 +24,7 @@ import docker.models
 import docker.models.containers
 from satgonetem.link_budget.antenna import Antenna
 from satgonetem.models.interface import Interface
-from satgonetem.utils.utils import get_interface_from_name, unique_pair_id
+from satgonetem.utils.utils import unique_pair_id
 
 from typing import Any, Callable, Optional
 

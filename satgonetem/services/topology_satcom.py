@@ -5,6 +5,12 @@ Satellites will include a satcom_object, which will correspond to their satcomto
 
 """
 
+from satgonetem.utils.satcom_fix import apply_satcom_fix
+
+apply_satcom_fix()
+
+from satgonetem.utils.utils import time_
+
 import threading
 from dataclasses import dataclass, field
 from typing import Any, ClassVar, Dict, List, Optional, Callable, Type, Union
@@ -123,6 +129,7 @@ class TopologyManager(
             )
         cls._daemon_registry[name] = daemon_class
 
+    @time_
     @classmethod
     def from_satcom(
         cls,
@@ -597,6 +604,12 @@ class TopologyManager(
         """Return the list of ground stations."""
         return list(self.ground_stations.values())
 
+    @staticmethod
+    def apply_satcom_fix() -> None:
+        from satgonetem.utils.satcom_fix import apply_satcom_fix
+
+        apply_satcom_fix()
+
 
 def main():
     """Demonstrate topology lifecycle and simulation controls."""
@@ -608,18 +621,11 @@ def main():
     """
     from satgonetem.utils.project_builder import create_test_project
 
-    tic = time.perf_counter()
+    TopologyManager.apply_satcom_fix()
 
     project = create_test_project()
-    print(f"Project created in {time.perf_counter() - tic:.2f} seconds")
 
-    custom_network_config = NetworkConfig(
-        use_budget=True,
-    )
-
-    tic = time.perf_counter()
-    topology_manager = TopologyManager.from_satcom(project, custom_network_config)
-    print(f"TopologyManager initialized in {time.perf_counter() - tic:.2f} seconds")
+    topology_manager = TopologyManager.from_satcom(project)
 
     # for link in topology_manager.links.values():
     #     if link.type == "GroundStationLink":
@@ -663,35 +669,11 @@ def main():
     #             f"Peer1 throughput: {link.peer1_capacity} kbps, Peer2 throughput: {link.peer2_capacity} kbps"
     #         )
 
-    tic = time.perf_counter()
     topology_manager.start_gonetem()
-    print(f"GoNetEm started in {time.perf_counter() - tic:.2f} seconds")
 
-    tic = time.perf_counter()
     topology_manager.set_ip_addresses()
-    print(f"IP addresses set in {time.perf_counter() - tic:.2f} seconds")
 
-    tic = time.perf_counter()
     topology_manager.init_routing(routing_method="static")
-    print(f"Static routing initialized in {time.perf_counter() - tic:.2f} seconds")
-
-    # Start a ping
-    ping_config = PingConfig(
-        count=5,
-        interval_sec=1,
-        timeout_sec=2,
-    )
-
-    src = list(topology_manager.get_ground_stations())[1]
-    dst = list(topology_manager.get_ground_stations())[2]
-
-    ping_flow = PingFlow(src, dst, ping_config)
-    ping_flow.start()
-
-    while ping_flow.status() == PingStatus.RUNNING:
-        time.sleep(0.5)
-    ping_results = ping_flow.results()
-    ping_results.print_summary()
 
     topology_manager.stop_gonetem()
 

@@ -367,9 +367,13 @@ class SRMPLSDaemon(RoutingDaemon):
             True if initialization succeeded, False otherwise.
         """
         try:
+
             self._configure_mpls()
+
             self._init_sr_mpls()
+
             self._rebuild_sr_mpls_routing(init_flag=True, max_workers=max_workers)
+
             return True
         except Exception as e:
             logging.error(f"SR-MPLS initialization failed: {e}")
@@ -638,6 +642,7 @@ class SRMPLSDaemon(RoutingDaemon):
         )
 
         if self.topology.gonetem_is_on:
+            tic = time.perf_counter()
             self._apply_sr_mpls_routes(init_flag=init_flag, max_workers=max_workers)
 
     def _build_sr_gs_routes(self) -> None:
@@ -656,16 +661,17 @@ class SRMPLSDaemon(RoutingDaemon):
         self._sr_graph = graph
 
         gs_array = list(self.topology.get_ground_stations())
+        sat_array = list(self.topology.get_satellites())
         self.sr_lfib = {}
 
         use_php = self.mpls_config.use_php if self.mpls_config else False
         route_count = 0
 
-        for gs_src in gs_array:
+        for gs_src in gs_array + sat_array:
             if gs_src.id not in self.sr_lfib:
                 self.sr_lfib[gs_src.id] = []
 
-            for gs_dst in gs_array:
+            for gs_dst in gs_array + sat_array:
                 if gs_src.id == gs_dst.id:
                     continue
 
@@ -743,8 +749,15 @@ class SRMPLSDaemon(RoutingDaemon):
         if init_flag:
             self._enable_mpls_on_all_nodes(max_workers=max_workers)
 
+        tic = time.perf_counter()
         self._apply_sr_node_sids_to_satellites()
+        tic = time.perf_counter()
         self._apply_sr_routes_to_ground_stations()
+        tic = time.perf_counter()
+        self._apply_sr_routes_to_satellites()
+        print(
+            f"SR routes applied to satellites in {(time.perf_counter() - tic) * 1000:.2f}ms"
+        )
 
         toc = time.perf_counter()
         logging.info(f"SR-MPLS routes applied in {(toc - tic) * 1000:.2f}ms")
@@ -759,8 +772,6 @@ class SRMPLSDaemon(RoutingDaemon):
             node: The node whose MPLS forwarding should be enabled.
         """
         commands = [
-            "modprobe mpls_router 2>/dev/null || true",
-            "modprobe mpls_iptunnel 2>/dev/null || true",
             "sysctl -w net.mpls.platform_labels=1048575",
             "sysctl -w net.mpls.conf.lo.input=1",
         ]
@@ -948,15 +959,18 @@ class SRMPLSDaemon(RoutingDaemon):
 
         def install_gs_routes(gs: "GroundStation") -> None:
             setup_commands = []
+            setup_commands.append(f"sysctl -w net.mpls.platform_labels=1048575")
+            setup_commands.append(f"sysctl -w net.mpls.conf.lo.input=1")
             for iface in gs.interfaces:
                 if iface.peer is None:
                     continue
                 iface_name = iface.get_iname()
+
                 setup_commands.append(f"sysctl -w net.mpls.conf.{iface_name}.input=1")
-                if iface.ipv4:
-                    setup_commands.append(
-                        f"ip addr add {iface.ipv4}/31 dev {iface_name} 2>/dev/null"
-                    )
+                # if iface.ipv4:
+                #     setup_commands.append(
+                #         f"ip addr add {iface.ipv4}/31 dev {iface_name} 2>/dev/null"
+                #     )
 
             route_commands = []
 
@@ -993,6 +1007,72 @@ class SRMPLSDaemon(RoutingDaemon):
                     fut.result()
                 except Exception as e:
                     logging.error(f"GS SR route installation error: {e}")
+
+    def _apply_sr_routes_to_satellites(self) -> None:
+        """Install SR-MPLS routes on all satellites.
+
+        Each satellite receives:
+        1. Its own Node SID pop rule (for return traffic).
+        2. Label-stack push routes to every other satellite.
+        """
+        from satgonetem.models.mpls_entry import SRNodeSIDEntry
+
+        if self._label_manager is None:
+            return
+
+        workers = min(
+            32,
+            (os.cpu_count() or 4) * 4,
+            len(self.topology.ground_stations),
+        )
+
+        def install_satellite_routes(sat: "Satellite") -> None:
+            setup_commands = []
+            for iface in sat.interfaces:
+                if iface.peer is None:
+                    continue
+                iface_name = iface.get_iname()
+                setup_commands.append(f"sysctl -w net.mpls.conf.{iface_name}.input=1")
+                # if iface.ipv4:
+                #     setup_commands.append(
+                #         f"ip addr add {iface.ipv4}/31 dev {iface_name} 2>/dev/null"
+                #     )
+
+            route_commands = []
+
+            if self._label_manager is None:
+                raise RuntimeError("SR-MPLS manager not initialized")
+            my_sid = self._label_manager.get_node_sid(sat.id)
+            if my_sid is not None:
+                own_entry = SRNodeSIDEntry(node_sid=my_sid, node_name=sat.name)
+                route_commands.append(own_entry.to_iproute2_command())
+
+            for entry in self.sr_lfib.get(sat.id, []):
+                route_commands.append(entry.to_iproute2_command())
+
+            if setup_commands or route_commands:
+                parts = []
+                if setup_commands:
+                    parts.append("; ".join(setup_commands))
+                if route_commands:
+                    parts.append(" && ".join(route_commands))
+                batch_cmd = "; ".join(parts)
+                try:
+                    sat.execute_command(["sh", "-lc", batch_cmd], detach=False)
+                except Exception as e:
+                    logging.error(f"Failed to install SR routes on {sat.name}: {e}")
+
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = [
+                pool.submit(install_satellite_routes, sat)
+                for sat in self.topology.satellites.values()
+                if sat.container
+            ]
+            for fut in as_completed(futures):
+                try:
+                    fut.result()
+                except Exception as e:
+                    logging.error(f"Satellite SR route installation error: {e}")
 
     def _update_sr_route_for_source(self, source_id: int) -> None:
         """Update SR routes for a single source ground station.
