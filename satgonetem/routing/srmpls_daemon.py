@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 import networkx as nx
 
 from satgonetem.routing.base_daemon import RoutingDaemon
+from satgonetem.utils.utils import time_
 
 if TYPE_CHECKING:
     from satgonetem.models.ground_station import GroundStation
@@ -667,35 +668,52 @@ class SRMPLSDaemon(RoutingDaemon):
         use_php = self.mpls_config.use_php if self.mpls_config else False
         route_count = 0
 
+        # Pre-compute all shortest paths in one pass instead of N^2 calls.
+        all_paths = dict(nx.all_pairs_dijkstra_path(graph, weight="weight"))
+
+        # Pre-build interface lookup: {node_id: {peer_id: iface}}
+        iface_lookup: Dict[int, Dict[int, Any]] = {}
+        for node in gs_array + sat_array:
+            node_ifaces: Dict[int, Any] = {}
+            for iface in node.interfaces:
+                try:
+                    peer_id = int(iface.name.split(".")[1])
+                    node_ifaces[peer_id] = iface
+                except (ValueError, IndexError):
+                    continue
+            iface_lookup[node.id] = node_ifaces
+
         for gs_src in gs_array + sat_array:
-            if gs_src.id not in self.sr_lfib:
-                self.sr_lfib[gs_src.id] = []
+            src_id = gs_src.id
+            if src_id not in self.sr_lfib:
+                self.sr_lfib[src_id] = []
+
+            src_paths = all_paths.get(src_id)
+            if src_paths is None:
+                continue
+
+            src_ifaces = iface_lookup.get(src_id, {})
 
             for gs_dst in gs_array + sat_array:
-                if gs_src.id == gs_dst.id:
+                if src_id == gs_dst.id:
                     continue
 
                 try:
-                    custom_path = self._label_manager.get_custom_path(
-                        gs_src.id, gs_dst.id
-                    )
-                    path = (
-                        custom_path
-                        if custom_path
-                        else nx.shortest_path(
-                            graph, source=gs_src.id, target=gs_dst.id, weight="weight"
-                        )
-                    )
+                    custom_path = self._label_manager.get_custom_path(src_id, gs_dst.id)
+                    if custom_path:
+                        path = custom_path
+                    else:
+                        path = src_paths[gs_dst.id]
 
                     if len(path) < 2:
                         continue
 
                     first_hop_id = path[1]
-                    iface = self.topology._get_interface_to_peer(gs_src, first_hop_id)
+                    iface = src_ifaces.get(first_hop_id)
 
                     if iface is None or iface.peer is None:
                         logging.warning(
-                            f"No interface from GS {gs_src.id} to {first_hop_id}"
+                            f"No interface from GS {src_id} to {first_hop_id}"
                         )
                         continue
 
@@ -714,14 +732,14 @@ class SRMPLSDaemon(RoutingDaemon):
                         interface=iface,
                         fec_prefix=32,
                     )
-                    self.sr_lfib[gs_src.id].append(entry)
+                    self.sr_lfib[src_id].append(entry)
                     route_count += 1
 
-                except nx.NetworkXNoPath:
-                    logging.debug(f"No path for SR route {gs_src.id} -> {gs_dst.id}")
+                except (nx.NetworkXNoPath, KeyError):
+                    logging.debug(f"No path for SR route {src_id} -> {gs_dst.id}")
                 except Exception as e:
                     logging.error(
-                        f"Failed to build SR route {gs_src.id} -> {gs_dst.id}: {e}"
+                        f"Failed to build SR route {src_id} -> {gs_dst.id}: {e}"
                     )
 
         logging.info(
@@ -777,9 +795,9 @@ class SRMPLSDaemon(RoutingDaemon):
         ]
         for iface in node.interfaces:
             commands.append(f"sysctl -w net.mpls.conf.{iface.get_iname()}.input=1")
-        for cmd in commands:
-            node.execute_command(cmd)
+        node.execute_command("; ".join(commands))
 
+    @time_
     def _enable_mpls_on_all_nodes(self, max_workers: int = 32) -> None:
         """Enable MPLS forwarding on all satellites and ground stations.
 
@@ -816,6 +834,7 @@ class SRMPLSDaemon(RoutingDaemon):
             f"MPLS enabled on {ok}/{total_nodes} nodes in {(toc - tic) * 1000:.2f}ms"
         )
 
+    @time_
     def _apply_sr_node_sids_to_satellites(self) -> None:
         """Install SR-MPLS forwarding entries on all satellites.
 
@@ -843,17 +862,6 @@ class SRMPLSDaemon(RoutingDaemon):
             my_sid = self._label_manager.get_node_sid(sat.id)
             if my_sid is None:
                 return
-
-            setup_commands = []
-            for iface in sat.interfaces:
-                if iface.peer is None:
-                    continue
-                iface_name = iface.get_iname()
-                setup_commands.append(f"sysctl -w net.mpls.conf.{iface_name}.input=1")
-                if iface.ipv4:
-                    setup_commands.append(
-                        f"ip addr add {iface.ipv4}/31 dev {iface_name} 2>/dev/null"
-                    )
 
             route_commands = []
 
@@ -915,15 +923,10 @@ class SRMPLSDaemon(RoutingDaemon):
                     f"ip route replace {gs_loopback}/32 via {gs_ip} dev {iface_name}"
                 )
 
-            if setup_commands or route_commands:
-                parts = []
-                if setup_commands:
-                    parts.append("; ".join(setup_commands))
-                if route_commands:
-                    parts.append(" && ".join(route_commands))
-                batch_cmd = "; ".join(parts)
+            if route_commands:
+                batch_cmd = "; ".join(route_commands)
                 try:
-                    sat.execute_command(["sh", "-lc", batch_cmd], detach=False)
+                    sat.execute_command(["sh", "-lc", batch_cmd], detach=True)
                 except Exception as e:
                     logging.error(f"Failed to install SR forwarding on {sat.name}: {e}")
 
@@ -939,6 +942,7 @@ class SRMPLSDaemon(RoutingDaemon):
                 except Exception as e:
                     logging.error(f"SR forwarding installation error: {e}")
 
+    @time_
     def _apply_sr_routes_to_ground_stations(self) -> None:
         """Install SR-MPLS routes on all ground stations.
 
@@ -958,20 +962,6 @@ class SRMPLSDaemon(RoutingDaemon):
         )
 
         def install_gs_routes(gs: "GroundStation") -> None:
-            setup_commands = []
-            setup_commands.append(f"sysctl -w net.mpls.platform_labels=1048575")
-            setup_commands.append(f"sysctl -w net.mpls.conf.lo.input=1")
-            for iface in gs.interfaces:
-                if iface.peer is None:
-                    continue
-                iface_name = iface.get_iname()
-
-                setup_commands.append(f"sysctl -w net.mpls.conf.{iface_name}.input=1")
-                # if iface.ipv4:
-                #     setup_commands.append(
-                #         f"ip addr add {iface.ipv4}/31 dev {iface_name} 2>/dev/null"
-                #     )
-
             route_commands = []
 
             if self._label_manager is None:
@@ -984,13 +974,8 @@ class SRMPLSDaemon(RoutingDaemon):
             for entry in self.sr_lfib.get(gs.id, []):
                 route_commands.append(entry.to_iproute2_command())
 
-            if setup_commands or route_commands:
-                parts = []
-                if setup_commands:
-                    parts.append("; ".join(setup_commands))
-                if route_commands:
-                    parts.append(" && ".join(route_commands))
-                batch_cmd = "; ".join(parts)
+            if route_commands:
+                batch_cmd = "; ".join(route_commands)
                 try:
                     gs.execute_command(["sh", "-lc", batch_cmd], detach=False)
                 except Exception as e:
@@ -1008,6 +993,7 @@ class SRMPLSDaemon(RoutingDaemon):
                 except Exception as e:
                     logging.error(f"GS SR route installation error: {e}")
 
+    @time_
     def _apply_sr_routes_to_satellites(self) -> None:
         """Install SR-MPLS routes on all satellites.
 
@@ -1023,21 +1009,11 @@ class SRMPLSDaemon(RoutingDaemon):
         workers = min(
             32,
             (os.cpu_count() or 4) * 4,
-            len(self.topology.ground_stations),
+            len(self.topology.satellites),
         )
 
+        @time_
         def install_satellite_routes(sat: "Satellite") -> None:
-            setup_commands = []
-            for iface in sat.interfaces:
-                if iface.peer is None:
-                    continue
-                iface_name = iface.get_iname()
-                setup_commands.append(f"sysctl -w net.mpls.conf.{iface_name}.input=1")
-                # if iface.ipv4:
-                #     setup_commands.append(
-                #         f"ip addr add {iface.ipv4}/31 dev {iface_name} 2>/dev/null"
-                #     )
-
             route_commands = []
 
             if self._label_manager is None:
@@ -1050,15 +1026,10 @@ class SRMPLSDaemon(RoutingDaemon):
             for entry in self.sr_lfib.get(sat.id, []):
                 route_commands.append(entry.to_iproute2_command())
 
-            if setup_commands or route_commands:
-                parts = []
-                if setup_commands:
-                    parts.append("; ".join(setup_commands))
-                if route_commands:
-                    parts.append(" && ".join(route_commands))
-                batch_cmd = "; ".join(parts)
+            if route_commands:
+                batch_cmd = "; ".join(route_commands)
                 try:
-                    sat.execute_command(["sh", "-lc", batch_cmd], detach=False)
+                    sat.execute_command(["sh", "-lc", batch_cmd], detach=True)
                 except Exception as e:
                     logging.error(f"Failed to install SR routes on {sat.name}: {e}")
 
@@ -1157,9 +1128,7 @@ class SRMPLSDaemon(RoutingDaemon):
 
         self._enable_mpls(gs_src)
         if new_entries:
-            batch_cmd = " && ".join(
-                entry.to_iproute2_command() for entry in new_entries
-            )
+            batch_cmd = "; ".join(entry.to_iproute2_command() for entry in new_entries)
             try:
                 gs_src.container.exec_run(["sh", "-lc", batch_cmd], detach=False)
                 logging.info(f"Updated {len(new_entries)} SR routes on {gs_src.name}")

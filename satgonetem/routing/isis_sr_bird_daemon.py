@@ -158,8 +158,7 @@ def _enable_mpls(node: "Node") -> None:
     ]
     for iface in node.interfaces:
         commands.append(f"sysctl -w net.mpls.conf.{iface.get_iname()}.input=1")
-    for cmd in commands:
-        node.execute_command(cmd)
+    node.execute_command("; ".join(commands))
 
 
 def _build_isis_sr_config(node: "Node") -> str:

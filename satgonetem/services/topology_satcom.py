@@ -5,6 +5,7 @@ Satellites will include a satcom_object, which will correspond to their satcomto
 
 """
 
+from satgonetem.traffic.iperf3_utils import FlowStatus, Iperf3Config, Iperf3Flow
 from satgonetem.utils.satcom_fix import apply_satcom_fix
 
 apply_satcom_fix()
@@ -673,7 +674,37 @@ def main():
 
     topology_manager.set_ip_addresses()
 
-    topology_manager.init_routing(routing_method="static")
+    topology_manager.init_routing(routing_method="sr-mpls")
+
+    ping_config = PingConfig(count=100, interval_sec=0.1)
+
+    gnds = topology_manager.get_ground_stations()
+
+    flows = topology_manager.ping(gnds, gnds, ping_config)
+
+    done = False
+
+    while not done:
+        for flow in flows:
+            if flow.status() == PingStatus.DONE:
+                done = True
+                break
+
+        time.sleep(1)
+
+    avg_rtt = sum(
+        [
+            flow.results().rtt_avg_ms
+            for flow in flows
+            if flow.status() == PingStatus.DONE
+        ]
+    ) / len(flows)
+    ok = sum(1 for flow in flows if flow.status() == PingStatus.DONE)
+
+    print(f"{ok}/{len(flows)} flows completed")
+    print(f"Average RTT: {avg_rtt}")
+
+    input()
 
     topology_manager.stop_gonetem()
 

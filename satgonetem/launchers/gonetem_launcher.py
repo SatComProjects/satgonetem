@@ -87,10 +87,12 @@ class GoNetEmLauncher(NetworkLauncher):
         for link in links:
             delay = max(int(link.delay), 1)
             rate = link.get_capacity()
+            burst = rate * 5
             result += (
                 f" - {{peer1: {link.source.name}.{link.target.id},"
                 f" peer2: {link.target.name}.{link.source.id},"
-                f" rate: {rate}, buffer: 1, jitter: 0, delay: {delay}}}"
+                f" peer1qos: {{ rate: {rate}, buffer: 10, jitter: 0, delay: {delay}, burst: {burst}}},"
+                f" peer2qos: {{ rate: {rate}, buffer: 10, jitter: 0, delay: {delay}, burst: {burst}}}}}"
                 f" #Latency of {delay}ms \n"
             )
         return result

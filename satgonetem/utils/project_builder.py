@@ -376,12 +376,12 @@ def create_test_project(
     )
 
     shell = WalkerShellProperty(
-        type="star",
+        type="delta",
         constellation_property=WalkerConstellationProperty(
             identifier="LEO",
-            amount_of_orbit_plane=7,
-            amount_of_satellite_per_orbit_plane=11,
-            inclination=86.4,
+            amount_of_orbit_plane=12,
+            amount_of_satellite_per_orbit_plane=22,
+            inclination=70,
             mean_revolution_per_day=14.35,
             phase_difference_between_satellites=True,
         ),
