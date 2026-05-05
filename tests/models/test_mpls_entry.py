@@ -69,6 +69,12 @@ class TestSRNodeSIDEntry:
         assert "16050" in cmd
         assert "dev lo" in cmd
 
+    def test_to_iproute2_batch_line(self):
+        entry = SRNodeSIDEntry(node_sid=16001, node_name="Sat1")
+        line = entry.to_iproute2_batch_line()
+        assert line == "-f mpls route replace 16001 dev lo"
+        assert not line.startswith("ip ")
+
     def test_str_contains_node_name_and_sid(self):
         entry = SRNodeSIDEntry(node_sid=16001, node_name="Sat1")
         text = str(entry)
@@ -106,6 +112,17 @@ class TestSRForwardEntry:
         )
         cmd = entry.to_iproute2_command()
         assert "eth5" in cmd
+
+    def test_to_iproute2_batch_line(self, iface):
+        entry = SRForwardEntry(
+            target_sid=16003,
+            next_hop="10.0.0.2",
+            interface=iface,
+            target_name="Sat3",
+        )
+        line = entry.to_iproute2_batch_line()
+        assert line == "-f mpls route replace 16003 via inet 10.0.0.2 dev eth5"
+        assert not line.startswith("ip ")
 
     def test_str_contains_sid_name_and_hop(self, iface):
         entry = SRForwardEntry(
@@ -163,6 +180,42 @@ class TestSRLabelStackEntry:
         cmd = entry.to_iproute2_command()
         assert "encap mpls 16003" in cmd
         assert "/" not in cmd.split("mpls ")[1].split(" ")[0]
+
+    def test_to_iproute2_batch_line_with_labels(self, iface):
+        entry = SRLabelStackEntry(
+            destination="10.0.0.1",
+            label_stack=[16003, 16007],
+            next_hop="10.1.0.1",
+            interface=iface,
+            fec_prefix=32,
+        )
+        line = entry.to_iproute2_batch_line()
+        assert line == "route replace 10.0.0.1/32 encap mpls 16003/16007 via 10.1.0.1 dev eth3"
+        assert not line.startswith("ip ")
+
+    def test_to_iproute2_batch_line_without_labels(self, iface):
+        entry = SRLabelStackEntry(
+            destination="10.0.0.1",
+            label_stack=[],
+            next_hop="10.1.0.1",
+            interface=iface,
+            fec_prefix=32,
+        )
+        line = entry.to_iproute2_batch_line()
+        assert line == "route replace 10.0.0.1/32 via 10.1.0.1 dev eth3"
+        assert not line.startswith("ip ")
+
+    def test_to_iproute2_batch_line_single_label(self, iface):
+        entry = SRLabelStackEntry(
+            destination="10.0.0.5",
+            label_stack=[16003],
+            next_hop="10.1.0.1",
+            interface=iface,
+        )
+        line = entry.to_iproute2_batch_line()
+        assert "encap mpls 16003" in line
+        assert not line.startswith("ip ")
+        assert "/" not in line.split("mpls ")[1].split(" ")[0]
 
     def test_str_with_labels(self, iface):
         entry = SRLabelStackEntry(

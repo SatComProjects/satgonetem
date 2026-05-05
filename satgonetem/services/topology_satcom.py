@@ -611,6 +611,20 @@ class TopologyManager(
 
         apply_satcom_fix()
 
+    def set_addressable_satellites(
+        self, satellites: Union[list[Satellite], Satellite]
+    ) -> None:
+        """
+        Set addressable status to multiple satellites
+        """
+
+        if isinstance(satellites, Satellite):
+            satellites.set_addressable(True)
+            return
+
+        for satellite in satellites:
+            satellite.set_addressable(True)
+
 
 def main():
     """Demonstrate topology lifecycle and simulation controls."""
@@ -620,13 +634,14 @@ def main():
         format="%(asctime)s %(levelname)s %(message)s",
     )
     """
+
     from satgonetem.utils.project_builder import create_test_project
 
     TopologyManager.apply_satcom_fix()
 
     project = create_test_project()
 
-    topology_manager = TopologyManager.from_satcom(project)
+    topology_manager: TopologyManager = TopologyManager.from_satcom(project)
 
     # for link in topology_manager.links.values():
     #     if link.type == "GroundStationLink":
@@ -674,7 +689,27 @@ def main():
 
     topology_manager.set_ip_addresses()
 
+    addressable_satellites = topology_manager.get_satellites()[0:10]
+
+    topology_manager.set_addressable_satellites(addressable_satellites)
+
     topology_manager.init_routing(routing_method="sr-mpls")
+
+    while True:
+        try:
+            input()
+
+            topology_manager.next_step()
+
+        except KeyboardInterrupt:
+            print("Simulation interrupted by user")
+            break
+
+    input("Press Enter to stop the simulation...")
+
+    topology_manager.stop_gonetem()
+
+    return
 
     ping_config = PingConfig(count=100, interval_sec=0.1)
 

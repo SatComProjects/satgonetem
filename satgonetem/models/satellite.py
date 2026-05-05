@@ -52,6 +52,23 @@ class Satellite(Node, QoSCapableMixin):
 
         self.type = "Satellite"
 
+        ## Routing
+        self.addressable = False
+
+    def is_addressable(self) -> bool:
+        """
+        Get addressable flag
+        """
+
+        return self.addressable
+
+    def set_addressable(self, status: bool) -> None:
+        """
+        Get addressable flag
+        """
+
+        self.addressable = status
+
     def sync_position_from_satcom(self) -> None:
         """
         Update the satellite's geographic position from the sat_com_model object.

@@ -84,6 +84,15 @@ class SRNodeSIDEntry:
         # Pop our SID and deliver to lo - kernel processes next label if present
         return f"ip -f mpls route replace {self.node_sid} dev lo"
 
+    def to_iproute2_batch_line(self) -> str:
+        """
+        Generate a line for ip -batch to install the local Node SID rule.
+
+        Returns:
+            Command line without the leading 'ip' word, suitable for ip -batch.
+        """
+        return f"-f mpls route replace {self.node_sid} dev lo"
+
     def __str__(self) -> str:
         return f"SRNodeSID: {self.node_name} -> label {self.node_sid} (pop to local)"
 
@@ -125,6 +134,16 @@ class SRForwardEntry:
         iface_name = self.interface.get_iname()
         # Pop the label and forward to next hop - kernel handles remaining labels
         return f"ip -f mpls route replace {self.target_sid} via inet {self.next_hop} dev {iface_name}"
+
+    def to_iproute2_batch_line(self) -> str:
+        """
+        Generate a line for ip -batch to install the SR forwarding rule.
+
+        Returns:
+            Command line without the leading 'ip' word, suitable for ip -batch.
+        """
+        iface_name = self.interface.get_iname()
+        return f"-f mpls route replace {self.target_sid} via inet {self.next_hop} dev {iface_name}"
 
     def __str__(self) -> str:
         return f"SRForward: label {self.target_sid} ({self.target_name}) -> pop via {self.next_hop}"
@@ -177,6 +196,21 @@ class SRLabelStackEntry:
         labels_str = "/".join(str(l) for l in self.label_stack)
 
         return f"ip route replace {self.destination}/{self.fec_prefix} encap mpls {labels_str} via {self.next_hop} dev {iface_name}"
+
+    def to_iproute2_batch_line(self) -> str:
+        """
+        Generate a line for ip -batch to install the SR route.
+
+        Returns:
+            Command line without the leading 'ip' word, suitable for ip -batch.
+        """
+        iface_name = self.interface.get_iname()
+
+        if not self.label_stack:
+            return f"route replace {self.destination}/{self.fec_prefix} via {self.next_hop} dev {iface_name}"
+
+        labels_str = "/".join(str(l) for l in self.label_stack)
+        return f"route replace {self.destination}/{self.fec_prefix} encap mpls {labels_str} via {self.next_hop} dev {iface_name}"
 
     def __str__(self) -> str:
         stack_str = (
