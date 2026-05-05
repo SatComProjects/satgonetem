@@ -325,7 +325,7 @@ The same pattern applies to `run_iperf3` and `run_hping3`.
 `FlowScheduler` runs a list of flows with bounded concurrency, firing each one at the wall-clock offset stored in its `.delay` attribute. It is the recommended way to replay large traffic traces (e.g. from `flows_from_cicflowmeter`) without spawning thousands of sleeping OS threads.
 
 ```python
-from satgonetem.utils.flow_scheduler import FlowScheduler
+from satgonetem.utils.flow_scheduler import FlowScheduler, FlowSchedulerStatus
 ```
 
 ### Constructor
@@ -343,7 +343,7 @@ scheduler = FlowScheduler(
 |---|---|---|---|
 | `flows` | `list[AnyFlow]` | - | Flows with `.delay` set. Need not be pre-sorted. |
 | `max_workers` | `int` | `100` | Thread-pool cap. Limits simultaneous executions. |
-| `debug` | `bool` | `False` | Print `[flow] START/DONE/ACTIVE` lines to stdout. |
+| `debug` | `bool` | `False` | Print `[flow] START/DONE/ACTIVE` lines and a progress summary every second to stdout. |
 | `flow_timeout_sec` | `float or None` | `180.0` | Seconds before a running flow is declared failed. `None` disables. |
 
 ### How it works
@@ -352,14 +352,23 @@ scheduler = FlowScheduler(
 2. Flows are sorted by `.delay` ascending.
 3. The scheduler sleeps until `t0 + flow.delay`, then submits the flow to a `ThreadPoolExecutor`.
 4. Each worker zeroes `flow.delay` before calling `flow.start()` so the flow's internal sleep does not fire a second time.
-5. `run()` blocks until all flows finish and returns a list of exceptions from failed flows.
+5. `run()` returns immediately and executes in a background thread. Poll `status()` for completion.
+
+### Lifecycle
+
+| Status | Meaning |
+|---|---|
+| `FlowSchedulerStatus.IDLE` | Scheduler created but not yet started. |
+| `FlowSchedulerStatus.RUNNING` | Flows are being scheduled and executed. |
+| `FlowSchedulerStatus.DONE` | All flows have finished. |
+| `FlowSchedulerStatus.ERROR` | The scheduler encountered a fatal error. |
 
 ### Usage
 
 ```python
 import time
 from satgonetem.traffic import PingFlow, PingConfig
-from satgonetem.utils.flow_scheduler import FlowScheduler
+from satgonetem.utils.flow_scheduler import FlowScheduler, FlowSchedulerStatus
 
 # Build flows with staggered delays
 flows = [
@@ -368,15 +377,31 @@ flows = [
     PingFlow(src, dst, PingConfig(count=5), delay=5.0),
 ]
 
-errors = FlowScheduler(flows, max_workers=50, debug=True).run()
+scheduler = FlowScheduler(flows, max_workers=50, debug=True)
+scheduler.run()
+
+# Poll until finished
+while scheduler.status() == FlowSchedulerStatus.RUNNING:
+    time.sleep(0.5)
+
+# Or block with join()
+# scheduler.join()
+
+errors = scheduler.errors()
 if errors:
     for exc in errors:
         print(f"Flow failed: {exc}")
 ```
 
-### Return value
+### Methods
 
-`run()` returns `list[Exception]` - one entry per flow that raised an exception (including `TimeoutError` when `flow_timeout_sec` is exceeded). An empty list means all flows completed successfully.
+| Method | Returns | Description |
+|---|---|---|
+| `run()` | `None` | Start the scheduler in a background thread. Raises `RuntimeError` if already started. |
+| `status()` | `FlowSchedulerStatus` | Current lifecycle state. |
+| `join(timeout=None)` | `None` | Block until the scheduler finishes. |
+| `errors()` | `list[Exception]` | Exceptions from failed flows. Raises `RuntimeError` if still running. |
+| `results(flow)` | `AnyResult` | Result of a specific flow. Raises `KeyError` if the flow failed or was not scheduled. |
 
 ### Integration with cicflowmeter replay
 
@@ -384,7 +409,7 @@ The primary use case is replaying a captured trace where each flow has a realist
 
 ```python
 from satgonetem.traffic.cicflowmeter import flows_from_cicflowmeter
-from satgonetem.utils.flow_scheduler import FlowScheduler
+from satgonetem.utils.flow_scheduler import FlowScheduler, FlowSchedulerStatus
 
 flows = flows_from_cicflowmeter(
     path="capture.csv",
@@ -392,5 +417,9 @@ flows = flows_from_cicflowmeter(
     destinations=destination_nodes,
     sample_fraction=0.1,
 )
-errors = FlowScheduler(flows, max_workers=50, debug=True).run()
+scheduler = FlowScheduler(flows, max_workers=50, debug=True)
+scheduler.run()
+while scheduler.status() == FlowSchedulerStatus.RUNNING:
+    time.sleep(0.5)
+errors = scheduler.errors()
 ```

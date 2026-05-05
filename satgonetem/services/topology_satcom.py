@@ -641,7 +641,7 @@ def main():
 
     from satgonetem.utils.project_builder import create_test_project
 
-    project = create_test_project()
+    project = create_test_project(ground_stations_file="resources/ground_stations.txt")
 
     topology_manager: TopologyManager = TopologyManager.from_satcom(project)
 
@@ -658,6 +658,9 @@ def main():
     topology_manager.init_routing(routing_method="static")
 
     test_connectivity(topology_manager)
+    input()
+    topology_manager.stop_gonetem()
+    return
 
     while True:
         try:
@@ -673,35 +676,48 @@ def main():
 
 
 def test_connectivity(topology_manager: TopologyManager) -> None:
-    ping_config = PingConfig(count=10, interval_sec=0.1)
+
+    interval_sec = 0.01
+    count = 10
+    ping_config = PingConfig(count=count, interval_sec=interval_sec)
 
     gnds = topology_manager.get_ground_stations()
 
     sats = [sat for sat in topology_manager.get_satellites() if sat.is_addressable()]
 
-    flows = topology_manager.ping(gnds + sats, gnds + sats, ping_config)
+    flows = []
 
-    done = False
+    for i, gs_i in enumerate(gnds + sats):
+        for gs_j in gnds + sats:
+            if gs_i == gs_j:
+                continue
+            flow = PingFlow(
+                source=gs_i,
+                destination=gs_j,
+                config=ping_config,
+                delay=i * interval_sec * count,
+            )
+            flows.append(flow)
 
-    while not done:
-        for flow in flows:
-            if flow.status() == PingStatus.DONE:
-                done = True
-                break
+    from satgonetem.utils.flow_scheduler import FlowScheduler, FlowSchedulerStatus
 
-        time.sleep(1)
+    flow_scheduler = FlowScheduler(flows, max_workers=128, debug=True)
+
+    flow_scheduler.run()
+
+    flow_scheduler.join()
+
+    results = [flow_scheduler.results(flow) for flow in flows]
+
+    errors = sum(1 for flow in flows if flow.status == PingStatus.ERROR)
+
+    print(f"Completed {len(flows)} ping flows with {errors} errors.")
 
     avg_rtt = sum(
-        [
-            flow.results().rtt_avg_ms
-            for flow in flows
-            if flow.status() == PingStatus.DONE
-        ]
-    ) / len(flows)
-    ok = sum(1 for flow in flows if flow.status() == PingStatus.DONE)
+        result.rtt_avg_ms for result in results if result.rtt_avg_ms is not None
+    ) / len(results)
 
-    print(f"{ok}/{len(flows)} flows completed")
-    print(f"Average RTT: {avg_rtt}")
+    print(avg_rtt)
 
 
 if __name__ == "__main__":

@@ -8,11 +8,17 @@ same time, eliminating the overhead of thousands of sleeping threads.
 Typical usage::
 
     flows = flows_from_cicflowmeter(path, nodes, nodes, sample_fraction=0.1)
-    errors = FlowScheduler(flows, max_workers=100).run()
+    scheduler = FlowScheduler(flows, max_workers=100)
+    scheduler.run()
+    while scheduler.status() == FlowSchedulerStatus.RUNNING:
+        time.sleep(0.5)
+    errors = scheduler.errors()
 """
 
 from __future__ import annotations
 
+import enum
+import threading
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
 from threading import Lock
@@ -25,6 +31,22 @@ if TYPE_CHECKING:
 
 AnyFlow = Union["Iperf3Flow", "Hping3Flow", "PingFlow"]
 AnyResult = Union["Iperf3Results", "Hping3Results", "PingResults"]
+
+
+class FlowSchedulerStatus(enum.Enum):
+    """Lifecycle state of a FlowScheduler.
+
+    Attributes:
+        IDLE: Scheduler created but not yet started.
+        RUNNING: Flows are being scheduled and executed.
+        DONE: All flows have finished executing.
+        ERROR: The scheduler itself encountered a fatal error.
+    """
+
+    IDLE = "idle"
+    RUNNING = "running"
+    DONE = "done"
+    ERROR = "error"
 
 
 def _flow_label(flow: AnyFlow) -> str:
@@ -104,6 +126,9 @@ class FlowScheduler:
     concurrently. If all workers are busy when a deadline arrives the flow
     is queued and picked up as soon as a worker frees.
 
+    run() is non-blocking; use status() to poll for completion and errors()
+    to retrieve the list of failed flows once finished.
+
     Attributes:
         _flows: Flows sorted ascending by delay.
         _max_workers: Maximum number of flows executing concurrently.
@@ -146,9 +171,16 @@ class FlowScheduler:
         self._active_flows_lock = Lock()
         self._results: list[AnyResult] = []
         self._result_map: dict[int, AnyResult] = {}
+        self._total_count = len(flows)
+        self._completed_count = 0
+        self._status = FlowSchedulerStatus.IDLE
+        self._status_lock = Lock()
+        self._errors: list[Exception] = []
+        self._scheduler_error: Exception | None = None
+        self._scheduler_thread: threading.Thread | None = None
 
     def _on_flow_start(self, flow: AnyFlow) -> None:
-        """Register flow start and print active-flow snapshot.
+        """Register flow start.
 
         Args:
             flow: Flow that has started executing.
@@ -156,91 +188,160 @@ class FlowScheduler:
         label = _flow_label(flow)
         with self._active_flows_lock:
             self._active_flows[label] = self._active_flows.get(label, 0) + 1
-            self._print_active_flows_locked()
 
     def _on_flow_done(self, flow: AnyFlow) -> None:
-        """Register flow completion and print active-flow snapshot.
+        """Register flow completion.
 
         Args:
             flow: Flow that has finished executing.
         """
         label = _flow_label(flow)
         with self._active_flows_lock:
+            self._completed_count += 1
             count = self._active_flows.get(label, 0)
             if count <= 1:
                 self._active_flows.pop(label, None)
             else:
                 self._active_flows[label] = count - 1
-            self._print_active_flows_locked()
 
-    def _print_active_flows_locked(self) -> None:
-        """Print currently active flows to stdout.
+    def _print_progress(self) -> None:
+        """Print periodic progress summary to stdout."""
+        with self._active_flows_lock:
+            active = sum(self._active_flows.values())
+            completed = self._completed_count
+            total = self._total_count
+        print("=" * 40)
+        print(f"FlowScheduler: {active} in process | {completed}/{total} completed")
+        print("=" * 40)
 
-        This method must be called with _active_flows_lock already acquired.
-        """
-        if not self._active_flows:
-            print("[flow] ACTIVE 0")
-            return
+    def run(self) -> None:
+        """Start executing all flows in delay order with bounded concurrency.
 
-        active_labels = [
-            f"{label} x{count}" if count > 1 else label
-            for label, count in sorted(self._active_flows.items())
-        ]
-        total = sum(self._active_flows.values())
-        print(f"[flow] ACTIVE {total}: " + " | ".join(active_labels))
-
-    def run(self) -> list[Exception]:
-        """Execute all flows in delay order with bounded concurrency.
-
-        Blocks until every flow has completed or failed. The method submits
+        Returns immediately; poll status() for completion. The method submits
         each flow to the internal ThreadPoolExecutor at (t0 + flow.delay)
-        wall-clock time, where t0 is the instant this method is called.
+        wall-clock time, where t0 is the instant run() is called.
         Successful results are stored and accessible via results().
+
+        Raises:
+            RuntimeError: If the scheduler has already been started.
+        """
+        with self._status_lock:
+            if self._status != FlowSchedulerStatus.IDLE:
+                raise RuntimeError(
+                    f"FlowScheduler has already been started (status={self._status.value})"
+                )
+            self._status = FlowSchedulerStatus.RUNNING
+            self._errors = []
+            self._results = []
+            self._result_map = {}
+            self._completed_count = 0
+            self._active_flows.clear()
+            self._scheduler_error = None
+
+        self._scheduler_thread = threading.Thread(target=self._run, daemon=True)
+        self._scheduler_thread.start()
+
+    def _run(self) -> None:
+        """Internal scheduling loop executed in a background thread."""
+        t0 = time.monotonic()
+        errors: list[Exception] = []
+
+        progress_event = threading.Event()
+
+        def _progress_printer() -> None:
+            while not progress_event.is_set():
+                progress_event.wait(1.0)
+                if not progress_event.is_set():
+                    self._print_progress()
+
+        try:
+            with ThreadPoolExecutor(max_workers=self._max_workers) as executor:
+                if self._debug:
+                    progress_thread = threading.Thread(
+                        target=_progress_printer, daemon=True
+                    )
+                    progress_thread.start()
+
+                flow_futures: list[tuple[AnyFlow, Future[AnyResult]]] = []
+                for flow in self._flows:
+                    wait = (t0 + flow.delay) - time.monotonic()
+                    if wait > 0.0:
+                        time.sleep(wait)
+                    future: Future[AnyResult] = executor.submit(
+                        _execute_flow,
+                        flow,
+                        False,
+                        self._on_flow_start if self._debug else None,
+                        self._on_flow_done if self._debug else None,
+                        self._flow_timeout_sec,
+                    )
+                    flow_futures.append((flow, future))
+
+                for flow, future in flow_futures:
+                    exc = future.exception()
+                    if exc is not None:
+                        if isinstance(exc, Exception):
+                            errors.append(exc)
+                        else:
+                            errors.append(
+                                RuntimeError(
+                                    f"Flow failed with {type(exc).__name__}: {exc}"
+                                )
+                            )
+                    else:
+                        completed = future.result()
+                        self._results.append(completed)
+                        self._result_map[id(flow)] = completed
+
+                if self._debug:
+                    progress_event.set()
+                    progress_thread.join(timeout=2.0)
+        except Exception as exc:
+            with self._status_lock:
+                self._scheduler_error = exc
+                self._status = FlowSchedulerStatus.ERROR
+        else:
+            with self._status_lock:
+                self._errors = errors
+                self._status = FlowSchedulerStatus.DONE
+
+    def status(self) -> FlowSchedulerStatus:
+        """Return the current lifecycle state.
+
+        Returns:
+            The current FlowSchedulerStatus value.
+        """
+        with self._status_lock:
+            return self._status
+
+    def errors(self) -> list[Exception]:
+        """Return the list of exceptions raised by failed flows.
 
         Returns:
             A list of exceptions raised by flows that failed. Empty when all
             flows complete successfully.
+
+        Raises:
+            RuntimeError: If the scheduler is still running or encountered a
+                fatal error.
         """
-        t0 = time.monotonic()
-        errors: list[Exception] = []
-        self._results = []
-        self._result_map = {}
+        with self._status_lock:
+            if self._status == FlowSchedulerStatus.RUNNING:
+                raise RuntimeError("FlowScheduler is still running")
+            if self._status == FlowSchedulerStatus.ERROR:
+                raise RuntimeError(
+                    f"FlowScheduler failed: {self._scheduler_error}"
+                ) from self._scheduler_error
+            return self._errors
 
-        with ThreadPoolExecutor(max_workers=self._max_workers) as executor:
-            flow_futures: list[tuple[AnyFlow, Future[AnyResult]]] = []
-            for flow in self._flows:
-                wait = (t0 + flow.delay) - time.monotonic()
-                if wait > 0.0:
-                    if self._debug and wait >= 5.0:
-                        print(f"[flow] WAIT  {wait:.2f}s until next flow")
-                    time.sleep(wait)
-                future: Future[AnyResult] = executor.submit(
-                    _execute_flow,
-                    flow,
-                    self._debug,
-                    self._on_flow_start if self._debug else None,
-                    self._on_flow_done if self._debug else None,
-                    self._flow_timeout_sec,
-                )
-                flow_futures.append((flow, future))
+    def join(self, timeout: float | None = None) -> None:
+        """Wait for the scheduler thread to finish.
 
-            for flow, future in flow_futures:
-                exc = future.exception()
-                if exc is not None:
-                    if isinstance(exc, Exception):
-                        errors.append(exc)
-                    else:
-                        errors.append(
-                            RuntimeError(
-                                f"Flow failed with {type(exc).__name__}: {exc}"
-                            )
-                        )
-                else:
-                    completed = future.result()
-                    self._results.append(completed)
-                    self._result_map[id(flow)] = completed
-
-        return errors
+        Args:
+            timeout: Maximum seconds to wait. None means wait indefinitely.
+        """
+        if self._scheduler_thread is not None:
+            self._scheduler_thread.join(timeout=timeout)
 
     def results(self, flow: AnyFlow) -> AnyResult:
         """Return the result of a specific flow after run() has completed.
@@ -254,9 +355,13 @@ class FlowScheduler:
             populated by the underlying tool (iperf3, hping3, ping, etc.).
 
         Raises:
+            RuntimeError: If the scheduler is still running.
             KeyError: If the flow did not complete successfully, was not part
                 of this scheduler, or run() has not been called yet.
         """
+        with self._status_lock:
+            if self._status == FlowSchedulerStatus.RUNNING:
+                raise RuntimeError("FlowScheduler is still running")
         try:
             return self._result_map[id(flow)]
         except KeyError:

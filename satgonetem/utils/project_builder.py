@@ -322,8 +322,7 @@ def create_test_project(
     simulation_name: str = "TestConstellation",
     start_date: str = "01/01/2024 00:00:00",
     end_date: str = "01/01/2024 00:01:00",
-    ground_stations: Optional[List[GroundStationEntry]] = None,
-    ground_files_dir: str = "/tmp",
+    ground_stations_file: str = "",
 ) -> SimulationProperty:
     """Build a minimal SimulationProperty suitable for tests and quick experiments.
 
@@ -338,11 +337,9 @@ def create_test_project(
             "01/01/2024 00:00:00".
         end_date: Simulation end datetime string. Defaults to
             "01/01/2024 00:01:00".
-        ground_stations: Optional list of GroundStationEntry objects to use as
-            the ground station group. When omitted, a small representative set
-            is used.
-        ground_files_dir: Directory where ground object CSV files are written.
-            Defaults to "/tmp".
+        ground_stations_file: Optional path to a CSV file containing ground
+            station entries. If not provided, a default set of five European
+            stations is used.
 
     Returns:
         A fully configured SimulationProperty.
@@ -350,7 +347,8 @@ def create_test_project(
     Raises:
         OSError: If the ground object CSV file cannot be written.
     """
-    if ground_stations is None:
+    ground_files_dir = "/tmp/"
+    if len(ground_stations_file) == 0:
         ground_stations = [
             GroundStationEntry(0, "Berlin", 52.52, 13.405, 0.034),
             GroundStationEntry(1, "London", 51.507, -0.127, 0.011),
@@ -358,9 +356,17 @@ def create_test_project(
             GroundStationEntry(3, "Rome", 41.902, 12.496, 0.021),
             GroundStationEntry(4, "Madrid", 40.416, -3.703, 0.667),
         ]
+        gs_file = GroundObjectFile("Ground Stations", ground_stations)
+        data_file = gs_file.write(ground_files_dir)
 
-    gs_file = GroundObjectFile("Ground Stations", ground_stations)
-    data_file = gs_file.write(ground_files_dir)
+    elif len(ground_stations_file) > 0:
+
+        ground_stations = GroundObjectFile.from_csv(
+            identifier="Ground Stations", csv_path=ground_stations_file
+        ).entries
+
+        gs_file = GroundObjectFile("Ground Stations", ground_stations)
+        data_file = gs_file.write(ground_files_dir)
 
     ground_object_property = GroundObjectProperty(
         identifier=gs_file.identifier,
