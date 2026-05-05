@@ -66,7 +66,6 @@ class Satellite(Node, QoSCapableMixin):
         """
         Get addressable flag
         """
-
         self.addressable = status
 
     def sync_position_from_satcom(self) -> None:

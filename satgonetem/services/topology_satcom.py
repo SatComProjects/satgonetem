@@ -617,6 +617,11 @@ class TopologyManager(
         """
         Set addressable status to multiple satellites
         """
+        if any(
+            not isinstance(sat, Satellite)
+            for sat in (satellites if isinstance(satellites, list) else [satellites])
+        ):
+            raise ValueError("All items in satellites must be instances of Satellite")
 
         if isinstance(satellites, Satellite):
             satellites.set_addressable(True)
@@ -643,79 +648,42 @@ def main():
 
     topology_manager: TopologyManager = TopologyManager.from_satcom(project)
 
-    # for link in topology_manager.links.values():
-    #     if link.type == "GroundStationLink":
-    #         print(
-    #             f"Peer1 throughput: {link.peer1_capacity} kbps, Peer2 throughput: {link.peer2_capacity} kbps"
-    #         )
-
-    # ## Create antennas
-    # satellites = topology_manager.get_satellites()
-    # antenna_satellite_config = AntennaConfig(
-    #     diameter=0.3,  # meters
-    #     efficiency=0.6,  # unitless
-    # )
-    # topology_manager.set_antenna(
-    #     satellites,
-    #     antenna_satellite_config,
-    # )
-
-    # ground_stations = topology_manager.get_ground_stations()
-    # antenna_gnd_config = AntennaConfig(
-    #     diameter=2.0,  # meters
-    #     efficiency=0.7,  # unitless
-    # )
-    # topology_manager.set_antenna(
-    #     ground_stations,
-    #     antenna_gnd_config,
-    # )
-
-    # topology_manager.set_link_budget_config(
-    #     LinkBudgetConfig(
-    #         downlink_freq_ghz=19.0,
-    #         uplink_freq_ghz=14.25,
-    #         bandwidth_hz_downlink=100e6,
-    #         bandwidth_hz_uplink=100e6,
-    #     )
-    # )
-
-    # for link in topology_manager.links.values():
-    #     if link.type == "GroundStationLink":
-    #         print(
-    #             f"Peer1 throughput: {link.peer1_capacity} kbps, Peer2 throughput: {link.peer2_capacity} kbps"
-    #         )
-
     topology_manager.start_gonetem()
 
     topology_manager.set_ip_addresses()
 
     addressable_satellites = topology_manager.get_satellites()[0:10]
 
+    print([sat.name for sat in addressable_satellites])
+
     topology_manager.set_addressable_satellites(addressable_satellites)
 
     topology_manager.init_routing(routing_method="sr-mpls")
 
+    test_connectivity(topology_manager)
+
     while True:
         try:
             input()
-
             topology_manager.next_step()
-
+            test_connectivity(topology_manager)
         except KeyboardInterrupt:
-            print("Simulation interrupted by user")
+            print("Exiting...")
             break
-
-    input("Press Enter to stop the simulation...")
 
     topology_manager.stop_gonetem()
 
-    return
+    return None
 
+
+def test_connectivity(topology_manager: TopologyManager) -> None:
     ping_config = PingConfig(count=100, interval_sec=0.1)
 
     gnds = topology_manager.get_ground_stations()
 
-    flows = topology_manager.ping(gnds, gnds, ping_config)
+    sats = [sat for sat in topology_manager.get_satellites() if sat.is_addressable()]
+
+    flows = topology_manager.ping(gnds + sats, gnds + sats, ping_config)
 
     done = False
 
@@ -738,10 +706,6 @@ def main():
 
     print(f"{ok}/{len(flows)} flows completed")
     print(f"Average RTT: {avg_rtt}")
-
-    input()
-
-    topology_manager.stop_gonetem()
 
 
 if __name__ == "__main__":

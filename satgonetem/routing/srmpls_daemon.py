@@ -336,6 +336,9 @@ class SRMPLSDaemon(RoutingDaemon):
         self.sr_lfib: Dict[int, List] = {}
         self._sr_graph: Optional[Any] = None
         self.mpls_config: Optional[Any] = None
+        self._prev_sr_gs_routes: Dict[int, List[str]] = {}
+        self._prev_sr_sat_routes: Dict[int, List[str]] = {}
+        self._prev_sr_node_sid_routes: Dict[int, List[str]] = {}
 
     @property
     def is_initialized(self) -> bool:
@@ -413,6 +416,9 @@ class SRMPLSDaemon(RoutingDaemon):
         self.sr_lfib = {}
         self._sr_graph = None
         self._label_manager = None
+        self._prev_sr_gs_routes.clear()
+        self._prev_sr_sat_routes.clear()
+        self._prev_sr_node_sid_routes.clear()
 
     def set_sr_custom_path(
         self, source_id: int, dest_id: int, path: List[int]
@@ -630,6 +636,11 @@ class SRMPLSDaemon(RoutingDaemon):
             logging.warning("SR-MPLS routing called but SR manager not initialized")
             return
 
+        if init_flag:
+            self._prev_sr_gs_routes.clear()
+            self._prev_sr_sat_routes.clear()
+            self._prev_sr_node_sid_routes.clear()
+
         self._label_manager.clear_cache()
         self._build_sr_gs_routes()
 
@@ -822,14 +833,9 @@ class SRMPLSDaemon(RoutingDaemon):
     def _apply_sr_node_sids_to_satellites(self) -> None:
         """Install SR-MPLS forwarding entries on all satellites.
 
-        Each satellite receives:
-        1. Its own Node SID pop rule (deliver locally / process next label).
-        2. One forward rule per directly connected neighbour.
-        3. IP routes to directly connected ground-station loopbacks (PHP).
-
-        LFIB size per satellite is O(degree), not O(N).
+        On the first call (previous table empty) all entries are installed.
+        On subsequent calls only entries whose attributes changed are sent.
         """
-
         if self._label_manager is None or self._sr_graph is None:
             return
 
@@ -847,7 +853,7 @@ class SRMPLSDaemon(RoutingDaemon):
             route_commands = []
 
             own_entry = SRNodeSIDEntry(node_sid=my_sid, node_name=sat.name)
-            route_commands.append(own_entry.to_iproute2_batch_line())
+            route_commands.append(own_entry.to_iproute2_command())
 
             for iface in sat.interfaces:
                 if iface.peer is None:
@@ -889,7 +895,7 @@ class SRMPLSDaemon(RoutingDaemon):
                     interface=iface,
                     target_name=neighbor_name,
                 )
-                route_commands.append(fwd_entry.to_iproute2_batch_line())
+                route_commands.append(fwd_entry.to_iproute2_command())
 
             for gs in all_gs:
                 iface = self.topology._get_interface_to_peer(sat, gs.id)
@@ -901,12 +907,18 @@ class SRMPLSDaemon(RoutingDaemon):
                 gs_ip = iface.peer.ipv4
                 iface_name = iface.get_iname()
                 route_commands.append(
-                    f"route replace {gs_loopback}/32 via {gs_ip} dev {iface_name}"
+                    f"ip route replace {gs_loopback}/32 via {gs_ip} dev {iface_name}"
                 )
 
-            if route_commands:
+            prev = self._prev_sr_node_sid_routes.get(sat.id, [])
+            prev_set = set(prev)
+            changed = [line for line in route_commands if line not in prev_set]
+
+            if changed:
+                batch_cmd = "; ".join(changed)
                 try:
-                    self._exec_batch(sat, route_commands)
+                    sat.execute_command(["sh", "-lc", batch_cmd])
+                    self._prev_sr_node_sid_routes[sat.id] = route_commands
                 except Exception as e:
                     logging.error(f"Failed to install SR forwarding on {sat.name}: {e}")
 
@@ -925,9 +937,8 @@ class SRMPLSDaemon(RoutingDaemon):
     def _apply_sr_routes_to_ground_stations(self) -> None:
         """Install SR-MPLS routes on all ground stations.
 
-        Each ground station receives:
-        1. Its own Node SID pop rule (for return traffic).
-        2. Label-stack push routes to every other ground station.
+        On the first call (previous table empty) all routes are installed.
+        On subsequent calls only routes whose attributes changed are sent.
         """
         from satgonetem.models.mpls_entry import SRNodeSIDEntry
 
@@ -941,21 +952,28 @@ class SRMPLSDaemon(RoutingDaemon):
         )
 
         def install_gs_routes(gs: "GroundStation") -> None:
-            route_commands = []
-
             if self._label_manager is None:
                 raise RuntimeError("SR-MPLS manager not initialized")
+
+            route_commands = []
+
             my_sid = self._label_manager.get_node_sid(gs.id)
             if my_sid is not None:
                 own_entry = SRNodeSIDEntry(node_sid=my_sid, node_name=gs.name)
-                route_commands.append(own_entry.to_iproute2_batch_line())
+                route_commands.append(own_entry.to_iproute2_command())
 
             for entry in self.sr_lfib.get(gs.id, []):
-                route_commands.append(entry.to_iproute2_batch_line())
+                route_commands.append(entry.to_iproute2_command())
 
-            if route_commands:
+            prev = self._prev_sr_gs_routes.get(gs.id, [])
+            prev_set = set(prev)
+            changed = [line for line in route_commands if line not in prev_set]
+
+            if changed:
+                batch_cmd = "; ".join(changed)
                 try:
-                    self._exec_batch(gs, route_commands)
+                    gs.execute_command(["sh", "-lc", batch_cmd])
+                    self._prev_sr_gs_routes[gs.id] = route_commands
                 except Exception as e:
                     logging.error(f"Failed to install SR routes on {gs.name}: {e}")
 
@@ -974,9 +992,8 @@ class SRMPLSDaemon(RoutingDaemon):
     def _apply_sr_routes_to_satellites(self) -> None:
         """Install SR-MPLS routes on all satellites.
 
-        Each satellite receives:
-        1. Its own Node SID pop rule (for return traffic).
-        2. Label-stack push routes to every other satellite.
+        On the first call (previous table empty) all routes are installed.
+        On subsequent calls only routes whose attributes changed are sent.
         """
         from satgonetem.models.mpls_entry import SRNodeSIDEntry
 
@@ -990,29 +1007,32 @@ class SRMPLSDaemon(RoutingDaemon):
         )
 
         def install_satellite_routes(sat: "Satellite") -> None:
-            route_commands = []
-
             if self._label_manager is None:
                 raise RuntimeError("SR-MPLS manager not initialized")
+
+            route_commands = []
+
             my_sid = self._label_manager.get_node_sid(sat.id)
             if my_sid is not None:
                 own_entry = SRNodeSIDEntry(node_sid=my_sid, node_name=sat.name)
-                route_commands.append(own_entry.to_iproute2_batch_line())
+                route_commands.append(own_entry.to_iproute2_command())
 
             for entry in self.sr_lfib.get(sat.id, []):
-                route_commands.append(entry.to_iproute2_batch_line())
+                route_commands.append(entry.to_iproute2_command())
 
-            if route_commands:
+            prev = self._prev_sr_sat_routes.get(sat.id, [])
+            prev_set = set(prev)
+            changed = [line for line in route_commands if line not in prev_set]
+
+            if changed:
+                batch_cmd = "; ".join(changed)
                 try:
-
-                    self._exec_batch(sat, route_commands)
-
+                    sat.execute_command(["sh", "-lc", batch_cmd])
+                    self._prev_sr_sat_routes[sat.id] = route_commands
                 except Exception as e:
                     logging.error(f"Failed to install SR routes on {sat.name}: {e}")
 
-        from concurrent.futures import ProcessPoolExecutor
-
-        with ThreadPoolExecutor(max_workers=8) as pool:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
             futures = [
                 pool.submit(install_satellite_routes, sat)
                 for sat in [
@@ -1110,40 +1130,24 @@ class SRMPLSDaemon(RoutingDaemon):
         self.sr_lfib[source_id] = new_entries
 
         self._enable_mpls(gs_src)
-        if new_entries:
-            batch_lines = [entry.to_iproute2_batch_line() for entry in new_entries]
+
+        route_commands = []
+        my_sid = self._label_manager.get_node_sid(gs_src.id)
+        if my_sid is not None:
+            own_entry = SRNodeSIDEntry(node_sid=my_sid, node_name=gs_src.name)
+            route_commands.append(own_entry.to_iproute2_command())
+
+        for entry in new_entries:
+            route_commands.append(entry.to_iproute2_command())
+
+        if route_commands:
+            batch_cmd = "; ".join(route_commands)
             try:
-                self._exec_batch(gs_src, batch_lines)
+                gs_src.execute_command(["sh", "-lc", batch_cmd])
+                self._prev_sr_gs_routes[source_id] = route_commands
                 logging.info(f"Updated {len(new_entries)} SR routes on {gs_src.name}")
             except Exception as e:
                 logging.error(f"Failed to update SR routes on {gs_src.name}: {e}")
-
-    def _exec_batch(self, device, lines: list) -> None:
-        """Execute a list of ip commands in a single batch on a container.
-
-        Writes the commands to a temporary file in /tmp (shared between host
-        and containers) and runs ``ip -force -batch <file>`` via
-        ``container.exec_run``.  This avoids base64 encoding and pipe overhead.
-
-        Args:
-            device: A node object with a .container attribute.
-            lines: List of ip command strings (without the leading 'ip').
-        """
-        import uuid
-
-        tmp_path = f"/tmp/srmpls_batch_{device.name}_{uuid.uuid4().hex}.txt"
-        with open(tmp_path, "w") as f:
-            f.write("\n".join(lines))
-        try:
-            device.container.exec_run(
-                cmd=["ip", "-force", "-batch", tmp_path],
-                detach=False,
-            )
-        finally:
-            try:
-                os.remove(tmp_path)
-            except OSError:
-                pass
 
     def _flush_node(self, node: "Node") -> None:
         """Flush the MPLS forwarding table on a single node container.

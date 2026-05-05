@@ -6,6 +6,7 @@ import logging
 import threading
 import time
 from satgonetem.utils.constants import MAX_WORKERS
+from satgonetem.utils.utils import time_
 
 from typing import TYPE_CHECKING
 
@@ -39,6 +40,7 @@ class SimulationLoopMixin:
         if self._sim_thread and self._sim_thread.is_alive():
             self._sim_thread.join()
 
+    @time_
     def next_step(self) -> float:
         """Advance the simulation by one step.
 
