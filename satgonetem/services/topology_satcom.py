@@ -283,6 +283,8 @@ class TopologyManager(
         self.links: dict[frozenset[(str)], Link] = {}
         self.interfaces: list[Interface] = []  # List of all interfaces in the network
 
+        self.penalized_shells = None
+
         # QoS thingies
         self.use_file_routes = False
 
@@ -562,6 +564,7 @@ class TopologyManager(
             "hops_no_preference",
             "latency_prefer_ISLs",
             "latency_no_preference",
+            "prefer_isl_but_penalize_shell_preference",
         ]
 
         if self.preference not in available_preferences:
@@ -594,6 +597,22 @@ class TopologyManager(
                     and graph[u][v].get("type") == "InterSatelliteLink"
                 ):
                     graph[u][v]["weight"] *= 0.1
+
+            elif self.preference == "prefer_isl_but_penalize_shell_preference":
+                if self.penalized_shells is None:
+                    raise ValueError("No penalized shells provided")
+
+                edge_data = graph[u][v]
+                u_data = graph.nodes(u)
+                v_data = graph.nodes(v)
+
+                if edge_data.get("type") == "InterSatelliteLink":
+                    if u_data["shell"]["shell_id"] in self.penalized_shells and v_data["shell"]["shell_id"] in self.penalized_shells:
+                        graph[u][v]["weight"] = graph[u][v].get("distance", 1) * 10 # penalize inter_satellite links between penalized shells
+                    else:
+                        graph[u][v]["weight"] = graph[u][v].get("distance", 1)
+                else:
+                    graph[u][v]["weight"] = graph[u][v].get("distance", 1) * 20
 
         return graph
 
