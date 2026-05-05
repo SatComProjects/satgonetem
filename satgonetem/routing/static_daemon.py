@@ -247,19 +247,21 @@ class StaticRoutingDaemon(RoutingDaemon):
             sat_ifaces: Prebuilt peer_id->Interface maps per satellite.
         """
         len_path = self._load_routes_from_file()
+        addressable_sats = [sat for sat in sat_array if sat.is_addressable()]
+        dst_array = gs_array + addressable_sats
 
         for gs_src in gs_array:
             src_id = gs_src.id
             path_dict = len_path.get(src_id, (None, {}))[1]
-            for gs_dst in gs_array:
-                if gs_dst is gs_src:
+            for dst in dst_array:
+                if dst is gs_src:
                     continue
-                path = path_dict.get(gs_dst.id)
+                path = path_dict.get(dst.id)
                 if path is None:
                     continue
                 self._install_gs_to_gs_route(
                     gs_src=gs_src,
-                    gs_dst=gs_dst,
+                    gs_dst=dst,
                     path=path,
                     iface_map=gs_ifaces.get(src_id),
                 )
@@ -267,13 +269,15 @@ class StaticRoutingDaemon(RoutingDaemon):
         for sat_src in sat_array:
             src_id = sat_src.id
             path_dict = len_path.get(src_id, (None, {}))[1]
-            for gs_dst in gs_array:
-                path = path_dict.get(gs_dst.id)
+            for dst in dst_array:
+                if dst is sat_src:
+                    continue
+                path = path_dict.get(dst.id)
                 if path is None:
                     continue
                 self._install_sat_to_gs_route(
                     sat_src=sat_src,
-                    gs_dst=gs_dst,
+                    gs_dst=dst,
                     path=path,
                     iface_map=sat_ifaces.get(src_id),
                 )
@@ -292,13 +296,16 @@ class StaticRoutingDaemon(RoutingDaemon):
             gs_ifaces: Prebuilt peer_id->Interface maps per GS.
             sat_ifaces: Prebuilt peer_id->Interface maps per satellite.
         """
-        next_hops_to_gs: dict[int, dict[int, int]] = {}
-        for gs_dst in gs_array:
-            dst_id = gs_dst.id
+        addressable_sats = [sat for sat in sat_array if sat.is_addressable()]
+        dst_array = gs_array + addressable_sats
+
+        next_hops: dict[int, dict[int, int]] = {}
+        for dst in dst_array:
+            dst_id = dst.id
             pred, _ = nx.dijkstra_predecessor_and_distance(
                 graph, dst_id, weight="weight"
             )
-            next_hops_to_gs[dst_id] = {
+            next_hops[dst_id] = {
                 src_id: preds[0]
                 for src_id, preds in pred.items()
                 if src_id != dst_id and preds
@@ -307,15 +314,15 @@ class StaticRoutingDaemon(RoutingDaemon):
         for gs_src in gs_array:
             src_id = gs_src.id
             src_ifaces = gs_ifaces.get(src_id)
-            for gs_dst in gs_array:
-                if gs_dst is gs_src:
+            for dst in dst_array:
+                if dst.id == src_id:
                     continue
-                next_hop = next_hops_to_gs.get(gs_dst.id, {}).get(src_id)
+                next_hop = next_hops.get(dst.id, {}).get(src_id)
                 if next_hop is None:
                     continue
                 self._install_gs_to_gs_route(
                     gs_src=gs_src,
-                    gs_dst=gs_dst,
+                    gs_dst=dst,
                     path=[src_id, next_hop],
                     iface_map=src_ifaces,
                 )
@@ -323,13 +330,15 @@ class StaticRoutingDaemon(RoutingDaemon):
         for sat_src in sat_array:
             src_id = sat_src.id
             src_ifaces = sat_ifaces.get(src_id)
-            for gs_dst in gs_array:
-                next_hop = next_hops_to_gs.get(gs_dst.id, {}).get(src_id)
+            for dst in dst_array:
+                if dst.id == src_id:
+                    continue
+                next_hop = next_hops.get(dst.id, {}).get(src_id)
                 if next_hop is None:
                     continue
                 self._install_sat_to_gs_route(
                     sat_src=sat_src,
-                    gs_dst=gs_dst,
+                    gs_dst=dst,
                     path=[src_id, next_hop],
                     iface_map=src_ifaces,
                 )
@@ -449,11 +458,11 @@ class StaticRoutingDaemon(RoutingDaemon):
         return interface
 
     def _install_gs_to_gs_route(self, gs_src, gs_dst, path, iface_map) -> None:
-        """Install a GS->GS route entry on gs_src toward gs_dst.
+        """Install a route entry on gs_src toward gs_dst.
 
         Args:
             gs_src: Source ground station node.
-            gs_dst: Destination ground station node.
+            gs_dst: Destination node (ground station or addressable satellite).
             path: List of node IDs [src_id, next_hop, ...].
             iface_map: {peer_id: Interface} for fast lookup.
         """
@@ -477,11 +486,11 @@ class StaticRoutingDaemon(RoutingDaemon):
         )
 
     def _install_sat_to_gs_route(self, sat_src, gs_dst, path, iface_map) -> None:
-        """Install a SAT->GS route entry on sat_src toward gs_dst.
+        """Install a route entry on sat_src toward gs_dst.
 
         Args:
             sat_src: Source satellite node.
-            gs_dst: Destination ground station node.
+            gs_dst: Destination node (ground station or addressable satellite).
             path: List of node IDs [src_id, next_hop, ...].
             iface_map: {peer_id: Interface} for fast lookup.
         """

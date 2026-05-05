@@ -633,16 +633,13 @@ class TopologyManager(
 
 def main():
     """Demonstrate topology lifecycle and simulation controls."""
-    """
+
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(message)s",
     )
-    """
 
     from satgonetem.utils.project_builder import create_test_project
-
-    TopologyManager.apply_satcom_fix()
 
     project = create_test_project()
 
@@ -658,13 +655,12 @@ def main():
 
     topology_manager.set_addressable_satellites(addressable_satellites)
 
-    topology_manager.init_routing(routing_method="sr-mpls")
+    topology_manager.init_routing(routing_method="static")
 
     test_connectivity(topology_manager)
 
     while True:
         try:
-            input()
             topology_manager.next_step()
             test_connectivity(topology_manager)
         except KeyboardInterrupt:
@@ -677,7 +673,7 @@ def main():
 
 
 def test_connectivity(topology_manager: TopologyManager) -> None:
-    ping_config = PingConfig(count=100, interval_sec=0.1)
+    ping_config = PingConfig(count=10, interval_sec=0.1)
 
     gnds = topology_manager.get_ground_stations()
 

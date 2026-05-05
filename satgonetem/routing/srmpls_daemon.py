@@ -619,6 +619,7 @@ class SRMPLSDaemon(RoutingDaemon):
             f"SR-MPLS initialized: {len(self._label_manager.node_sids)} Node SIDs allocated"
         )
 
+    @time_
     def _rebuild_sr_mpls_routing(
         self, init_flag: bool = True, max_workers: int = 4
     ) -> None:

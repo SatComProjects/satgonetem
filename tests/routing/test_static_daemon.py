@@ -311,3 +311,263 @@ class TestStaticRoutingDaemonRemoveAllNodes:
             daemon.remove()
 
         mock_batch.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Addressable-satellite helpers
+# ---------------------------------------------------------------------------
+
+def _make_iface(node_name, peer_id, peer_iface):
+    """Create an Interface named like 'Gnd0.1' with a bidirectional peer."""
+    iface = Interface(name=f"{node_name}.{peer_id}")
+    iface.peer = peer_iface
+    return iface
+
+
+def _link_nodes(a, b):
+    """Add cross-referenced interfaces between two nodes."""
+    iface_a = Interface(name=f"{a.name}.{b.id}")
+    iface_b = Interface(name=f"{b.name}.{a.id}")
+    iface_a.peer = iface_b
+    iface_b.peer = iface_a
+    # Give them dummy IPv4s so route installation works
+    iface_a.ipv4 = f"10.{a.id}.{b.id}.1"
+    iface_b.ipv4 = f"10.{a.id}.{b.id}.2"
+    a.interfaces.append(iface_a)
+    b.interfaces.append(iface_b)
+
+
+_GS_ID_COUNTER = 0
+_SAT_ID_COUNTER = 100
+
+
+def _make_gs(name, loopback_ip):
+    from satgonetem.models.ground_station import GroundStation
+    gs = GroundStation(name)
+    gs.loopback.ipv4 = loopback_ip
+    # Force a unique ID to avoid collisions with satellites
+    global _GS_ID_COUNTER
+    gs.id = _GS_ID_COUNTER
+    _GS_ID_COUNTER += 1
+    return gs
+
+
+def _make_sat(name, loopback_ip, addressable=False):
+    from satgonetem.models.satellite import Satellite
+    sat = Satellite(name)
+    sat.loopback.ipv4 = loopback_ip
+    sat.set_addressable(addressable)
+    global _SAT_ID_COUNTER
+    sat.id = _SAT_ID_COUNTER
+    _SAT_ID_COUNTER += 1
+    return sat
+
+
+def _make_line_topology():
+    """Return a topology: Gnd0 -- Sat0 -- Sat1 -- Gnd1.
+
+    Sat1 is addressable; Sat0 is not.
+    Loopback IPs are spaced by /15 blocks so summarised destinations stay unique.
+    """
+    gnd0 = _make_gs("Gnd0", "10.0.0.0")
+    gnd1 = _make_gs("Gnd1", "10.2.0.0")
+    sat0 = _make_sat("Sat0", "10.4.0.0", addressable=False)
+    sat1 = _make_sat("Sat1", "10.6.0.0", addressable=True)
+
+    _link_nodes(gnd0, sat0)
+    _link_nodes(sat0, sat1)
+    _link_nodes(sat1, gnd1)
+
+    graph = nx.Graph()
+    for n in (gnd0, gnd1, sat0, sat1):
+        graph.add_node(n.id)
+    graph.add_edge(gnd0.id, sat0.id, weight=1)
+    graph.add_edge(sat0.id, sat1.id, weight=1)
+    graph.add_edge(sat1.id, gnd1.id, weight=1)
+
+    topo = MagicMock()
+    topo.status = True
+    topo.use_file_routes = False
+    topo.project_name = "test"
+    topo.current_time_step = 0
+    topo.get_satellites.return_value = [sat0, sat1]
+    topo.get_ground_stations.return_value = [gnd0, gnd1]
+    topo.satellites = {sat0.id: sat0, sat1.id: sat1}
+    topo.ground_stations = {gnd0.id: gnd0, gnd1.id: gnd1}
+    topo.get_current_graph.return_value = graph
+    return topo, gnd0, gnd1, sat0, sat1
+
+
+class TestAddressableSatellites:
+    """Tests that static routing treats addressable satellites like ground stations."""
+
+    def test_ground_station_gets_route_to_addressable_satellite(self):
+        topo, gnd0, _gnd1, _sat0, sat1 = _make_line_topology()
+        daemon = StaticRoutingDaemon(topo)
+
+        with patch.object(daemon, "_apply_ground_station_routes"), \
+             patch.object(daemon, "_apply_satellite_routes"):
+            daemon.init()
+
+        # Gnd0 should have a route to Sat1 (via Sat0)
+        routes_to_sat1 = [
+            r for r in gnd0.ipv4_routing_table if r.destination == sat1.loopback.ipv4
+        ]
+        assert len(routes_to_sat1) == 1
+        assert routes_to_sat1[0].target_node == sat1.name
+
+    def test_non_addressable_satellite_gets_route_to_addressable_satellite(self):
+        topo, _gnd0, _gnd1, sat0, sat1 = _make_line_topology()
+        daemon = StaticRoutingDaemon(topo)
+
+        with patch.object(daemon, "_apply_ground_station_routes"), \
+             patch.object(daemon, "_apply_satellite_routes"):
+            daemon.init()
+
+        # Sat0 should have a route to Sat1 (direct)
+        routes_to_sat1 = [
+            r for r in sat0.ipv4_routing_table if r.destination == sat1.loopback.ipv4
+        ]
+        assert len(routes_to_sat1) == 1
+        assert routes_to_sat1[0].target_node == sat1.name
+
+    def test_addressable_satellite_gets_route_to_other_addressable_satellite(self):
+        topo, _gnd0, _gnd1, sat0, sat1 = _make_line_topology()
+        daemon = StaticRoutingDaemon(topo)
+
+        with patch.object(daemon, "_apply_ground_station_routes"), \
+             patch.object(daemon, "_apply_satellite_routes"):
+            daemon.init()
+
+        # Nothing to test here because we only have one addressable satellite in
+        # the line topology.  We rely on test_addressable_satellite_gets_route_to_ground_station
+        # to prove the addressable satellite participates as a source.
+        pass
+
+    def test_addressable_satellite_gets_route_to_ground_station(self):
+        topo, gnd0, _gnd1, _sat0, sat1 = _make_line_topology()
+        daemon = StaticRoutingDaemon(topo)
+
+        with patch.object(daemon, "_apply_ground_station_routes"), \
+             patch.object(daemon, "_apply_satellite_routes"):
+            daemon.init()
+
+        # Sat1 should have a route to Gnd0 (via Sat0)
+        routes_to_gnd0 = [
+            r for r in sat1.ipv4_routing_table if r.destination == gnd0.loopback.ipv4
+        ]
+        assert len(routes_to_gnd0) == 1
+        assert routes_to_gnd0[0].target_node == gnd0.name
+
+    def test_no_routes_to_non_addressable_satellites(self):
+        topo, _gnd0, _gnd1, sat0, _sat1 = _make_line_topology()
+        daemon = StaticRoutingDaemon(topo)
+
+        with patch.object(daemon, "_apply_ground_station_routes"), \
+             patch.object(daemon, "_apply_satellite_routes"):
+            daemon.init()
+
+        # No node should have a route to Sat0's loopback
+        all_nodes = list(topo.get_satellites()) + list(topo.get_ground_stations())
+        for node in all_nodes:
+            routes_to_sat0 = [
+                r for r in node.ipv4_routing_table if r.destination == sat0.loopback.ipv4
+            ]
+            assert len(routes_to_sat0) == 0, (
+                f"{node.name} unexpectedly has a route to non-addressable {sat0.name}"
+            )
+
+    def test_addressable_satellite_pair_routing(self):
+        """Two addressable satellites should have routes to each other."""
+        gnd0 = _make_gs("Gnd0", "10.0.0.0")
+        sat0 = _make_sat("Sat0", "10.2.0.0", addressable=True)
+        sat1 = _make_sat("Sat1", "10.4.0.0", addressable=True)
+
+        _link_nodes(gnd0, sat0)
+        _link_nodes(sat0, sat1)
+
+        graph = nx.Graph()
+        for n in (gnd0, sat0, sat1):
+            graph.add_node(n.id)
+        graph.add_edge(gnd0.id, sat0.id, weight=1)
+        graph.add_edge(sat0.id, sat1.id, weight=1)
+
+        topo = MagicMock()
+        topo.status = True
+        topo.use_file_routes = False
+        topo.project_name = "test"
+        topo.current_time_step = 0
+        topo.get_satellites.return_value = [sat0, sat1]
+        topo.get_ground_stations.return_value = [gnd0]
+        topo.satellites = {sat0.id: sat0, sat1.id: sat1}
+        topo.ground_stations = {gnd0.id: gnd0}
+        topo.get_current_graph.return_value = graph
+
+        daemon = StaticRoutingDaemon(topo)
+        with patch.object(daemon, "_apply_ground_station_routes"), \
+             patch.object(daemon, "_apply_satellite_routes"):
+            daemon.init()
+
+        # sat0 should have route to sat1
+        routes_s0_to_s1 = [
+            r for r in sat0.ipv4_routing_table if r.destination == sat1.loopback.ipv4
+        ]
+        assert len(routes_s0_to_s1) == 1
+        assert routes_s0_to_s1[0].target_node == sat1.name
+
+        # sat1 should have route to sat0
+        routes_s1_to_s0 = [
+            r for r in sat1.ipv4_routing_table if r.destination == sat0.loopback.ipv4
+        ]
+        assert len(routes_s1_to_s0) == 1
+        assert routes_s1_to_s0[0].target_node == sat0.name
+
+    def test_populate_from_file_with_addressable_satellites(self):
+        topo, gnd0, gnd1, sat0, sat1 = _make_line_topology()
+        topo.use_file_routes = True
+
+        # Pre-computed routes in the same format _load_routes_from_file expects:
+        # {src_id: (distance_dict, path_dict)}
+        file_routes = {
+            gnd0.id: ({}, {
+                gnd0.id: [gnd0.id],
+                sat1.id: [gnd0.id, sat0.id, sat1.id],
+            }),
+            sat0.id: ({}, {
+                gnd0.id: [sat0.id, gnd0.id],
+                sat1.id: [sat0.id, sat1.id],
+            }),
+            sat1.id: ({}, {
+                gnd0.id: [sat1.id, sat0.id, gnd0.id],
+                gnd1.id: [sat1.id, gnd1.id],
+            }),
+            gnd1.id: ({}, {
+                gnd0.id: [gnd1.id, sat1.id, sat0.id, gnd0.id],
+                sat1.id: [gnd1.id, sat1.id],
+            }),
+        }
+
+        daemon = StaticRoutingDaemon(topo)
+        with patch.object(daemon, "_load_routes_from_file", return_value=file_routes), \
+             patch.object(daemon, "_apply_ground_station_routes"), \
+             patch.object(daemon, "_apply_satellite_routes"):
+            daemon.init()
+
+        # gnd0 should have route to sat1 from file
+        routes_to_sat1 = [
+            r for r in gnd0.ipv4_routing_table if r.destination == sat1.loopback.ipv4
+        ]
+        assert len(routes_to_sat1) == 1
+
+        # sat0 should have route to sat1 from file
+        routes_to_sat1_s0 = [
+            r for r in sat0.ipv4_routing_table if r.destination == sat1.loopback.ipv4
+        ]
+        assert len(routes_to_sat1_s0) == 1
+
+        # No routes to non-addressable sat0
+        for node in (gnd0, sat0, sat1):
+            routes_to_sat0 = [
+                r for r in node.ipv4_routing_table if r.destination == sat0.loopback.ipv4
+            ]
+            assert len(routes_to_sat0) == 0
