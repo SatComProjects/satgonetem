@@ -40,10 +40,15 @@ pip install git+https://github.com/satcomprojects/satgonetem
 The primary external dependency is `sat_com_topology`:
 
 ```
-git+https://github.com/{placeholder}/sat-com-topology.git@sat_com_topology_v4
+git+https://github.com/SatComProjects/satComTopology.git
 ```
 
 Access to that repository is required at install time.
+
+For Link Budget extras:
+```bash
+pip install -e ".[extra]"
+```
 
 For development extras (linting, type checking, coverage):
 
