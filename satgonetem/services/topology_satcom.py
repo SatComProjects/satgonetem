@@ -946,15 +946,25 @@ class TopologyManager(
 
         flow_scheduler.join()
 
-        results: List[PingResults] = [flow_scheduler.results(flow) for flow in flows]
+        results: List[PingResults] = []
+        errors = 0
+
+        for flow in flows:
+            try:
+                result = flow_scheduler.results(flow)
+                if result is not None:
+                    results.append(result)
+            except Exception as e:
+                print(f"Error occurred while fetching results for flow {flow}: {e}")
+                errors += 1
+
+        # results: List[PingResults] = [flow_scheduler.results(flow) for flow in flows]
 
         total_lost_packets = sum(
             (result.packets_transmitted - result.packets_received)
             for result in results
             if result is not None
         )
-
-        errors = sum(1 for flow in flows if flow.status == PingStatus.ERROR)
 
         print(
             f"Completed {len(flows)} ping flows with {errors} errors. Total lost packets: {total_lost_packets}"
