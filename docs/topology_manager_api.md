@@ -137,6 +137,23 @@ Return all supported routing method names, including custom-registered ones.
 
 ---
 
+### `set_addressable_satellites(satellites: Union[list[Satellite], Satellite]) -> None`
+
+Mark one or more satellites as *addressable*.
+
+Addressable satellites are treated as routing destinations (like ground
+stations) by the built-in routing daemons and are included in
+`test_connectivity`. Non-addressable satellites still forward traffic but
+cannot be targeted directly.
+
+**Args**
+- `satellites` - a single `Satellite` or a list of `Satellite` objects.
+
+**Raises**
+- `ValueError` - if any item is not a `Satellite` instance.
+
+---
+
 ## Node inspection
 
 ### `get_node_by_name(name: str) -> Optional[Node]`
@@ -283,6 +300,20 @@ Returns immediately; poll `flow.status()` for `Hping3Status.DONE`.
 
 **Returns**
 - `List[Hping3Flow]` - one flow per (source, destination) pair.
+
+---
+
+### `test_connectivity(max_workers: int = 128) -> None`
+
+Run ICMP pings between every ground station and every addressable satellite.
+
+This is a blocking convenience helper: it schedules all pairwise flows, waits
+for them to finish, and prints a loss summary. Non-addressable satellites are
+excluded; use `set_addressable_satellites()` first if you want satellites to be
+part of the test.
+
+**Args**
+- `max_workers` - maximum parallel threads used by the flow scheduler.
 
 ---
 

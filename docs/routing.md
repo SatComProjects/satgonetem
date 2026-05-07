@@ -37,6 +37,33 @@ The active method is selected by `routing_method` in `config.yaml`, or by passin
 
 ---
 
+## Addressable satellites
+
+By default satellites are **not** addressable; they act as pure transit nodes.
+Only satellites explicitly marked as addressable are treated as routing
+destinations by the built-in daemons (`static`, `sr-mpls`, etc.).
+
+Mark satellites as addressable before calling `init_routing()`:
+
+```python
+topology.set_addressable_satellites([sat_a, sat_b])
+```
+
+Effects:
+
+* **Static routing** — routes are installed to addressable satellites from every
+  ground station and every other addressable satellite. Non-addressable
+  satellites are never destinations, only next-hops.
+* **SR-MPLS** — label bindings and LFIB entries are built only for addressable
+  satellites (plus all ground stations).
+* **Test connectivity** — `topology.test_connectivity()` pings only ground
+  stations and addressable satellites.
+
+If no satellites are marked addressable, routing still works between ground
+stations; satellites simply forward packets without being reachable themselves.
+
+---
+
 ## Daemon interface
 
 Every daemon must extend `satgonetem.routing.base_daemon.RoutingDaemon` and

@@ -318,6 +318,25 @@ for flow in flows:
 
 The same pattern applies to `run_iperf3` and `run_hping3`.
 
+### `test_connectivity`
+
+`test_connectivity` is a blocking convenience method that pings every ground
+station and every **addressable** satellite pairwise (both directions), then
+prints a loss summary. It is equivalent to running `topology_manager.ping` with
+all combinations of ground stations plus addressable satellites, scheduling them
+through a `FlowScheduler`, and waiting for completion.
+
+```python
+# Mark specific satellites as addressable first
+topology_manager.set_addressable_satellites([sat0, sat1])
+
+# Run the test (blocks until all flows finish)
+topology_manager.test_connectivity(max_workers=128)
+```
+
+Non-addressable satellites are excluded. If no satellites are addressable, only
+ground-station-to-ground-station pairs are tested.
+
 ---
 
 ## FlowScheduler
