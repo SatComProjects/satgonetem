@@ -1,0 +1,336 @@
+
+syntax = "proto3";
+option go_package = "github.com/mroy31/gonetem/internal/proto";
+
+package netem;
+import "google/protobuf/empty.proto";
+
+service Netem {
+    // Server actions
+    rpc ServerGetVersion(google.protobuf.Empty) returns (VersionResponse) {}
+    rpc ServerPullImages(google.protobuf.Empty) returns (stream PullSrvMsg) {}
+    rpc ServerCleanContainers(google.protobuf.Empty) returns (AckResponse) {}
+
+    // Project actions
+    rpc ProjectGetMany(google.protobuf.Empty) returns (PrjListResponse) {}
+    rpc ProjectOpen(OpenRequest) returns (PrjOpenResponse) {}
+    rpc ProjectClose(ProjectRequest) returns (stream ProjectCloseMsg) {}
+    rpc ProjectSave(ProjectRequest) returns (stream ProjectSaveMsg) {}
+    rpc ProjectGetNodeConfigs(ProjectRequest) returns (FileResponse) {}
+    rpc ProjectGetStatus(ProjectRequest) returns (StatusResponse) {}
+
+    // Read/Write network topology
+    rpc ReadNetworkFile(ProjectRequest) returns (FileResponse) {}
+    rpc WriteNetworkFile(WNetworkRequest) returns (AckResponse) {}
+
+    // topology actions
+    rpc TopologyCheck(ProjectRequest) returns (AckResponse) {}
+    rpc TopologyReload(ProjectRequest) returns (stream TopologyRunMsg) {}
+    rpc TopologyRun(ProjectRequest) returns (stream TopologyRunMsg) {}
+    rpc TopologyStartAll(ProjectRequest) returns (AckResponse) {}
+    rpc TopologyStopAll(ProjectRequest) returns (AckResponse) {}
+
+    // Node actions
+    rpc NodeReadConfigFiles(NodeRequest) returns (ConfigFilesResponse) {}
+    rpc NodeStart(NodeRequest) returns (AckResponse) {}
+    rpc NodeStop(NodeRequest) returns (AckResponse) {}
+    rpc NodeRestart(NodeRequest) returns (AckResponse) {}
+    rpc NodeSetIfState(NodeIfStateRequest) returns (AckResponse) {}
+    rpc NodeCapture(NodeInterfaceRequest) returns (stream CaptureSrvMsg) {}
+    rpc NodeCopyFrom(CopyMsg) returns (stream CopyMsg) {}
+    rpc NodeCopyTo(stream CopyMsg) returns (AckResponse) {}
+    rpc NodeGetConsoleCmd(ConsoleCmdRequest) returns (ConsoleCmdResponse) {}
+    rpc NodeRun(NodeRunRequest) returns (NodeRunResponse) {}
+    rpc NodeExec(stream ExecCltMsg) returns (stream ExecSrvMsg) {}
+
+    // Link actions
+    rpc LinkUpdate(LinkRequest) returns (AckResponse) {}
+    rpc LinkAdd(LinkRequest) returns (AckResponse) {}
+    rpc LinkDel(LinkRequest) returns (AckResponse) {}
+
+}
+
+// global enums
+
+enum StatusCode {
+    OK = 0;
+    ERROR = 1;
+}
+
+enum IfState {
+    UP = 0;
+    DOWN = 1;
+}
+
+
+
+// Stream messages
+
+message ExecCltMsg {
+    enum Code {
+        CMD = 0;
+        DATA = 1;
+        RESIZE = 2;
+        ERROR = 3;
+        CLOSE = 4;
+    }
+
+    Code code = 1;
+    string prjId = 2;
+    string node = 3;
+    repeated string cmd = 4;
+    bool tty = 5;
+    bytes data = 6;
+    int32 ttyWidth = 7;
+    int32 ttyHeight = 8;
+}
+
+message ExecSrvMsg {
+    enum Code {
+        STDOUT = 0;
+        STDERR = 1;
+        ERROR = 2;
+        CLOSE = 3;
+    }
+
+    Code code = 1;
+    bytes data = 3;
+}
+
+message CopyMsg {
+    enum Code {
+        INIT = 0;
+        DATA = 1;
+        ERROR = 3;
+    }
+
+    Code code = 1;
+    string prjId = 2;
+    string node = 3;
+    string nodePath = 4;
+    bytes data = 5;
+}
+
+message PullSrvMsg {
+    enum Code {
+        START = 0;
+        OK = 1;
+        ERROR = 2;
+    }
+
+    Code code = 1;
+    string image = 2;
+    string error = 3;
+}
+
+message CaptureSrvMsg {
+    enum Code {
+        STDOUT = 0;
+        STDERR = 1;
+        OK = 2;
+        ERROR = 3;
+    }
+
+    Code code = 1;
+    bytes data = 2;
+}
+
+message TopologyRunMsg {
+    enum Code {
+        NODE_COUNT = 0;
+        BRIDGE_COUNT = 1;
+        LINK_COUNT = 2;
+        NODE_START = 3;
+        LINK_SETUP = 4;
+        BRIDGE_START = 5;
+        NODE_LOADCONFIG = 6;
+        NODE_MESSAGES = 7;
+        NODE_STOP = 8;
+        NODE_RM = 9;
+    }
+    message NodeMessages {
+        string name = 1;
+        repeated string messages = 2;
+    }
+
+    Code code = 1;
+    int32 total = 2;
+    repeated NodeMessages nodeMessages = 3;
+}
+
+message ProjectSaveMsg {
+    enum Code {
+        NODE_COUNT = 0;
+        NODE_SAVE = 1;
+        DATA = 2;
+    }
+
+    Code code = 1;
+    bytes data = 2;
+    int32 total = 3;
+}
+
+message ProjectCloseMsg {
+    enum Code {
+        NODE_COUNT = 0;
+        BRIDGE_COUNT = 1;
+        NODE_CLOSE = 2;
+        BRIDGE_CLOSE = 3;
+    }
+
+    Code code = 1;
+    int32 total = 2;
+}
+
+// Request messages
+
+message LinkConfig {
+    message QoSConfig {
+        float loss = 3;
+        int32 delay = 4;
+        int32 jitter = 5;
+        int32 rate = 6;
+        float buffer = 7;
+        int32 burst = 8;
+    }
+
+    string peer1 = 1;
+    string peer2 = 2;
+    QoSConfig peer1qos = 3;
+    QoSConfig peer2qos = 4;
+}
+
+message LinkRequest {
+    string prjId = 1;
+    LinkConfig link = 2;
+    bool sync = 3;
+}
+
+message NodeIfStateRequest {
+    string prjId = 1;
+    string node = 2;
+    int32 ifIndex = 3;
+    IfState state = 4;
+}
+
+message NodeInterfaceRequest {
+    string prjId = 1;
+    string node = 2;
+    int32 ifIndex = 3;
+}
+
+message NodeRequest {
+    string prjId = 1;
+    string node = 2;
+}
+
+message ConsoleCmdRequest {
+    string prjId = 1;
+    string node = 2;
+    bool shell = 3;
+}
+
+message ProjectRequest {
+    string id = 1;
+}
+
+message WNetworkRequest {
+    string id = 1;
+    bytes data = 2;
+}
+
+message OpenRequest {
+    string name = 1;
+    bytes data = 2;
+}
+
+// Response messages
+
+message Status {
+    StatusCode code = 1;
+    string error = 2;
+}
+
+message AckResponse {
+    Status status = 1;
+}
+
+message FileResponse {
+    Status status = 1;
+    bytes data = 2;
+}
+
+message VersionResponse {
+    Status status = 1;
+    string version = 2;
+}
+
+message ConsoleCmdResponse {
+    Status status = 1;
+    repeated string cmd = 2;
+}
+
+message NodeRunRequest {
+    string prjId = 1;
+    string node = 2;
+    repeated string cmd = 3;
+}
+
+message NodeRunResponse {
+    Status status = 1;
+    bytes stdout = 2;
+    bytes stderr = 3;
+    int32 exitCode = 4;
+}
+
+message StatusResponse {
+    message IfStatus {
+        string name = 1;
+        IfState state = 2;
+    }
+
+    message NodeStatus {
+        string name = 1;
+        bool running = 2;
+        repeated IfStatus interfaces = 10;
+    }
+
+    Status status = 1;
+    string name = 2;
+    string id = 3;
+    string openAt = 4;
+    bool running = 5;
+    repeated NodeStatus nodes = 10;
+}
+
+message ConfigFilesResponse {
+    enum Source {
+        ARCHIVE = 0;
+        RUNNING = 1;
+    }
+
+    message ConfigFile {
+        string name = 1;
+        bytes data = 2;
+    }
+
+    Status status = 1;
+    Source source = 2;
+    repeated ConfigFile files = 3;
+}
+
+message PrjListResponse {
+    message Info {
+        string id = 1;
+        string name = 2;
+        string openAt = 3;
+    }
+
+    Status status = 1;
+    repeated Info projects = 2;
+}
+
+message PrjOpenResponse {
+    Status status = 1;
+    string id = 2;
+}

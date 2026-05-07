@@ -1,0 +1,72 @@
+{
+  "simulation_property": {
+    "start_date": "01/01/2024 00:00:00",
+    "end_date": "01/01/2024 00:01:00",
+    "simulation_name": "IRIS2",
+    "movement_model": "pyorbital",
+    "distance_model": "sklearn",
+    "ground_objects_properties": [
+      {
+        "identifier": "Ground Stations",
+        "data_file": "/tmp/ground_stations.txt",
+        "type": "ground_station",
+        "connectivity_properties": {
+          "elevation_above_horizon": 10.0,
+          "maximum_satellite_range_distance": 1450.0,
+          "maximum_satellite_connected_count": null,
+          "shell_white_lists": [
+            "LEO"
+          ],
+          "maximum_connected_satellites": 3,
+          "ground_to_space_connections_strategy": "everything-visible"
+        }
+      }
+    ],
+    "walker_shells": [
+      {
+        "type": "delta",
+        "constellation_property": {
+          "identifier": "LEO",
+          "amount_of_orbit_plane": 12,
+          "amount_of_satellite_per_orbit_plane": 22,
+          "inclination": 53.0,
+          "phase_difference_between_satellites": false,
+          "mean_revolution_per_day": 14.45
+        },
+        "orbital_connectivity_property": {
+          "maximum_inter_satellite_count": 4,
+          "adjacent_inter_satellite_shifting": 0,
+          "maximum_inter_satellite_range_distance": 1450.0,
+          "maximum_ground_station_range": 1150.0,
+          "maximum_user_terminal_range": 950.0,
+          "maximum_connected_ground_object": 10000,
+          "maximum_connected_user_terminal": 500,
+          "maximum_connected_ground_station": 10
+        },
+        "ground_object_white_list": [
+          "Ground Stations"
+        ]
+      }
+    ],
+    "disable_ground_station_link_preload": false,
+    "static_ground_station_link_mode": false,
+    "ground_connectivity_properties": []
+  },
+  "network_config": {
+    "project_name": "Constellation",
+    "update_time": 1,
+    "gnd_link_capacity": 100000,
+    "isl_link_capacity": 100000,
+    "protocol": "ipv4",
+    "routing": "static",
+    "satellite_image": "jariassuarez/sgnt:satellite",
+    "network_launcher": "GONETEM",
+    "gonetem_server": "localhost:10110"
+  },
+  "ground_files": {
+    "/tmp/ground_stations.txt": {
+      "content": "0,Berlin,52.5200,13.4050,0.034\n1,London,51.5074,-0.1278,0.011\n2,Paris,48.8566,2.3522,0.035\n3,Rome,41.9028,12.4964,0.021\n4,Madrid,40.4168,-3.7038,0.667\n5,Ankara,39.9208,32.8541,0.938\n6,Amsterdam,52.3676,4.9041,0.002\n7,Warsaw,52.2297,21.0122,0.100\n8,Bern,46.9480,7.4474,0.540\n9,Brussels,50.8503,4.3517,0.013\n10,Stockholm,59.3293,18.0686,0.028\n11,Dublin,53.3498,-6.2603,0.020\n12,Vienna,48.2082,16.3738,0.171\n13,Oslo,59.9139,10.7522,0.023\n14,Fairbanks,64.8378,-147.7164,0.136\n15,Honolulu,21.3069,-157.8583,0.010\n16,Los Angeles,34.0522,-118.2437,0.071\n17,Bras\u00edlia,-15.7939,-47.8828,1.172\n18,Longyearbyen,78.2232,15.6469,0.033\n19,Frankfurt,50.1109,8.6821,0.112\n20,Nairobi,-1.2921,36.8219,1.795\n21,Dubai,25.2048,55.2708,0.016\n22,Tokyo,35.6762,139.6503,0.040\n23,Singapore,1.3521,103.8198,0.015\n24,Perth,-31.9505,115.8605,0.031\n25,McMurdo Station,-77.8419,166.6863,0.010\n26,New York,40.7128,-74.0060,0.010\n27,Miami,25.7617,-80.1918,0.002\n28,Chicago,41.8781,-87.6298,0.181\n29,Seattle,47.6062,-122.3321,0.056\n30,Houston,29.7604,-95.3698,0.013\n31,Beijing,39.9042,116.4074,0.043\n32,Shanghai,31.2304,121.4737,0.004\n33,Guangzhou,23.1291,113.2644,0.021\n34,Chengdu,30.5728,104.0668,0.500\n35,Urumqi,43.8256,87.6168,0.800\n36,Johannesburg,-26.2041,28.0473,1.753\n37,Lagos,6.5244,3.3792,0.041\n38,Santiago,-33.4489,-70.6693,0.520\n39,San Juan,18.4655,-66.1057,0.006\n40,Mumbai,19.0760,72.8777,0.014\n41,Riyadh,24.7136,46.6753,0.612\n42,Troms\u00f8,69.6492,18.9553,0.006\n43,Auckland,-36.8485,174.7633,0.002\n44,Punta Arenas,-53.1638,-70.9171,0.034\n45,Astana,51.1605,71.4704,0.347\n46,Tashkent,41.2995,69.2401,0.455\n47,Novosibirsk,55.0084,82.9357,0.128\n",
+      "basename": "ground_stations.txt"
+    }
+  }
+}
