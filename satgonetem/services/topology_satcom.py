@@ -5,7 +5,10 @@ Satellites will include a satcom_object, which will correspond to their satcomto
 
 """
 
+import grpc
+
 from satgonetem.traffic.ping_utils import PingResults
+from satgonetem.utils.ip_utils import IPUtils
 from satgonetem.utils.satcom_fix import apply_satcom_fix
 
 apply_satcom_fix()
@@ -18,6 +21,7 @@ from typing import Any, ClassVar, Dict, List, Optional, Type, Union
 import json
 import logging
 import os
+import subprocess
 import time
 
 from satgonetem.models.interface import Interface
@@ -969,6 +973,68 @@ class TopologyManager(
         print(
             f"Completed {len(flows)} ping flows with {errors} errors. Total lost packets: {total_lost_packets}"
         )
+
+    #################### Controller methods / Temporary location ####################
+    def setup_controller_connection(self) -> None:
+        # This is a temporary method to connect the controller switch to the host machine.
+        # In a more complete implementation, this would be handled by the network launcher and HIL manager.
+        # We do ip link to create veth pair
+        # Then move one end to the controller switch container and set it up with an IP address
+
+        ip_link_command = (
+            "sudo ip link add veth-host type veth peer name veth-controller"
+        )
+
+        # Set the host end up
+        ip_link_up_command = "sudo ip link set veth-host up"
+
+        # Grep the OVS container ID from docker container ls output
+        ovs_container_id = subprocess.check_output(
+            r"docker container ls | grep -oE '^[a-f0-9]+ .*\.ovs' | awk '{print $1}'",
+            shell=True,
+            text=True,
+        ).strip()
+
+        move_peer_command = f"sudo ip link set veth-controller netns $(docker inspect -f '{{{{.State.Pid}}}}' {ovs_container_id})"
+        ip_peer_up_command = (
+            f"docker exec {ovs_container_id} ip link set veth-controller up"
+        )
+        add_to_bridge_command = f"docker exec {ovs_container_id} ovs-vsctl add-port Controller veth-controller"
+        ip_addr_host_command = "sudo ip addr add 248.0.0.2/16 dev veth-host"
+
+        # Execute the commands
+        subprocess.run(ip_link_command, shell=True, check=True)
+        subprocess.run(ip_link_up_command, shell=True, check=True)
+
+        subprocess.run(move_peer_command, shell=True, check=True)
+        subprocess.run(ip_peer_up_command, shell=True, check=True)
+        subprocess.run(add_to_bridge_command, shell=True, check=True)
+        subprocess.run(ip_addr_host_command, shell=True, check=True)
+
+    def setup_controller_addressing(self) -> dict[str, str]:
+        # We will have to do addressing for each satellite and ground station
+        controller_ips: dict[str, str] = {}
+
+        for sat in self.get_satellites():
+            ip = self.craft_satellite_ip(sat.id)
+            controller_ips[sat.name] = ip
+            sat.execute_command(f"ip addr add {ip}/16 dev eth{sat.id}")
+        for gnd in self.get_ground_stations():
+            ip = self.craft_satellite_ip(gnd.id)
+            controller_ips[gnd.name] = ip
+            gnd.execute_command(f"ip addr add {ip}/16 dev eth{gnd.id}")
+        return controller_ips
+
+    def craft_satellite_ip(self, satellite_id: int) -> str:
+        # Helper method to craft an IP address for a satellite based on its ID
+        ip = "11111" + f"{0:0>13b}" + f"{satellite_id:0>13b}" + "1"
+        return IPUtils.quaddot(ip)
+
+    def cleanup_controller_connection(self) -> None:
+        # Clean up the veth pair created for controller connection
+        subprocess.run("sudo ip link delete veth-host", shell=True, check=True)
+
+        # Note: The peer end (veth-controller) will be automatically removed when the veth-host is deleted, so we don't need to explicitly delete it.
 
 
 def main():

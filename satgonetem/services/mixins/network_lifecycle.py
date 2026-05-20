@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 class NetworkLifecycleMixin:
     """NetworkLifecycle functionality."""
 
-    def start_gonetem(self) -> float | None:
+    def start_gonetem(self, controller: bool = False) -> float | None:
         """Start GoNetEm by launching containers and wiring links.
 
         Returns:
@@ -51,7 +51,9 @@ class NetworkLifecycleMixin:
             launch_links = active_links
             hil_links = []
 
-        container_time, link_time = launcher.start_containers(launch_nodes, MAX_WORKERS)
+        container_time, link_time = launcher.start_containers(
+            launch_nodes, MAX_WORKERS, controller=controller
+        )
         launcher.wire_links(launch_links, MAX_WORKERS)
 
         if hil is not None:
