@@ -28,8 +28,7 @@ def build_edge_from_link(link: Link) -> dict:
     src_port = interface_source.name
     dst_port = interface_destination.name
 
-    src_mac = 0  # Not implemented yet
-    dst_mac = 0
+    src_mac, src_dst = link.get_mac_addresses()
 
     src_node: Node = link.source
     dst_node: Node = link.target
