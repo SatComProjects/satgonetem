@@ -148,10 +148,10 @@ print(f"Management IP for {sat.name} is {ip}")
 
 ---
 
-### `get_management_interface_id(node_id)`
+### `get_management_interface(node_id)`
 
 ```python
-def get_management_interface_id(self, node_id: int) -> int
+def get_management_interface(self, node_id: int) -> str
 ```
 
 Returns the management interface identifier for a node. The current implementation computes it as `50000 + node_id`. This value is useful when you need a deterministic interface index that does not collide with data-plane interface numbering.
@@ -159,7 +159,7 @@ Returns the management interface identifier for a node. The current implementati
 **Example:**
 
 ```python
-iface_id = tm.get_management_interface_id(sat.id)
+iface_id = tm.get_management_interface(sat.id)
 print(f"Management ifindex = {iface_id}")
 ```
 
@@ -190,20 +190,17 @@ tm.init_routing()
 
 # --- simulation is running, host can reach every node on 248.0.y.x ---
 
+# Get the management IP of Sat87
+ip_address = tm.get_management_ip(87)
+
+# Do something with it from the host....
+
+# Need to bind something in the container to the interface? Get the interface first
+iface_id = tm.get_management_interface(87) # returns eth50087 
+
 # 6. Before teardown, clean up the controller link.
 tm.cleanup_controller_connection()
 
 # 7. Stop GoNetEm and the simulation.
 tm.stop_gonetem()
 ```
-
----
-
-## Naming changes
-
-| Old name | New name | Reason |
-|----------|----------|--------|
-| `craft_controller_ip` | `build_controller_ip` | "Craft" is non-standard; "build" clearly describes address construction. |
-| `craft_satellite_ip` | `build_satellite_ip` | Same as above (this method is also deprecated). |
-
-If you have external scripts or notebooks that call the old names, update them to the new names. No behavioural changes were introduced.
