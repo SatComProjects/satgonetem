@@ -79,6 +79,13 @@ class NetworkConfig:
         satellite_image: Docker image tag used for satellite containers.
         network_launcher: Launcher backend identifier (e.g. "GONETEM").
         gonetem_server: Address of the GoNetem gRPC server.
+        controller_veth_host: Host-side veth interface name for the controller link.
+        controller_veth_peer: Container-side veth interface name for the controller link.
+        controller_host_ip: IPv4 address assigned to the host side of the controller veth.
+        controller_subnet_prefix: Subnet prefix length for controller-plane addresses.
+        controller_bridge_name: Name of the OVS bridge inside the controller container.
+        controller_node_iface_pattern: Python format string for node controller interfaces.
+            Must contain ``{node_id}``.
     """
 
     project_name: Optional[str] = None
@@ -92,6 +99,14 @@ class NetworkConfig:
     network_launcher: str = "GONETEM"
     gonetem_server: str = "localhost:10110"
     use_budget: bool = False
+
+    # Controller connection settings
+    controller_veth_host: str = "veth-host"
+    controller_veth_peer: str = "veth-controller"
+    controller_host_ip: str = "248.0.0.2"
+    controller_subnet_prefix: int = 16
+    controller_bridge_name: str = "Controller"
+    controller_node_iface_pattern: str = "eth{node_id}"
 
 
 class TopologyManager(
@@ -663,6 +678,12 @@ class TopologyManager(
         self.network_launcher = config.network_launcher
         self.gonetem_server = config.gonetem_server
         self.use_budget = config.use_budget
+        self.controller_veth_host = config.controller_veth_host
+        self.controller_veth_peer = config.controller_veth_peer
+        self.controller_host_ip = config.controller_host_ip
+        self.controller_subnet_prefix = config.controller_subnet_prefix
+        self.controller_bridge_name = config.controller_bridge_name
+        self.controller_node_iface_pattern = config.controller_node_iface_pattern
 
     def load_config(self) -> None:
         """No-op: configuration is supplied at construction time via from_satcom()."""
@@ -974,67 +995,279 @@ class TopologyManager(
             f"Completed {len(flows)} ping flows with {errors} errors. Total lost packets: {total_lost_packets}"
         )
 
-    #################### Controller methods / Temporary location ####################
-    def setup_controller_connection(self) -> None:
-        # This is a temporary method to connect the controller switch to the host machine.
-        # In a more complete implementation, this would be handled by the network launcher and HIL manager.
-        # We do ip link to create veth pair
-        # Then move one end to the controller switch container and set it up with an IP address
+    # ------------------------------------------------------------------
+    # Controller connection helpers
+    # ------------------------------------------------------------------
 
-        ip_link_command = (
-            "sudo ip link add veth-host type veth peer name veth-controller"
-        )
+    def _remove_controller_veth(
+        self,
+        veth_host: str,
+        veth_peer: str,
+        bridge: str,
+        ovs_cid: Optional[str] = None,
+    ) -> None:
+        """Idempotently tear down a controller veth pair.
 
-        # Set the host end up
-        ip_link_up_command = "sudo ip link set veth-host up"
-
-        # Grep the OVS container ID from docker container ls output
-        ovs_container_id = subprocess.check_output(
-            r"docker container ls | grep -oE '^[a-f0-9]+ .*\.ovs' | awk '{print $1}'",
-            shell=True,
+        Removes *veth_peer* from the OVS *bridge* inside *ovs_cid* when the
+        container ID is known, then deletes *veth_host* (which also destroys
+        the peer).
+        """
+        if ovs_cid:
+            subprocess.run(
+                [
+                    "docker",
+                    "exec",
+                    ovs_cid,
+                    "ovs-vsctl",
+                    "--if-exists",
+                    "del-port",
+                    bridge,
+                    veth_peer,
+                ],
+                capture_output=True,
+                text=True,
+            )
+        subprocess.run(
+            ["sudo", "ip", "link", "delete", veth_host],
+            capture_output=True,
             text=True,
-        ).strip()
-
-        move_peer_command = f"sudo ip link set veth-controller netns $(docker inspect -f '{{{{.State.Pid}}}}' {ovs_container_id})"
-        ip_peer_up_command = (
-            f"docker exec {ovs_container_id} ip link set veth-controller up"
         )
-        add_to_bridge_command = f"docker exec {ovs_container_id} ovs-vsctl add-port Controller veth-controller"
-        ip_addr_host_command = "sudo ip addr add 248.0.0.2/16 dev veth-host"
 
-        # Execute the commands
-        subprocess.run(ip_link_command, shell=True, check=True)
-        subprocess.run(ip_link_up_command, shell=True, check=True)
+    def setup_controller_connection(self) -> None:
+        """Create a veth pair linking the host to the Controller OVS switch.
 
-        subprocess.run(move_peer_command, shell=True, check=True)
-        subprocess.run(ip_peer_up_command, shell=True, check=True)
-        subprocess.run(add_to_bridge_command, shell=True, check=True)
-        subprocess.run(ip_addr_host_command, shell=True, check=True)
+        The host side is brought up and addressed; the peer side is moved
+        into the OVS container namespace, attached to the Controller bridge,
+        and brought up.
+
+        Raises:
+            RuntimeError: If the OVS container cannot be found or any setup
+                step fails.  A best-effort rollback is attempted on failure.
+        """
+        veth_host = self.controller_veth_host
+        veth_peer = self.controller_veth_peer
+        bridge = self.controller_bridge_name
+        host_ip = self.controller_host_ip
+        prefix = self.controller_subnet_prefix
+
+        result = subprocess.run(
+            ["docker", "ps", "--filter", "name=.ovs", "--format", "{{.ID}}"],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0 or not result.stdout.strip():
+            raise RuntimeError(
+                "Could not find an OVS container (docker filter 'name=.ovs' returned nothing)"
+            )
+        lines = result.stdout.strip().splitlines()
+        ovs_cid = lines[0]
+        if len(lines) > 1:
+            logging.warning(
+                "Multiple OVS containers matched '.ovs'; using first match (%s)",
+                ovs_cid,
+            )
+
+        try:
+            subprocess.run(
+                [
+                    "sudo",
+                    "ip",
+                    "link",
+                    "add",
+                    veth_host,
+                    "type",
+                    "veth",
+                    "peer",
+                    "name",
+                    veth_peer,
+                ],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+
+            subprocess.run(
+                ["sudo", "ip", "link", "set", veth_host, "up"],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+
+            pid_result = subprocess.run(
+                ["docker", "inspect", "-f", "{{.State.Pid}}", ovs_cid],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            pid = pid_result.stdout.strip()
+            subprocess.run(
+                ["sudo", "ip", "link", "set", veth_peer, "netns", pid],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+
+            subprocess.run(
+                ["docker", "exec", ovs_cid, "ip", "link", "set", veth_peer, "up"],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+
+            subprocess.run(
+                [
+                    "docker",
+                    "exec",
+                    ovs_cid,
+                    "ovs-vsctl",
+                    "--may-exist",
+                    "add-port",
+                    bridge,
+                    veth_peer,
+                ],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+
+            subprocess.run(
+                ["sudo", "ip", "addr", "add", f"{host_ip}/{prefix}", "dev", veth_host],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+
+            logging.info(
+                "Controller connection established: %s <-> %s "
+                "(OVS container %s, bridge %s, host IP %s/%d)",
+                veth_host,
+                veth_peer,
+                ovs_cid,
+                bridge,
+                host_ip,
+                prefix,
+            )
+        except subprocess.CalledProcessError as exc:
+            stderr = exc.stderr.strip() if exc.stderr else ""
+            logging.error(
+                "Controller connection setup failed at step %s: %s",
+                exc.cmd,
+                stderr,
+            )
+            try:
+                self._remove_controller_veth(veth_host, veth_peer, bridge, ovs_cid)
+            except Exception as rollback_exc:
+                logging.warning(
+                    "Controller connection rollback also failed: %s", rollback_exc
+                )
+            raise RuntimeError(
+                f"Failed to set up controller connection: {stderr or exc}"
+            ) from exc
 
     def setup_controller_addressing(self) -> dict[str, str]:
-        # We will have to do addressing for each satellite and ground station
-        controller_ips: dict[str, str] = {}
+        """Assign controller-plane IP addresses to all satellites and ground stations.
 
-        for sat in self.get_satellites():
-            ip = self.craft_satellite_ip(sat.id)
-            controller_ips[sat.name] = ip
-            sat.execute_command(f"ip addr add {ip}/16 dev eth{sat.id}")
-        for gnd in self.get_ground_stations():
-            ip = self.craft_satellite_ip(gnd.id)
-            controller_ips[gnd.name] = ip
-            gnd.execute_command(f"ip addr add {ip}/16 dev eth{gnd.id}")
+        Each node receives a unique address derived from its numeric ID on the
+        interface defined by ``controller_node_iface_pattern``.
+
+        Returns:
+            Mapping from node name to assigned IPv4 address.
+
+        Raises:
+            RuntimeError: If one or more nodes could not be addressed.
+        """
+        prefix = self.controller_subnet_prefix
+        iface_pattern = self.controller_node_iface_pattern
+
+        controller_ips: dict[str, str] = {}
+        failures: list[str] = []
+
+        for node in list(self.get_satellites()) + list(self.get_ground_stations()):
+            try:
+                ip = self.craft_controller_ip(node.id)
+                iface = iface_pattern.format(node_id=node.id)
+                node.execute_command(f"ip addr add {ip}/{prefix} dev {iface}")
+                controller_ips[node.name] = ip
+                logging.debug(
+                    "Assigned controller IP %s/%d to %s on %s",
+                    ip,
+                    prefix,
+                    node.name,
+                    iface,
+                )
+            except Exception as exc:
+                logging.error(
+                    "Failed to assign controller IP to %s: %s",
+                    node.name,
+                    exc,
+                )
+                failures.append(node.name)
+
+        if failures:
+            raise RuntimeError(
+                f"Controller addressing failed for {len(failures)} node(s): "
+                f"{', '.join(failures)}"
+            )
+
+        logging.info(
+            "Controller addressing complete for %d node(s)",
+            len(controller_ips),
+        )
         return controller_ips
 
+    def craft_controller_ip(self, node_id: int) -> str:
+        """Craft a controller-plane IPv4 address from a node ID.
+
+        The bit layout is fixed:
+
+          - 5 leading ``1`` bits  → first octet 248
+          - 13 zero bits
+          - 13 bits for *node_id*
+          - 1 trailing ``1`` bit
+
+        Args:
+            node_id: Numeric node identifier. Must fit in 13 bits (0..8191).
+
+        Returns:
+            Quad-dotted IPv4 address string.
+
+        Raises:
+            ValueError: If *node_id* is negative or exceeds 13 bits.
+        """
+        if not isinstance(node_id, int) or node_id < 0 or node_id > 0x1FFF:
+            raise ValueError(
+                f"node_id must be an integer in [0, 8191], got {node_id!r}"
+            )
+        binary = "11111" + f"{0:0>13b}" + f"{node_id:0>13b}" + "1"
+        return IPUtils.quaddot(binary)
+
     def craft_satellite_ip(self, satellite_id: int) -> str:
-        # Helper method to craft an IP address for a satellite based on its ID
-        ip = "11111" + f"{0:0>13b}" + f"{satellite_id:0>13b}" + "1"
-        return IPUtils.quaddot(ip)
+        """Deprecated alias for :meth:`craft_controller_ip`."""
+        return self.craft_controller_ip(satellite_id)
 
     def cleanup_controller_connection(self) -> None:
-        # Clean up the veth pair created for controller connection
-        subprocess.run("sudo ip link delete veth-host", shell=True, check=True)
+        """Remove the controller veth pair and detach it from the OVS bridge."""
+        veth_host = self.controller_veth_host
+        veth_peer = self.controller_veth_peer
+        bridge = self.controller_bridge_name
 
-        # Note: The peer end (veth-controller) will be automatically removed when the veth-host is deleted, so we don't need to explicitly delete it.
+        result = subprocess.run(
+            ["docker", "ps", "--filter", "name=.ovs", "--format", "{{.ID}}"],
+            capture_output=True,
+            text=True,
+        )
+        ovs_cid = None
+        if result.returncode == 0 and result.stdout.strip():
+            lines = result.stdout.strip().splitlines()
+            ovs_cid = lines[0]
+            if len(lines) > 1:
+                logging.warning(
+                    "Multiple OVS containers matched '.ovs'; using first match (%s)",
+                    ovs_cid,
+                )
+
+        self._remove_controller_veth(veth_host, veth_peer, bridge, ovs_cid)
+        logging.info("Controller connection cleaned up (%s)", veth_host)
 
 
 def main():
