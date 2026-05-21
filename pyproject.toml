@@ -41,7 +41,7 @@ dependencies = [
     "astropy>=6.1.7",
     "pyroute2>=0.7.0",
     "yaspin>=3.0.0",
-    "sat_com_topology @ git+https://gitlab.isae-supaero.fr/eqospace/sat-com-topology.git@sat_com_topology_v4#egg=sat_com_topology",
+    "sat_com_topology @ git+https://oauth2:${GITLAB_TOKEN}@gitlab.isae-supaero.fr/eqospace/sat-com-topology.git@sat_com_topology_v5",
     "pytest>=9.0.3",
 ]
 

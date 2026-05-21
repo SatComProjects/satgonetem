@@ -13,7 +13,7 @@ from satgonetem.models.interface import Interface
 from satgonetem.models.node import Node
 from satgonetem.utils.utils import distance_3d_km
 
-from sat_com_model.models import Link as SatComLink
+from sat_com_model.models import Link as SatComLink, GroundObjectLink
 
 # Use a module logger to control verbosity more easily
 logger = logging.getLogger(__name__)
@@ -227,6 +227,12 @@ class Link:
         )  # Convert to meters
 
         new_delay = int((new_distance / 299_792_458) * 1000)  # in ms, speed of light
+
+        if self.satcom_object.type == "GroundObjectLink" and isinstance(self.satcom_object, GroundObjectLink):
+            if self.satcom_object.recorded_latency is not None:
+                new_delay = self.satcom_object.recorded_latency
+            else:
+                new_delay = int((new_distance / 200_000_000) * 1000) # in ms speed of the light inside fiber optic
 
         if new_delay != self.delay:
             self.delay = new_delay

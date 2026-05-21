@@ -328,11 +328,17 @@ class TopologySyncMixin:
             InterSatelliteLinkDirection.UNDEFINED: "Undefined",
         }
 
-        default_capacity_kbps = (
-            self.isl_link_capacity
-            if link_type == "InterSatelliteLink"
-            else self.gnd_link_capacity
-        )
+
+        if link_type == "InterSatelliteLink":
+            default_capacity_kbps = self.isl_link_capacity
+        elif link_type == "GroundStationLink":
+            default_capacity_kbps = self.gnd_link_capacity
+        elif link_type == "UserTerminalLink":
+            default_capacity_kbps = self.gnd_link_capacity
+        elif link_type == "GroundObjectLink":
+            default_capacity_kbps = self.ground_fiber_capacity
+        else:
+            raise TypeError("Unrecognized link type")
 
         link = Link(
             source=link_source,

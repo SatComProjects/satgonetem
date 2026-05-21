@@ -72,6 +72,7 @@ class NetworkConfig:
     update_time: int = 5
     gnd_link_capacity: int = 100000
     isl_link_capacity: int = 100000
+    ground_fiber_capacity: int = 100000
     protocol: str = "ipv4"
     routing: str = "static"
     satellite_image: str = "jariassuarez/sgnt:satellite"
@@ -183,6 +184,7 @@ class TopologyManager(
                 update_time=self.update_time,
                 gnd_link_capacity=self.gnd_link_capacity,
                 isl_link_capacity=self.isl_link_capacity,
+                ground_fiber_capacity=self.ground_fiber_capacity,
                 protocol=self.protocol,
                 routing=self.routing,
                 satellite_image=self.satellite_image,
@@ -372,6 +374,7 @@ class TopologyManager(
         self.update_time = config.update_time
         self.gnd_link_capacity = config.gnd_link_capacity
         self.isl_link_capacity = config.isl_link_capacity
+        self.ground_fiber_capacity = config.ground_fiber_capacity
         self.protocol = config.protocol
         self.routing = config.routing
         self.satellite_image = config.satellite_image
@@ -590,6 +593,7 @@ class TopologyManager(
                     and graph[u][v].get("type") == "InterSatelliteLink"
                 ):
                     graph[u][v]["weight"] = 0.5
+
             elif self.preference in ["latency_prefer_ISLs", "latency_no_preference"]:
                 graph[u][v]["weight"] = graph[u][v].get("distance", 1)
                 if (
@@ -598,13 +602,24 @@ class TopologyManager(
                 ):
                     graph[u][v]["weight"] *= 0.1
 
+                if graph[u][v].get("type") == "GroundObjectLink":
+                    recorded_latency = graph[u][v].get("recorded_latency", None)
+                    if recorded_latency:
+                        graph[u][v]["weight"] = (recorded_latency / 1000) * 200_000 # Convert latency to distance using fround fiber speed
+                    else:
+                        graph[u][v]["weight"] = graph[u][v].get("distance", 1)
+
+                    if self.preference == "latency_prefer_ISLs":
+                        graph[u][v]["weight"] *= 20 # Penalize ground links more when preferring ISLs
+
+
             elif self.preference == "prefer_isl_but_penalize_shell_preference":
                 if self.penalized_shells is None:
                     raise ValueError("No penalized shells provided")
 
                 edge_data = graph[u][v]
-                u_data = graph.nodes(u)
-                v_data = graph.nodes(v)
+                u_data = graph.nodes[u]
+                v_data = graph.nodes[v]
 
                 if edge_data.get("type") == "InterSatelliteLink":
                     if u_data["shell"]["shell_id"] in self.penalized_shells and v_data["shell"]["shell_id"] in self.penalized_shells:
@@ -613,6 +628,17 @@ class TopologyManager(
                         graph[u][v]["weight"] = graph[u][v].get("distance", 1)
                 else:
                     graph[u][v]["weight"] = graph[u][v].get("distance", 1) * 20
+
+                if edge_data.get("type") == "GroundObjectLink":
+                    recorded_latency = edge_data.get("recorded_latency", None)
+                    if recorded_latency:
+                        graph[u][v][
+                            "weight"] = (recorded_latency / 1000) * 200_000 # Convert latency to distance using fround fiber speed
+                    else:
+                        graph[u][v]["weight"] = graph[u][v].get("distance", 1)
+
+                    if self.preference == "latency_prefer_ISLs":
+                        graph[u][v]["weight"] *= 20  # Penalize ground links more when preferring ISLs
 
         return graph
 
