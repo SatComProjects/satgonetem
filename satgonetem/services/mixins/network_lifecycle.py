@@ -147,10 +147,17 @@ class NetworkLifecycleMixin:
 
         return time.perf_counter() - tic
 
-    def set_ip_addresses(self) -> float:
+    def set_ip_addresses(
+        self, satellites: bool = True, ground_stations: bool = True
+    ) -> float:
         """Set IPv4 addresses for all interfaces in the topology."""
         tic: float = time.perf_counter()
-        self.set_ipv4s_for_all_nodes(set_lo=True, max_workers=MAX_WORKERS)
+        self.set_ipv4s_for_all_nodes(
+            set_lo=True,
+            max_workers=MAX_WORKERS,
+            satellites=satellites,
+            ground_stations=ground_stations,
+        )
 
         return time.perf_counter() - tic
 
