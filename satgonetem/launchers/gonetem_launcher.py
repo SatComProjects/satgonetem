@@ -92,14 +92,16 @@ class GoNetEmLauncher(NetworkLauncher):
         # Link from every node to the controller switch with high capacity and low latency
         result = ""
         for sat in satellites:
+            eth_id = 50000 + sat.id
             result += (
-                f" - {{peer1: Controller.{sat.id}, peer2: {sat.name}.{sat.id},"
+                f" - {{peer1: Controller.{sat.id}, peer2: {sat.name}.{eth_id},"
                 f" peer1qos: {{ rate: 1000000, buffer: 10000, jitter: 0, delay: 1}},"
                 f" peer2qos: {{ rate: 1000000, buffer: 10000, jitter: 0, delay: 1}}}} \n"
             )
         for gs in ground_stations:
+            eth_id = 50000 + gs.id
             result += (
-                f" - {{peer1: Controller.{gs.id}, peer2: {gs.name}.{gs.id},"
+                f" - {{peer1: Controller.{gs.id}, peer2: {gs.name}.{eth_id},"
                 f" peer1qos: {{ rate: 1000000, buffer: 10000, jitter: 0, delay: 1}},"
                 f" peer2qos: {{ rate: 1000000, buffer: 10000, jitter: 0, delay: 1}}}} \n"
             )
