@@ -18,6 +18,7 @@ from typing import Any, ClassVar, Dict, List, Optional, Type, Union
 import json
 import logging
 import os
+import subprocess
 import time
 
 from satgonetem.models.interface import Interface
@@ -53,6 +54,7 @@ from satgonetem.services.mixins.simulation_loop import SimulationLoopMixin
 from satgonetem.services.mixins.routing_mgr import RoutingManagerMixin
 from satgonetem.services.mixins.traffic_testing import TrafficTestingMixin
 from satgonetem.services.mixins.diagnostics import DiagnosticsMixin
+from satgonetem.services.mixins.controller import ControllerMixin
 
 
 @dataclass
@@ -75,6 +77,13 @@ class NetworkConfig:
         satellite_image: Docker image tag used for satellite containers.
         network_launcher: Launcher backend identifier (e.g. "GONETEM").
         gonetem_server: Address of the GoNetem gRPC server.
+        controller_veth_host: Host-side veth interface name for the controller link.
+        controller_veth_peer: Container-side veth interface name for the controller link.
+        controller_host_ip: IPv4 address assigned to the host side of the controller veth.
+        controller_subnet_prefix: Subnet prefix length for controller-plane addresses.
+        controller_bridge_name: Name of the OVS bridge inside the controller container.
+        controller_node_iface_pattern: Python format string for node controller interfaces.
+            Must contain ``{node_id}``.
     """
 
     project_name: Optional[str] = None
@@ -89,6 +98,14 @@ class NetworkConfig:
     gonetem_server: str = "localhost:10110"
     use_budget: bool = False
 
+    # Controller connection settings
+    controller_veth_host: str = "veth-host"
+    controller_veth_peer: str = "veth-controller"
+    controller_host_ip: str = "248.0.0.2"
+    controller_subnet_prefix: int = 16
+    controller_bridge_name: str = "Controller"
+    controller_node_iface_pattern: str = "eth{node_id}"
+
 
 class TopologyManager(
     TopologySyncMixin,
@@ -99,6 +116,7 @@ class TopologyManager(
     RoutingManagerMixin,
     TrafficTestingMixin,
     DiagnosticsMixin,
+    ControllerMixin,
 ):
     """Satellite network topology manager.
 
@@ -659,6 +677,12 @@ class TopologyManager(
         self.network_launcher = config.network_launcher
         self.gonetem_server = config.gonetem_server
         self.use_budget = config.use_budget
+        self.controller_veth_host = config.controller_veth_host
+        self.controller_veth_peer = config.controller_veth_peer
+        self.controller_host_ip = config.controller_host_ip
+        self.controller_subnet_prefix = config.controller_subnet_prefix
+        self.controller_bridge_name = config.controller_bridge_name
+        self.controller_node_iface_pattern = config.controller_node_iface_pattern
 
     def load_config(self) -> None:
         """No-op: configuration is supplied at construction time via from_satcom()."""

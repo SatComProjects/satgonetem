@@ -302,4 +302,4 @@ Tests cover models, routing daemons, traffic result parsing, launchers, and proj
 
 ## License
 
-MIT - see `pyproject.toml` for author and contact information.
+GPLv3 - see `pyproject.toml` for author and contact information.

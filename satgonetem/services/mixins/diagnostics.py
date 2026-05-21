@@ -5,20 +5,142 @@ from __future__ import annotations
 import json
 import logging
 import os
+import queue
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import TYPE_CHECKING
+
 from satgonetem.models.ground_station import GroundStation
 from satgonetem.models.link import Link
 from satgonetem.models.satellite import Satellite
 from satgonetem.utils.constants import MAX_WORKERS
 from satgonetem.utils.coverage import coverage_percentage_fast
 
-from typing import TYPE_CHECKING
-
 if TYPE_CHECKING:
+    from typing import Any, Dict, List, Optional, Tuple
+
     from satgonetem.models.node import Node
-    from typing import Any, Dict, List, Optional
+
+
+class NodeTerminal:
+    """Interactive bash terminal on a GoNetEm node via the NodeExec bidirectional stream."""
+
+    def __init__(self, client: Any, project_id: str, node_name: str) -> None:
+        self._client = client
+        self._project_id = project_id
+        self._node_name = node_name
+        self._input_queue: queue.Queue = queue.Queue()
+        self._response_queue: queue.Queue = queue.Queue()
+        self._stream: Any = None
+        self._recv_thread: threading.Thread | None = None
+        self._closed = False
+
+    def _request_generator(self):
+        from satgonetem.proto import netem_pb2
+
+        yield netem_pb2.ExecCltMsg(
+            code=netem_pb2.ExecCltMsg.CMD,
+            prjId=self._project_id,
+            node=self._node_name,
+            cmd=["/bin/bash"],
+            tty=True,
+        )
+
+        while True:
+            msg = self._input_queue.get()
+            if msg is None:
+                break
+            yield msg
+
+    def _recv_loop(self) -> None:
+        try:
+            for response in self._stream:
+                self._response_queue.put(response)
+        except Exception:
+            pass
+        finally:
+            self._response_queue.put(None)
+
+    def __enter__(self) -> "NodeTerminal":
+        self._stream = self._client.NodeExec(self._request_generator())
+        self._recv_thread = threading.Thread(target=self._recv_loop, daemon=True)
+        self._recv_thread.start()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        self.close()
+
+    def send(self, data: bytes | str) -> None:
+        """Send data to the terminal's stdin."""
+        if self._closed:
+            raise RuntimeError("Terminal is closed")
+        from satgonetem.proto import netem_pb2
+
+        if isinstance(data, str):
+            data = data.encode("utf-8")
+        msg = netem_pb2.ExecCltMsg(
+            code=netem_pb2.ExecCltMsg.DATA,
+            prjId=self._project_id,
+            node=self._node_name,
+            data=data,
+        )
+        self._input_queue.put(msg)
+
+    def resize(self, width: int, height: int) -> None:
+        """Resize the TTY."""
+        if self._closed:
+            raise RuntimeError("Terminal is closed")
+        from satgonetem.proto import netem_pb2
+
+        msg = netem_pb2.ExecCltMsg(
+            code=netem_pb2.ExecCltMsg.RESIZE,
+            prjId=self._project_id,
+            node=self._node_name,
+            ttyWidth=width,
+            ttyHeight=height,
+        )
+        self._input_queue.put(msg)
+
+    def close(self) -> None:
+        """Close the terminal session."""
+        if self._closed:
+            return
+        self._closed = True
+        from satgonetem.proto import netem_pb2
+
+        msg = netem_pb2.ExecCltMsg(
+            code=netem_pb2.ExecCltMsg.CLOSE,
+            prjId=self._project_id,
+            node=self._node_name,
+        )
+        self._input_queue.put(msg)
+        self._input_queue.put(None)
+        if self._recv_thread is not None:
+            self._recv_thread.join(timeout=2)
+
+    def read(self, timeout: float | None = None) -> Tuple[str, bytes] | None:
+        """Read the next response from the terminal.
+
+        Args:
+            timeout: Seconds to wait for a response. None means block forever.
+
+        Returns:
+            A tuple of (code, data) where code is 'stdout', 'stderr', 'error',
+            or 'close'. Returns None when the stream has ended.
+        """
+        from satgonetem.proto import netem_pb2
+
+        response = self._response_queue.get(timeout=timeout)
+        if response is None:
+            return None
+        code_map = {
+            netem_pb2.ExecSrvMsg.STDOUT: "stdout",
+            netem_pb2.ExecSrvMsg.STDERR: "stderr",
+            netem_pb2.ExecSrvMsg.ERROR: "error",
+            netem_pb2.ExecSrvMsg.CLOSE: "close",
+        }
+        return code_map.get(response.code, "unknown"), response.data
 
 
 class DiagnosticsMixin:
@@ -340,6 +462,76 @@ class DiagnosticsMixin:
             "ground_stations": len(self.ground_stations),
             "links": len(self.links),
         }
+
+    def open_bash_terminal(self, node: str) -> None:
+        """Open a local terminal window connected to a node's bash shell.
+
+        Spawns a GUI terminal emulator (GNOME Terminal, xterm, etc.) on the
+        host machine.  The terminal runs a small bridge script that opens a
+        bidirectional ``NodeExec`` gRPC stream to the remote node, puts the
+        local PTY into raw mode, and forwards bytes in both directions so that
+        the user gets a fully interactive bash session with proper TTY support
+        (arrow keys, tab completion, Ctrl-C, resize events, etc.).
+
+        Args:
+            node: Name of the node (e.g. ``'Sat0'``, ``'Gnd0'``).
+
+        Raises:
+            ValueError: If the node does not exist in the topology.
+            RuntimeError: If GoNetEm has not been started (no project ID or
+                server address) or if no supported terminal emulator is found.
+        """
+        target_node = self.get_node_by_name(node)
+        if target_node is None:
+            raise ValueError(f"Node '{node}' not found in topology")
+
+        project_id = getattr(self, "project_id", None)
+        server = getattr(self, "gonetem_server", None)
+        if not project_id:
+            raise RuntimeError("Project ID is not set (is GoNetEm running?)")
+        if not server:
+            raise RuntimeError("GoNetEm server address is not set")
+
+        import shutil
+        import subprocess
+        import sys
+
+        python = sys.executable
+        bridge_cmd = [
+            python,
+            "-m",
+            "satgonetem.utils.node_terminal_bridge",
+            server,
+            project_id,
+            node,
+        ]
+
+        # Terminal emulators to try, in order of preference.
+        # Each entry is (command, extra_args_before_cmd).
+        candidates = [
+            ("gnome-terminal", ["--"]),
+            ("xterm", ["-e"]),
+            ("konsole", ["-e"]),
+            ("alacritty", ["-e"]),
+            ("kitty", []),  # kitty takes the command directly
+        ]
+
+        for term, extra in candidates:
+            if shutil.which(term):
+                full_cmd = [term, *extra, *bridge_cmd]
+                subprocess.Popen(
+                    full_cmd,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    start_new_session=True,
+                )
+                logging.info(f"Opened {term} for interactive shell on {node}")
+                return
+
+        raise RuntimeError(
+            "No supported terminal emulator found. "
+            "Install one of: gnome-terminal, xterm, konsole, alacritty, kitty."
+        )
 
     def execute_command_on(self, node: str = "", command: str = "") -> Dict[str, Any]:
         """Execute a command on a specified node and return the output.

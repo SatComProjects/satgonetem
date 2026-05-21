@@ -263,3 +263,39 @@ class Link:
             peer1_capacity in kbps.
         """
         return self.peer1_capacity
+
+    def get_mac_addresses(self) -> tuple[str, str]:
+        """
+        A method that retrieves the MAC addresses of the interfaces on both ends of the link.
+
+        Returns:
+            A tuple containing the MAC addresses of the source and target interfaces, respectively.
+        """
+
+        if not self.peer_interfaces:
+            raise ValueError("No peer interfaces available on this link")
+
+        src_iface_name = f"{self.source.name}.{self.target.id}"
+        dst_iface_name = f"{self.target.name}.{self.source.id}"
+
+        src_iface = None
+        dst_iface = None
+        for iface in self.peer_interfaces:
+            if iface.name == src_iface_name:
+                src_iface = iface
+            elif iface.name == dst_iface_name:
+                dst_iface = iface
+
+        if src_iface is None or dst_iface is None:
+            raise ValueError(
+                "Could not find matching peer interfaces for MAC address lookup"
+            )
+
+        src_mac = self.source.execute_command(
+            f"cat /sys/class/net/{src_iface.get_iname()}/address"
+        )
+        dst_mac = self.target.execute_command(
+            f"cat /sys/class/net/{dst_iface.get_iname()}/address"
+        )
+
+        return src_mac, dst_mac

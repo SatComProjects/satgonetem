@@ -114,15 +114,20 @@ class InterfaceMgrMixin:
             interface.set_ipv4_address()
 
     def set_ipv4s_for_all_nodes(
-        self, set_lo: bool = True, max_workers: int = MAX_WORKERS, sats: bool = True
+        self,
+        set_lo: bool = True,
+        max_workers: int = MAX_WORKERS,
+        satellites: bool = True,
+        ground_stations: bool = True,
     ) -> None:
         """
         Assign IPv4s to every satellite and ground station as fast as possible with a spinner.
         """
         nodes = []
-        if sats:
+        if satellites:
             nodes.extend(self.get_satellites())
-        nodes.extend(self.get_ground_stations())
+        if ground_stations:
+            nodes.extend(self.get_ground_stations())
 
         if not nodes:
             logging.info(

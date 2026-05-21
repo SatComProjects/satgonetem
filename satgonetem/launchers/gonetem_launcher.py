@@ -37,7 +37,12 @@ class GoNetEmLauncher(NetworkLauncher):
         ground_object_capacity_kbps: int = 100_000,
         temp_path: str = "/tmp/",
     ) -> None:
-        super().__init__(project_name, isl_capacity_kbps, gnd_capacity_kbps, ground_object_capacity_kbps)
+        super().__init__(
+            project_name,
+            isl_capacity_kbps,
+            gnd_capacity_kbps,
+            ground_object_capacity_kbps,
+        )
         self._topology_manager = topology_manager
         self._server_address = server_address
         self._temp_path = temp_path
@@ -48,7 +53,9 @@ class GoNetEmLauncher(NetworkLauncher):
 
     # Project file generation
 
-    def get_gonetem_topology(self, fallback: bool = False) -> str:
+    def get_gonetem_topology(
+        self, fallback: bool = False, controller: bool = False
+    ) -> str:
         """Build the GoNetem network.yml content from the current topology."""
         tm = self._topology_manager
         sat_type = "docker.host" if fallback else "docker.satellite"
@@ -60,9 +67,49 @@ class GoNetEmLauncher(NetworkLauncher):
         groundStations = self._write_ground_stations(
             tm.ground_stations.values(), gs_type
         )
+        controller = self._write_controller_switch() if controller else ""
         links = self._write_links(tm.links.values())
+        controller_links = (
+            self._write_controller_switch_links(
+                tm.satellites.values(), tm.ground_stations.values()
+            )
+            if controller
+            else ""
+        )
 
-        return "nodes: \n" + satellites + groundStations + "links: \n" + links
+        return (
+            "nodes: \n"
+            + satellites
+            + groundStations
+            + controller
+            + "links: \n"
+            + links
+            + controller_links
+        )
+
+    @staticmethod
+    def _write_controller_switch_links(satellites, ground_stations) -> str:
+        # Link from every node to the controller switch with high capacity and low latency
+        result = ""
+        for sat in satellites:
+            eth_id = 50000 + sat.id
+            result += (
+                f" - {{peer1: Controller.{sat.id}, peer2: {sat.name}.{eth_id},"
+                f" peer1qos: {{ rate: 1000000, buffer: 10000, jitter: 0, delay: 1}},"
+                f" peer2qos: {{ rate: 1000000, buffer: 10000, jitter: 0, delay: 1}}}} \n"
+            )
+        for gs in ground_stations:
+            eth_id = 50000 + gs.id
+            result += (
+                f" - {{peer1: Controller.{gs.id}, peer2: {gs.name}.{eth_id},"
+                f" peer1qos: {{ rate: 1000000, buffer: 10000, jitter: 0, delay: 1}},"
+                f" peer2qos: {{ rate: 1000000, buffer: 10000, jitter: 0, delay: 1}}}} \n"
+            )
+        return result
+
+    @staticmethod
+    def _write_controller_switch() -> str:
+        return " Controller:\n  type: ovs\n  volumes:\n  - /tmp:/tmp\n"
 
     @staticmethod
     def _write_satellites(satellites, sat_type: str) -> str:
@@ -97,11 +144,11 @@ class GoNetEmLauncher(NetworkLauncher):
             )
         return result
 
-    def generate_project(self, dest_dir: str) -> str:
+    def generate_project(self, dest_dir: str, controller: bool = False) -> str:
         """Write a project.gnet archive to *dest_dir* and return its path."""
         import tempfile
 
-        data = self.get_gonetem_topology()
+        data = self.get_gonetem_topology(controller=controller)
         with tempfile.TemporaryDirectory() as tmp:
             network_yml = os.path.join(tmp, "network.yml")
             with open(network_yml, "w") as fd:
@@ -162,6 +209,7 @@ class GoNetEmLauncher(NetworkLauncher):
         nodes: list,
         workers: int = 64,
         progress_cb: Optional[Callable[[str, int, int], None]] = None,
+        controller: bool = False,
     ) -> tuple[float, float]:
         """Open the project on the GoNetem server and run TopologyRun.
 
@@ -189,7 +237,7 @@ class GoNetEmLauncher(NetworkLauncher):
             )
             sys.exit(1)
 
-        project_file = self.generate_project(self._temp_path)
+        project_file = self.generate_project(self._temp_path, controller=controller)
         with open(project_file, "rb") as fd:
             open_req = netem_pb2.OpenRequest(name=self.project_name, data=fd.read())
         project_id = client.ProjectOpen(open_req).id

@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "SatGoNetem - Satellite Network Emulation Tool"
 readme = "README.md"
 requires-python = ">=3.10"
-license = {text = "MIT"}
+license = {text = "GPLv3"}
 authors = [
     {name = "Juan Arias Suarez", email = "juan.arias-suarez@isae-supaero.fr"},
     {name = "Louis Barbier", email = "louis.barbier@isae-supaero.fr"},
@@ -59,10 +59,10 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "TODO"
-Documentation = "TODO"
-Repository = "TODO"
-Issues = "TODO"
+Homepage = "https://github.com/SatComProjects/"
+Documentation = "https://github.com/SatComProjects/satgonetem/docs"
+Repository = "https://github.com/SatComProjects/satgonetem"
+Issues = "https://github.com/SatComProjects/satgonetem/issues"
 
 [tool.setuptools]
 packages = ["satgonetem"]
