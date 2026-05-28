@@ -31,7 +31,7 @@ setup(
         "psutil>=7.0.0",
         "pandas>=2.3.0",
         "astropy>=6.1.7",
-        "sat_com_topology @ git+https://gitlab.isae-supaero.fr/eqospace/sat-com-topology.git@main#egg=sat_com_topology",
+        "sat_com_topology @ git+https://github.com/SatComProjects/satComTopology.git",
     ],
     classifiers=[
         "Development Status :: 3 - Alpha",
