@@ -150,7 +150,13 @@ class NetworkLifecycleMixin:
     def set_ip_addresses(
         self, satellites: bool = True, ground_stations: bool = True
     ) -> float:
-        """Set IPv4 addresses for all interfaces in the topology."""
+        """Set IPv4 addresses for all interfaces in the topology.
+
+        Args:
+            satellites:  Optinal flag to assign addresses to satellites (defaults to True)
+            ground_stations: Optional flag to assign addresses to ground stations (defaults to True)
+
+        """
         tic: float = time.perf_counter()
         self.set_ipv4s_for_all_nodes(
             set_lo=True,

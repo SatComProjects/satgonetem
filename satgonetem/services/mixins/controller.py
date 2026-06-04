@@ -190,7 +190,6 @@ class ControllerMixin:
             RuntimeError: If one or more nodes could not be addressed.
         """
         prefix = self.controller_subnet_prefix
-        iface_pattern = self.controller_node_iface_pattern
 
         controller_ips: dict[str, str] = {}
         failures: list[str] = []
@@ -198,7 +197,7 @@ class ControllerMixin:
         for node in list(self.get_satellites()) + list(self.get_ground_stations()):
             try:
                 ip = self.build_controller_ip(node.id)
-                iface = iface_pattern.format(node_id=node.id)
+                iface = self.get_management_interface(node.id)
                 node.execute_command(f"ip addr add {ip}/{prefix} dev {iface}")
                 controller_ips[node.name] = ip
                 logging.debug(

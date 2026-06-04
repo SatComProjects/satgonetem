@@ -98,19 +98,7 @@ for name, ip in ips.items():
 
 ---
 
-> **Renamed in this release:** `craft_controller_ip` → `build_controller_ip`. The old name is no longer available.
 
----
-
-### `build_satellite_ip(satellite_id)` *(deprecated)*
-
-```python
-def build_satellite_ip(self, satellite_id: int) -> str
-```
-
-Deprecated alias for `build_controller_ip`. It exists only for backward compatibility and may be removed in a future release.
-
----
 
 ### `cleanup_controller_connection()`
 
