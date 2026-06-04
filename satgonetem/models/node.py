@@ -56,6 +56,7 @@ class Node:
         # New faster way to handle containers
         self.container: docker.models.containers.Container | None = None
         self.container_pid: int | None = None
+        self.image = ""
 
         # gRPC client for GoNetem NodeRun (set by launcher after topology start)
         self.grpc_client: Any = None
