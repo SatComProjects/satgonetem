@@ -157,8 +157,6 @@ class Node:
         finally:
             libc.setns(saved_ns.fileno(), CLONE_NEWNET)
             
-        return interface
-
     def connect_to(self,
                    peer_node: "Node",
                    peer1_name: str,
