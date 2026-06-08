@@ -119,6 +119,48 @@ class Node:
             )
         return decoded
     
+    def create_dummy_interface(self, name: str) -> Interface:
+        """
+        Create a dummy interface inside the node's container namespace.
+        """
+        pid = self.container_pid
+        if pid is None:
+            if self.container is not None:
+                container_pid = self.container.attrs.get("State", {}).get("Pid")
+                if container_pid:
+                    pid = int(container_pid)
+                    self.container_pid = pid
+            if pid is None:
+                raise RuntimeError(
+                    f"Cannot create dummy interface on {self.name}: container PID is not available"
+                )
+
+        libc = ctypes.CDLL("libc.so.6", use_errno=True)
+        saved_ns = open("/proc/self/ns/net", "rb")
+
+        try:
+            with open(f"/proc/{pid}/ns/net", "rb") as ns_fd:
+                CLONE_NEWNET = 0x40000000
+                if libc.setns(ns_fd.fileno(), CLONE_NEWNET) != 0:
+                    errno = ctypes.get_errno()
+                    raise OSError(errno, f"setns failed for PID {pid}")
+
+                with IPRoute() as ipr:
+                    ipr.link("add", ifname=name, kind="dummy")
+
+        except Exception as exc:
+            logging.error(
+                "Failed to create dummy interface %s on %s: %s", name, self.name, exc
+            )
+            raise
+
+        finally:
+            libc.setns(saved_ns.fileno(), CLONE_NEWNET)
+
+        interface = Interface(name=name, iface_type="dummy")
+        self.interfaces.append(interface)
+        return interface
+
     def connect_to(self,
                    peer_node: "Node",
                    peer1_name: str,
@@ -180,7 +222,7 @@ class Node:
             raise
             
         finally:
-            libc.setns(saved_ns.fileno(), CLONE_NEWNET) # Return to original namespace
+            libc.setns(saved_ns.fileno(), CLONE_NEWNET)  # Return to original namespace
 
 
 
