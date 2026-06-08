@@ -147,6 +147,8 @@ class Node:
 
                 with IPRoute() as ipr:
                     ipr.link("add", ifname=name, kind="dummy")
+                    idx = ipr.link_lookup(ifname=name)[0]
+                    ipr.link("set", index=idx, state="up")
 
         except Exception as exc:
             logging.error(
@@ -210,6 +212,17 @@ class Node:
                                 "net_ns_fd": f"/proc/{dst_pid}/ns/net"
                             },
                     )
+                    idx1 = ipr.link_lookup(ifname=peer1_name)[0]
+                    ipr.link("set", index=idx1, state="up")
+            
+            with open(f"/proc/{dst_pid}/ns/net", "rb") as ns_fd:
+                if libc.setns(ns_fd.fileno(), CLONE_NEWNET) != 0:
+                    errno = ctypes.get_errno()
+                    raise OSError(errno, f"setns failed for PID {dst_pid}")
+                
+                with IPRoute() as ipr:
+                    idx2 = ipr.link_lookup(ifname=peer2_name)[0]
+                    ipr.link("set", index=idx2, state="up")
         
         except Exception as exc:
             logging.error(
