@@ -17,6 +17,8 @@ from __future__ import annotations
 import base64
 import logging
 import shlex
+from pyroute2 import IPRoute
+import ctypes
 
 import docker.models
 import docker.models.containers
@@ -116,6 +118,71 @@ class Node:
                 f"Command failed in {self.name} (exit {exit_code}): {decoded}"
             )
         return decoded
+    
+    def connect_to(self,
+                   peer_node: "Node",
+                   peer1_name: str,
+                   peer2_name: str,
+                   ) -> None:
+        
+        # Find src_pid (self) and dst_pid (peer)
+        src_pid = self.container_pid
+        if src_pid is None:
+            if self.container is not None:
+                pid = self.container.attrs.get("State", {}).get("Pid")
+                if pid:
+                    src_pid = int(pid)
+                    self.container_pid = src_pid
+            if src_pid is None:
+                raise RuntimeError(
+                    f"Cannot create interface on {self.name}: container PID is not available"
+                )
+
+        dst_pid = peer_node.container_pid
+        if dst_pid is None:
+            if peer_node.container is not None:
+                pid = peer_node.container.attrs.get("State", {}).get("Pid")
+                if pid:
+                    dst_pid = int(pid)
+                    peer_node.container_pid = dst_pid
+            if dst_pid is None:
+                raise RuntimeError(
+                    f"Cannot create interface on {peer_node.name}: container PID is not available"
+                )
+
+        # We load ctype
+        libc = ctypes.CDLL("libc.so.6", use_errno=True)
+        # We save current namespace
+        saved_ns = open("/proc/self/ns/net", "rb")
+        
+        try:
+            with open(f"/proc/{src_pid}/ns/net", "rb") as ns_fd:
+                CLONE_NEWNET = 0x40000000 # Linux namespace flag for a network namespace from sched.h
+                if libc.setns(ns_fd.fileno(), CLONE_NEWNET) != 0:
+                    errno = ctypes.get_errno()
+                    raise OSError(errno, f"setns failed for PID {src_pid}")
+                
+                with IPRoute() as ipr:
+                    ipr.link(
+                        "add",
+                        ifname=peer1_name,
+                        kind="veth",
+                        peer={
+                                "ifname": peer2_name,
+                                "net_ns_fd": f"/proc/{dst_pid}/ns/net"
+                            },
+                    )
+        
+        except Exception as exc:
+            logging.error(
+                "Failed to create veth %s<->%s: %s", peer1_name, peer2_name, exc
+            )
+            raise
+            
+        finally:
+            libc.setns(saved_ns.fileno(), CLONE_NEWNET) # Return to original namespace
+
+
 
     def execute_command(self, command: str | list[str], detach: bool = False) -> str:
         """
