@@ -17,6 +17,10 @@ from __future__ import annotations
 import base64
 import logging
 import shlex
+
+# Ensure the protobuf dependency for netem_pb2 is loaded first.
+from google.protobuf import empty_pb2  # noqa: F401
+
 from pyroute2 import IPRoute
 import ctypes
 
@@ -257,6 +261,7 @@ class Node:
                 malformed, or the command exits with a non-zero status.
         """
         if self.grpc_client and not detach:
+            import grpc
             from satgonetem.proto import netem_pb2
 
             cmd = self._prepare_command(command)
@@ -265,7 +270,17 @@ class Node:
                 node=self.name,
                 cmd=cmd,
             )
-            response = self.grpc_client.NodeRun(request)
+            try:
+                response = self.grpc_client.NodeRun(request)
+            except grpc.RpcError as exc:
+                if exc.code() == grpc.StatusCode.UNIMPLEMENTED:
+                    logging.warning(
+                        "NodeRun not implemented by GoNetem server for %s; "
+                        "falling back to docker execution",
+                        self.name,
+                    )
+                    return self.execute_command_docker(command, detach)
+                raise
             if response.status.code == netem_pb2.StatusCode.ERROR:
                 raise RuntimeError(
                     f"NodeRun failed for {self.name}: {response.status.error}"
