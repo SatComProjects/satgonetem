@@ -35,6 +35,7 @@ class TestFlowSchedulerSaveResults:
     def test_save_results_false_does_not_retain_results(self):
         flow = _make_flow("flow0")
         flow.results.return_value = "result0"
+        flow._result = "result0"
 
         scheduler = FlowScheduler([flow], max_workers=1, save_results=False)
         scheduler.run()
@@ -44,6 +45,7 @@ class TestFlowSchedulerSaveResults:
         with pytest.raises(RuntimeError, match="save_results=False"):
             scheduler.results(flow)
         assert scheduler.errors() == []
+        assert flow._result is None
 
     def test_save_results_false_still_records_errors(self):
         flow = _make_flow("flow0")

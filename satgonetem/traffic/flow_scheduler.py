@@ -19,7 +19,8 @@ from __future__ import annotations
 import enum
 import threading
 import time
-from concurrent.futures import Future, ThreadPoolExecutor
+from collections import deque
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from threading import Lock
 from typing import TYPE_CHECKING, Callable, Sequence, Union
 
@@ -267,8 +268,15 @@ class FlowScheduler:
                     )
                     progress_thread.start()
 
-                flow_futures: list[tuple[AnyFlow, Future[AnyResult]]] = []
-                for flow in self._flows:
+                pending: set[Future[AnyResult]] = set()
+                flow_deque: deque[AnyFlow] = deque(self._flows)
+                # Once submission starts the sorted list is no longer needed.
+                # Drop the scheduler's reference so it does not keep every
+                # flow object alive in addition to the caller's list.
+                self._flows = []
+
+                while flow_deque:
+                    flow = flow_deque.popleft()
                     wait = (t0 + flow.delay) - time.monotonic()
                     if wait > 0.0:
                         time.sleep(wait)
@@ -280,9 +288,12 @@ class FlowScheduler:
                         self._on_flow_done if self._debug else None,
                         self._flow_timeout_sec,
                     )
-                    flow_futures.append((flow, future))
+                    future._satgonetem_flow = flow
+                    pending.add(future)
 
-                for flow, future in flow_futures:
+                for future in as_completed(pending):
+                    flow: AnyFlow = future._satgonetem_flow
+                    pending.discard(future)
                     exc = future.exception()
                     if exc is not None:
                         if isinstance(exc, Exception):
@@ -297,6 +308,14 @@ class FlowScheduler:
                         completed = future.result()
                         self._results.append(completed)
                         self._result_map[id(flow)] = completed
+                    else:
+                        # Release the memory held by the flow's own result.
+                        # The scheduler was asked not to retain it, and clearing
+                        # it here lets GC reclaim potentially large result
+                        # objects (e.g. iperf3 DataFrames) as soon as the flow
+                        # finishes instead of after the whole schedule.
+                        with flow._lock:
+                            flow._result = None
 
                 if self._debug:
                     progress_event.set()
