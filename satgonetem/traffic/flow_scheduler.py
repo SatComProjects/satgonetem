@@ -141,6 +141,7 @@ class FlowScheduler:
         max_workers: int = 100,
         debug: bool = False,
         flow_timeout_sec: float | None = 180.0,
+        save_results: bool = True,
     ) -> None:
         """
         Args:
@@ -151,6 +152,11 @@ class FlowScheduler:
             flow_timeout_sec: Maximum seconds to wait for each flow to
                 complete before marking it failed. Set to None to disable
                 timeout. Defaults to 180.0.
+            save_results: If False, the scheduler will not keep a reference
+                to each successful flow's result. This dramatically reduces
+                memory usage when running hundreds of thousands or millions
+                of flows, but ``results()`` will not be available after the
+                run. Errors are still recorded. Defaults to True.
 
         Raises:
             ValueError: If max_workers is less than 1.
@@ -165,6 +171,7 @@ class FlowScheduler:
         self._max_workers = max_workers
         self._debug = debug
         self._flow_timeout_sec = flow_timeout_sec
+        self._save_results = save_results
         self._active_flows: dict[str, int] = {}
         self._active_flows_lock = Lock()
         self._results: list[AnyResult] = []
@@ -286,7 +293,7 @@ class FlowScheduler:
                                     f"Flow failed with {type(exc).__name__}: {exc}"
                                 )
                             )
-                    else:
+                    elif self._save_results:
                         completed = future.result()
                         self._results.append(completed)
                         self._result_map[id(flow)] = completed
@@ -353,13 +360,19 @@ class FlowScheduler:
             populated by the underlying tool (iperf3, hping3, ping, etc.).
 
         Raises:
-            RuntimeError: If the scheduler is still running.
+            RuntimeError: If the scheduler is still running or if
+                ``save_results=False`` was passed to the constructor.
             KeyError: If the flow did not complete successfully, was not part
                 of this scheduler, or run() has not been called yet.
         """
         with self._status_lock:
             if self._status == FlowSchedulerStatus.RUNNING:
                 raise RuntimeError("FlowScheduler is still running")
+            if not self._save_results:
+                raise RuntimeError(
+                    "FlowScheduler was created with save_results=False; "
+                    "per-flow results are not retained."
+                )
         try:
             return self._result_map[id(flow)]
         except KeyError:
