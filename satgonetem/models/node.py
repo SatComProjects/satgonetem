@@ -18,6 +18,12 @@ import base64
 import logging
 import shlex
 
+# Ensure the protobuf dependency for netem_pb2 is loaded first.
+from google.protobuf import empty_pb2  # noqa: F401
+
+from pyroute2 import IPRoute
+import ctypes
+
 import docker.models
 import docker.models.containers
 from satgonetem.link_budget.antenna import Antenna
@@ -116,6 +122,122 @@ class Node:
                 f"Command failed in {self.name} (exit {exit_code}): {decoded}"
             )
         return decoded
+    
+    def create_dummy_interface(self, name: str) -> Interface:
+        """
+        Create a dummy interface inside the node's container namespace.
+        """
+        pid = self.container_pid
+        if pid is None:
+            if self.container is not None:
+                container_pid = self.container.attrs.get("State", {}).get("Pid")
+                if container_pid:
+                    pid = int(container_pid)
+                    self.container_pid = pid
+            if pid is None:
+                raise RuntimeError(
+                    f"Cannot create dummy interface on {self.name}: container PID is not available"
+                )
+
+        libc = ctypes.CDLL("libc.so.6", use_errno=True)
+        saved_ns = open("/proc/self/ns/net", "rb")
+
+        try:
+            with open(f"/proc/{pid}/ns/net", "rb") as ns_fd:
+                CLONE_NEWNET = 0x40000000
+                if libc.setns(ns_fd.fileno(), CLONE_NEWNET) != 0:
+                    errno = ctypes.get_errno()
+                    raise OSError(errno, f"setns failed for PID {pid}")
+
+                with IPRoute() as ipr:
+                    ipr.link("add", ifname=name, kind="dummy")
+                    idx = ipr.link_lookup(ifname=name)[0]
+                    ipr.link("set", index=idx, state="up")
+
+        except Exception as exc:
+            logging.error(
+                "Failed to create dummy interface %s on %s: %s", name, self.name, exc
+            )
+            raise
+
+        finally:
+            libc.setns(saved_ns.fileno(), CLONE_NEWNET)
+            
+    def connect_to(self,
+                   peer_node: "Node",
+                   peer1_name: str,
+                   peer2_name: str,
+                   ) -> None:
+        
+        # Find src_pid (self) and dst_pid (peer)
+        src_pid = self.container_pid
+        if src_pid is None:
+            if self.container is not None:
+                pid = self.container.attrs.get("State", {}).get("Pid")
+                if pid:
+                    src_pid = int(pid)
+                    self.container_pid = src_pid
+            if src_pid is None:
+                raise RuntimeError(
+                    f"Cannot create interface on {self.name}: container PID is not available"
+                )
+
+        dst_pid = peer_node.container_pid
+        if dst_pid is None:
+            if peer_node.container is not None:
+                pid = peer_node.container.attrs.get("State", {}).get("Pid")
+                if pid:
+                    dst_pid = int(pid)
+                    peer_node.container_pid = dst_pid
+            if dst_pid is None:
+                raise RuntimeError(
+                    f"Cannot create interface on {peer_node.name}: container PID is not available"
+                )
+
+        # We load ctype
+        libc = ctypes.CDLL("libc.so.6", use_errno=True)
+        # We save current namespace
+        saved_ns = open("/proc/self/ns/net", "rb")
+        
+        try:
+            with open(f"/proc/{src_pid}/ns/net", "rb") as ns_fd:
+                CLONE_NEWNET = 0x40000000 # Linux namespace flag for a network namespace from sched.h
+                if libc.setns(ns_fd.fileno(), CLONE_NEWNET) != 0:
+                    errno = ctypes.get_errno()
+                    raise OSError(errno, f"setns failed for PID {src_pid}")
+                
+                with IPRoute() as ipr:
+                    ipr.link(
+                        "add",
+                        ifname=peer1_name,
+                        kind="veth",
+                        peer={
+                                "ifname": peer2_name,
+                                "net_ns_fd": f"/proc/{dst_pid}/ns/net"
+                            },
+                    )
+                    idx1 = ipr.link_lookup(ifname=peer1_name)[0]
+                    ipr.link("set", index=idx1, state="up")
+            
+            with open(f"/proc/{dst_pid}/ns/net", "rb") as ns_fd:
+                if libc.setns(ns_fd.fileno(), CLONE_NEWNET) != 0:
+                    errno = ctypes.get_errno()
+                    raise OSError(errno, f"setns failed for PID {dst_pid}")
+                
+                with IPRoute() as ipr:
+                    idx2 = ipr.link_lookup(ifname=peer2_name)[0]
+                    ipr.link("set", index=idx2, state="up")
+        
+        except Exception as exc:
+            logging.error(
+                "Failed to create veth %s<->%s: %s", peer1_name, peer2_name, exc
+            )
+            raise
+            
+        finally:
+            libc.setns(saved_ns.fileno(), CLONE_NEWNET)  # Return to original namespace
+
+
 
     def execute_command(self, command: str | list[str], detach: bool = False) -> str:
         """
@@ -139,6 +261,7 @@ class Node:
                 malformed, or the command exits with a non-zero status.
         """
         if self.grpc_client and not detach:
+            import grpc
             from satgonetem.proto import netem_pb2
 
             cmd = self._prepare_command(command)
@@ -147,7 +270,17 @@ class Node:
                 node=self.name,
                 cmd=cmd,
             )
-            response = self.grpc_client.NodeRun(request)
+            try:
+                response = self.grpc_client.NodeRun(request)
+            except grpc.RpcError as exc:
+                if exc.code() == grpc.StatusCode.UNIMPLEMENTED:
+                    logging.warning(
+                        "NodeRun not implemented by GoNetem server for %s; "
+                        "falling back to docker execution",
+                        self.name,
+                    )
+                    return self.execute_command_docker(command, detach)
+                raise
             if response.status.code == netem_pb2.StatusCode.ERROR:
                 raise RuntimeError(
                     f"NodeRun failed for {self.name}: {response.status.error}"

@@ -145,23 +145,20 @@ class LinkOpsMixin:
             logging.debug("Skipping routing update - routing daemon not initialized")
             return
 
-        if self.routing == "dynamic-ospf":
-            self.routing_daemon.update(new_links, max_workers=max_workers)
-            logging.info("Updated FRR OSPF interface status for dynamic routing")
-        elif self.routing == "dynamic-isis":
-            self.routing_daemon.update(new_links, max_workers=max_workers)
-            logging.info("Updated Bird IS-IS SR routing after link changes")
-        elif self.routing == "sr-mpls":
-            self.routing_daemon.update(new_links, max_workers=max_workers)
-            logging.info("Rebuilt SR-MPLS routing after link changes")
+        _builtin_methods = {
+            "dynamic-ospf",
+            "dynamic-isis",
+            "sr-mpls",
+            "static",
+        }
 
-        elif self.routing == "static":
-            # Static routing - recompute Dijkstra paths and update IP routes
-            if self.routing_daemon is None:
-                logging.warning("Static routing update skipped: daemon not initialized")
-                return
+        if self.routing in _builtin_methods or self.routing in self._daemon_registry:
             self.routing_daemon.update(new_links, max_workers=max_workers)
-            logging.info("Rebuilt static IP routing after link changes")
+            logging.info(f"Updated {self.routing} routing after link changes")
+        else:
+            logging.warning(
+                f"Unknown routing method '{self.routing}', skipping routing update"
+            )
 
     def _execute_link_delete(self, link: Link) -> None:
         """Delete a link's veth pair directly via nsenter+ip."""
