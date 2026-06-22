@@ -239,7 +239,7 @@ class Node:
 
 
 
-    def execute_command(self, command: str | list[str], detach: bool = False) -> str:
+    def execute_command(self, command: str | list[str], detach: bool = False, use_docker_cli: bool = False) -> str:
         """
         Execute a command on the node.
 
@@ -260,6 +260,8 @@ class Node:
             RuntimeError: If the node is not ready, the command string is
                 malformed, or the command exits with a non-zero status.
         """
+        if use_docker_cli: #Skip directly to docker
+            return self.execute_command_docker(command, detach)
         if self.grpc_client and not detach:
             import grpc
             from satgonetem.proto import netem_pb2
