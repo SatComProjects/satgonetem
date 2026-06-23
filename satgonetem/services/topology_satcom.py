@@ -911,6 +911,10 @@ class TopologyManager(
         """Return the list of ground stations."""
         return list(self.ground_stations.values())
 
+    def get_links(self) -> List[Link]:
+        """Return the list of links."""
+        return list(self.links.values())
+
     @staticmethod
     def apply_satcom_fix() -> None:
         from satgonetem.utils.satcom_fix import apply_satcom_fix

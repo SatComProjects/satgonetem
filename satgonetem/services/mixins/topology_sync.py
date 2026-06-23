@@ -442,7 +442,7 @@ class TopologySyncMixin:
                 "Source and target must be either Satellite or GroundStation"
             )
 
-    def update_simulation(self) -> None:
+    def update_simulation(self, advance_timestep: bool = True) -> None:
         """
         Advance the simulation by one timestep and apply all topology changes.
 
@@ -469,9 +469,10 @@ class TopologySyncMixin:
         if self.simulation_manager is None:
             raise ValueError("Simulation manager is not set")
 
-        self.current_time_step += 1
-
-        self._update_simulation_manager_time()
+        if advance_timestep:
+            self.current_time_step += 1
+            self._update_simulation_manager_time()
+            
         self._sync_node_positions()
         self._sync_links()
         self._sync_links_to_delete()

@@ -571,3 +571,49 @@ class TestAddressableSatellites:
                 r for r in node.ipv4_routing_table if r.destination == sat0.loopback.ipv4
             ]
             assert len(routes_to_sat0) == 0
+
+
+class TestPopulateDijkstraIgraph:
+    """Correctness tests for the igraph-backed Dijkstra implementation."""
+
+    def test_igraph_version_matches_networkx_on_line_topology(self):
+        """Both backends must install the same routes on the line topology."""
+        topo, gnd0, gnd1, sat0, sat1 = _make_line_topology()
+        daemon = StaticRoutingDaemon(topo)
+        gs_ifaces, sat_ifaces = daemon._prebuild_iface_maps()
+        graph = topo.get_current_graph()
+
+        daemon._populate_dijkstra(
+            graph,
+            [gnd0, gnd1],
+            [sat0, sat1],
+            gs_ifaces,
+            sat_ifaces,
+        )
+        nx_routes = {
+            node.id: sorted(
+                (r.destination, r.target_node, r.gateway, r.interface.name)
+                for r in node.ipv4_routing_table
+            )
+            for node in (gnd0, gnd1, sat0, sat1)
+        }
+
+        for node in (gnd0, gnd1, sat0, sat1):
+            node.ipv4_routing_table.clear()
+
+        daemon._populate_dijkstra_igraph(
+            graph,
+            [gnd0, gnd1],
+            [sat0, sat1],
+            gs_ifaces,
+            sat_ifaces,
+        )
+        ig_routes = {
+            node.id: sorted(
+                (r.destination, r.target_node, r.gateway, r.interface.name)
+                for r in node.ipv4_routing_table
+            )
+            for node in (gnd0, gnd1, sat0, sat1)
+        }
+
+        assert nx_routes == ig_routes

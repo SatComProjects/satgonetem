@@ -315,8 +315,8 @@ class LinkOpsMixin:
         """Remove interfaces from nodes for a single link."""
         try:
             # Remove interfaces from nodes
-            source: Node = link.source
-            target: Node = link.target
+            source = link.source
+            target = link.target
             source.remove_interface_connected_to_node(target)
             target.remove_interface_connected_to_node(source)
         except (AttributeError, KeyError, TypeError) as e:

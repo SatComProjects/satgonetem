@@ -88,6 +88,25 @@ Set the simulation tick interval. Clamped to a minimum of 1 second.
 
 ---
 
+### `simulate_link_failure(links: Link | list[Link]) -> None`
+
+Simulate a link failure by removing one or more links from the current graph.
+
+The method accepts either a single `Link` instance or a list of `Link`
+instances. Each link must wrap a sat_com_model link whose `type` attribute is
+`"InterSatelliteLink"`, `"GroundStationLink"` or `"UserTerminalLink"`.
+The matching removal method is invoked on the underlying
+`SimulationManager` for every supplied link.
+
+**Args**
+- `links` - a `Link` or list of `Link` objects to remove.
+
+**Raises**
+- `AttributeError` - if a link has no `type` attribute or its type is not
+  one of the supported link kinds.
+
+---
+
 ## Addressing and routing
 
 ### `set_IP_addresses() -> float`
@@ -151,6 +170,35 @@ cannot be targeted directly.
 
 **Raises**
 - `ValueError` - if any item is not a `Satellite` instance.
+
+---
+
+## Topology inspection
+
+### `get_satellites() -> List[Satellite]`
+
+Return the list of satellites.
+
+**Returns**
+- `List[Satellite]` - all satellite node objects.
+
+---
+
+### `get_ground_stations() -> List[GroundStation]`
+
+Return the list of ground stations.
+
+**Returns**
+- `List[GroundStation]` - all ground-station node objects.
+
+---
+
+### `get_links() -> List[Link]`
+
+Return the list of links.
+
+**Returns**
+- `List[Link]` - all link objects in the current topology.
 
 ---
 

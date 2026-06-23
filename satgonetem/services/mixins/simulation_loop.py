@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from satgonetem.utils.constants import MAX_WORKERS
@@ -139,3 +140,73 @@ class SimulationLoopMixin:
         """
         if self.routing_daemon is not None and self.get_status():
             self.routing_daemon.update([], max_workers=MAX_WORKERS)
+
+    def simulate_link_failure(self, links: Link | list[Link]) -> None:
+        """
+        Simulate a link failure by removing one or more links from the current graph.
+
+        Each supplied ``Link`` must wrap a sat_com_model link object whose ``type``
+        attribute is one of the supported link kinds. The corresponding removal
+        method on ``self.simulation_manager`` is invoked for every link.
+
+        Args:
+            links: A single ``Link`` instance or a list of ``Link`` instances to
+                remove from the simulation manager.
+
+        Raises:
+            AttributeError: If a link has no ``type`` attribute or its type is not
+                supported.
+        """
+        if not isinstance(links, list):
+            links = [links]
+
+        logging.info(
+            "Simulating link failure for %d link(s) on project '%s'",
+            len(links),
+            getattr(self, "project_name", "unknown"),
+        )
+
+        valid_link_types = (
+            "InterSatelliteLink",
+            "GroundStationLink",
+            "UserTerminalLink",
+        )
+
+        for link in links:
+            satcom_link = getattr(link, "satcom_object", None)
+            link_type = getattr(satcom_link, "type", None)
+            source_name = getattr(getattr(link, "source", None), "name", "unknown")
+            target_name = getattr(getattr(link, "target", None), "name", "unknown")
+
+            if link_type not in valid_link_types:
+                logging.error(
+                    "Cannot simulate failure for link %s -> %s: invalid type '%s'",
+                    source_name,
+                    target_name,
+                    link_type,
+                )
+                raise AttributeError(
+                    "Link has no type attribute or does not have a valid link type"
+                )
+
+            logging.info(
+                "Removing %s between %s and %s",
+                link_type,
+                source_name,
+                target_name,
+            )
+
+            if link_type == "InterSatelliteLink":
+                self.simulation_manager.remove_inter_satellite_link(satcom_link)
+            elif link_type == "GroundStationLink":
+                self.simulation_manager.remove_ground_station_link(satcom_link)
+            elif link_type == "UserTerminalLink":
+                self.simulation_manager.remove_user_terminal_link(satcom_link)
+                
+        self.update_simulation(advance_timestep = False)
+
+        logging.info(
+            "Link failure simulation complete for project '%s' (%d link(s) processed)",
+            getattr(self, "project_name", "unknown"),
+            len(links),
+        )

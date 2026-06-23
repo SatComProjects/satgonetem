@@ -1,4 +1,5 @@
 import numpy as np
+from functools import lru_cache
 
 
 class IPUtils:
@@ -40,15 +41,16 @@ class IPUtils:
         )
 
     @staticmethod
+    @lru_cache(maxsize=4096)
     def is_valid_ipv4(ip: str) -> bool:
         """Check if the given string is a valid IPv4 address."""
         parts = ip.split(".")
         if len(parts) != 4:
             return False
-        for part in parts:
-            if not part.isdigit() or not (0 <= int(part) <= 255):
-                return False
-        return True
+        try:
+            return all(part and 0 <= int(part) <= 255 for part in parts)
+        except ValueError:
+            return False
 
     @staticmethod
     def get_ipv4_address(
@@ -96,29 +98,48 @@ class IPUtils:
         return first_ip, second_ip
 
     @staticmethod
+    @lru_cache(maxsize=4096)
     def ipv4_to_binary(ip_address: str) -> str:
         """Convert an IPv4 address to a 32-bit binary string."""
-        if not IPUtils.is_valid_ipv4(ip_address):
-            raise ValueError("Invalid IPv4 address.")
-
         parts = ip_address.split(".")
-        binary_parts = [f"{int(part):08b}" for part in parts]
-        return "".join(binary_parts)
+        if len(parts) != 4:
+            raise ValueError("Invalid IPv4 address.")
+        try:
+            octets = [int(p) for p in parts]
+        except ValueError:
+            raise ValueError("Invalid IPv4 address.")
+        if any(not 0 <= o <= 255 for o in octets):
+            raise ValueError("Invalid IPv4 address.")
+        return f"{octets[0]:08b}{octets[1]:08b}{octets[2]:08b}{octets[3]:08b}"
 
     @staticmethod
+    @lru_cache(maxsize=4096)
     def summarize_ipv4_address(ip_address: str, prefix: int) -> str:
         """Summarize an IP address with a given prefix length."""
         if not (0 <= prefix <= 32):
             raise ValueError("Prefix must be between 0 and 32.")
-        if not IPUtils.is_valid_ipv4(ip_address):
+
+        parts = ip_address.split(".")
+        if len(parts) != 4:
+            raise ValueError("Invalid IPv4 address.")
+        try:
+            octets = [int(p) for p in parts]
+        except ValueError:
+            raise ValueError("Invalid IPv4 address.")
+        if any(not 0 <= o <= 255 for o in octets):
             raise ValueError("Invalid IPv4 address.")
 
-        binary_ip = IPUtils.ipv4_to_binary(ip_address)
-
-        summarized_ip_binary = binary_ip[:prefix] + "0" * (
-            IPUtils.IPV4_ADDRESS_LENGTH - prefix
+        ip_int = (
+            (octets[0] << 24)
+            | (octets[1] << 16)
+            | (octets[2] << 8)
+            | octets[3]
         )
-
-        summarized_ip = IPUtils.quaddot(summarized_ip_binary)
-        return summarized_ip
-
+        mask = 0xFFFFFFFF << (32 - prefix)
+        ip_int &= mask
+        return (
+            f"{(ip_int >> 24) & 0xFF}."
+            f"{(ip_int >> 16) & 0xFF}."
+            f"{(ip_int >> 8) & 0xFF}."
+            f"{ip_int & 0xFF}"
+        )
