@@ -586,7 +586,6 @@ class TopologyManager(
         self.current_time_step = 0
         self.start_time = self.simulation_manager.time_manager.start_date
         self.end_time = self.simulation_manager.time_manager.end_date
-        self.update_time = 1  # in seconds
 
         # Active network launcher (GoNetEm)
         self.launcher: Optional[NetworkLauncher] = None

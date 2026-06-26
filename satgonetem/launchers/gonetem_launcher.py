@@ -115,7 +115,7 @@ class GoNetEmLauncher(NetworkLauncher):
     def _write_satellites(satellites, sat_type: str) -> str:
         result = ""
         for sat in satellites:
-            image = "juan/sgnt:satellite" if not sat.image else sat.image
+            image = "jariassuarez/sgnt:satellite" if not sat.image else sat.image
             result += f" Sat{sat.id}:\n  type: {sat_type}\n  image: {image}\n  volumes:\n  - /tmp:/tmp\n"
         return result
 
