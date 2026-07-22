@@ -70,8 +70,14 @@ class Interface:
             self.set_ip(local_ip)
             self.peer.set_ip(peer_ip)
 
-    def get_mac_address(self):
+    def get_mac_address(self) -> str | None:
+        """
+        A method that returns the mac address of the interface.
+        Mac Addresses are not configured by default. Call set_mac_address() to set a mac address for the interface.
+        Returns:
+
+        """
         return self.mac_address
 
-    def set_mac_address(self, src_mac_address):
+    def set_mac_address(self, src_mac_address) -> None:
         self.mac_address = src_mac_address
