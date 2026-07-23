@@ -79,5 +79,5 @@ class Interface:
         """
         return self.mac_address
 
-    def set_mac_address(self, src_mac_address) -> None:
-        self.mac_address = src_mac_address
+    def set_mac_address(self, mac_address) -> None:
+        self.mac_address = mac_address
