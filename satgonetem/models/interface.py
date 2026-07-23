@@ -17,6 +17,7 @@ class Interface:
 
         self.type: str = iface_type  # Type of interface, e.g., GndLink or ISL
         self.delay: int = 0
+        self.mac_address: str | None = None
 
     def set_ip(self, ip_address: str) -> None:
         """
@@ -68,3 +69,15 @@ class Interface:
             )
             self.set_ip(local_ip)
             self.peer.set_ip(peer_ip)
+
+    def get_mac_address(self) -> str | None:
+        """
+        A method that returns the mac address of the interface.
+        Mac Addresses are not configured by default. Call set_mac_address() to set a mac address for the interface.
+        Returns:
+
+        """
+        return self.mac_address
+
+    def set_mac_address(self, src_mac_address) -> None:
+        self.mac_address = src_mac_address

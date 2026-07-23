@@ -291,11 +291,18 @@ class Link:
                 "Could not find matching peer interfaces for MAC address lookup"
             )
 
-        src_mac = self.source.execute_command(
-            f"cat /sys/class/net/{src_iface.get_iname()}/address"
-        )
-        dst_mac = self.target.execute_command(
-            f"cat /sys/class/net/{dst_iface.get_iname()}/address"
-        )
+        src_mac_address = src_iface.get_mac_address()
+        if src_mac_address is None:
+            src_mac_address = self.source.execute_command(
+                f"cat /sys/class/net/{src_iface.get_iname()}/address"
+            )
+            src_iface.set_mac_address(src_mac_address)
 
-        return src_mac, dst_mac
+        dst_mac_address = dst_iface.get_mac_address()
+        if dst_mac_address is None:
+            dst_mac_address = self.target.execute_command(
+                f"cat /sys/class/net/{dst_iface.get_iname()}/address"
+            )
+            src_iface.set_mac_address(src_mac_address)
+
+        return src_mac_address, dst_mac_address
