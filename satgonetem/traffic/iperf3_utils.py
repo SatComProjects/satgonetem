@@ -767,8 +767,10 @@ class Iperf3Flow:
             if self._status != FlowStatus.RUNNING:
                 return
         self._stop_event.set()
-        self.source.execute_command("pkill -x iperf3", detach=True)
-        self.destination.execute_command("pkill -x iperf3", detach=True)
+
+        kill_cmd = f"pkill -f 'iperf3 .*-p {self.config.port} ' 2>/dev/null; true"
+        self.source.execute_command(kill_cmd, detach=True)
+        self.destination.execute_command(kill_cmd, detach=True)
         if self._thread is not None:
             self._thread.join(timeout=5.0)
 
@@ -860,6 +862,12 @@ class Iperf3Flow:
         except Exception as exc:
             if self._stop_event.is_set() and raw:
                 print(raw)
+            try:
+                self.destination.execute_command(
+                    f"pkill -f 'iperf3 .*-p {self.config.port} ' 2>/dev/null; true"
+                )
+            except Exception:
+                pass
 
             diagnostics = []
             for label, path, node in (
