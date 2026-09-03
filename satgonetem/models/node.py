@@ -288,10 +288,14 @@ class Node:
                     f"NodeRun failed for {self.name}: {response.status.error}"
                 )
             decoded = response.stdout.decode("utf-8").strip() if response.stdout else ""
+            decoded_err = response.stderr.decode("utf-8").strip() if response.stderr else ""
             self.command_output = decoded
             if response.exitCode != 0:
+                detail = decoded
+                if decoded_err:
+                    detail = f"{decoded}\nstderr: {decoded_err}" if decoded else decoded_err
                 raise RuntimeError(
-                    f"Command failed in {self.name} (exit {response.exitCode}): {decoded}"
+                    f"Command failed in {self.name} (exit {response.exitCode}): {detail}"
                 )
             return decoded
 
