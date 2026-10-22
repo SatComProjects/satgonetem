@@ -300,6 +300,25 @@ pytest tests/ -v
 
 Tests cover models, routing daemons, traffic result parsing, launchers, and project builder utilities. Tests that exercise Docker or network operations require a suitable host environment.
 
+## Citation
+
+If you use this project in your research, please cite:
+
+J. Arias Suarez, L. Barbier, M. Dehez-Clementi and O. Hotescu, "SatGoNetEm: an Open Source Emulator of Satellite Constellations and Non-Terrestrial Networks," 2026 IFIP Networking Conference (IFIP Networking), Lugano, Switzerland, 2026, pp. 1-10, doi: 10.23919/IFIPNetworking70592.2026.11579099. keywords: {Joining processes;Satellites;Modeling;Containers;Emulation;Timing;Grounding;Routing;Low earth orbit satellites;Printing;LSN;network emulation;Docker containers}
+
+```bibtex
+@INPROCEEDINGS{11579099,
+  author={Arias Suarez, Juan and Barbier, Louis and Dehez-Clementi, Marina and Hotescu, Oana},
+  booktitle={2026 IFIP Networking Conference (IFIP Networking)},
+  title={SatGoNetEm: an Open Source Emulator of Satellite Constellations and Non-Terrestrial Networks},
+  year={2026},
+  volume={},
+  number={},
+  pages={1-10},
+  keywords={Joining processes;Satellites;Modeling;Containers;Emulation;Timing;Grounding;Routing;Low earth orbit satellites;Printing;LSN;network emulation;Docker containers},
+  doi={10.23919/IFIPNetworking70592.2026.11579099}}
+```
+
 ## License
 
 GPLv3 - see `pyproject.toml` for author and contact information.
