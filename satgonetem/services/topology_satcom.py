@@ -749,7 +749,7 @@ class TopologyManager(
         for link in self.links.values():
             link.link_budget_config = config
             if link.use_budget and link.type == "GroundStationLink":
-                link.update_link_capacities()
+                link.refresh_link_capacities()
 
     def set_antenna(
         self, nodes: list[Satellite] | list[GroundStation], config: AntennaConfig
@@ -763,6 +763,10 @@ class TopologyManager(
         antenna = config.to_antenna()
         for node in nodes:
             node.antenna = antenna
+
+        for link in self.links.values():
+            if link.use_budget and link.type == "GroundStationLink":
+                link.refresh_link_capacities()
 
     def check_for_updates(self) -> dict:
         """Check for updates in satellites, ground stations, and links.
