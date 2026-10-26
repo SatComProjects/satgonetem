@@ -176,7 +176,7 @@ class TopologySyncMixin:
                 link = self.links.get(key)
                 if link is None:
                     link = self._create_link_from_satcom_link(sat_com_link)
-                    if self.initial_sync or add_anyway:
+                    if (self.initial_sync or add_anyway) and link.is_active:
                         link.to_add = True
                     self.links[key] = link
                     new_count += 1
@@ -185,11 +185,19 @@ class TopologySyncMixin:
                     # leave the wrapper pointing at an object that is no longer
                     # in the simulation manager.
                     link.satcom_object = sat_com_link
-                    link.is_active = getattr(
+                    new_active = getattr(
                         sat_com_link,
                         "is_active",
                         not getattr(sat_com_link, "disabled", False),
                     )
+                    if link.is_active != new_active:
+                        link.is_active = new_active
+                        if new_active:
+                            link.to_add = True
+                            link.to_remove = False
+                        else:
+                            link.to_add = False
+                            link.to_remove = True
                     link.sync_distance_from_satcom_and_delay()
             except Exception as exc:
                 error_count += 1

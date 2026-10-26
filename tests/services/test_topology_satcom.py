@@ -137,6 +137,37 @@ class TestSetAntenna:
         assert sat_node.antenna is gnd_node.antenna
 
 
+class TestGetCurrentGraph:
+    """Routing graph must exclude links that are not active."""
+
+    def test_removes_inactive_ground_station_edge(self, topology_manager):
+        gsl = next(
+            link
+            for link in topology_manager.links.values()
+            if link.type == "GroundStationLink"
+        )
+        u = gsl.source.satcom_object.topology_uniq_id
+        v = gsl.target.satcom_object.topology_uniq_id
+
+        assert topology_manager.get_current_graph().has_edge(u, v)
+
+        gsl.is_active = False
+        assert not topology_manager.get_current_graph().has_edge(u, v)
+
+    def test_removes_disabled_ground_station_edge(self, topology_manager):
+        gsl = next(
+            link
+            for link in topology_manager.links.values()
+            if link.type == "GroundStationLink"
+        )
+        u = gsl.source.satcom_object.topology_uniq_id
+        v = gsl.target.satcom_object.topology_uniq_id
+        gsl.is_active = True
+        gsl.satcom_object.disabled = True
+
+        assert not topology_manager.get_current_graph().has_edge(u, v)
+
+
 class TestSimulateLinkFailure:
     """Tests for TopologyManager.simulate_link_failure()."""
 

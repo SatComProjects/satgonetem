@@ -888,6 +888,33 @@ class TopologyManager(
             enable_export_flows_data=False,
         )
 
+        def wrapper_link(u, v):
+            def ref(node_id):
+                if node_id in self.satellites:
+                    return f"Sat{node_id}"
+                if node_id in self.ground_stations:
+                    return f"Gnd{node_id}"
+                return None
+
+            source, target = ref(u), ref(v)
+            if source is None or target is None:
+                return None
+            return self.links.get(frozenset((source, target)))
+
+        def is_routable(u, v, data):
+            if data.get("disabled", False):
+                return False
+            link = wrapper_link(u, v)
+            return link is None or link.is_active
+
+        graph.remove_edges_from(
+            [
+                (u, v)
+                for u, v, data in graph.edges(data=True)
+                if not is_routable(u, v, data)
+            ]
+        )
+
         for u, v in graph.edges():
             if self.preference in ["hops_prefer_ISLs", "hops_no_preference"]:
                 graph[u][v]["weight"] = 1

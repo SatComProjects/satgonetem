@@ -173,6 +173,8 @@ class GoNetEmLauncher(NetworkLauncher):
     def _write_links(links) -> str:
         result = ""
         for link in links:
+            if not getattr(link, "is_active", True):
+                continue
             delay = max(int(link.delay), 1)
             rate = link.get_capacity()
             burst = rate * 5
