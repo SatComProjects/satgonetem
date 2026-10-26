@@ -227,9 +227,12 @@ class Link:
 
         new_delay = int((new_distance / 299_792_458) * 1000)  # in ms, speed of light
 
+        # Keep the exact distance current even when the rounded delay does not
+        # change; consumers such as routing and diagnostics need the precise
+        # value, not a value quantised to the millisecond delay bucket.
+        self.distance = new_distance
         if new_delay != self.delay:
             self.delay = new_delay
-            self.distance = new_distance
             self.to_update = True
         return None
 

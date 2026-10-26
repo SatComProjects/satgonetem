@@ -31,6 +31,9 @@ if TYPE_CHECKING:
     from satgonetem.models.node import Node
 
 
+_PEER_IFACE_PATTERN = re.compile(r"^(Gnd|Sat)\d+\.\d+$")
+
+
 class StaticRoutingDaemon(RoutingDaemon):
     """Static IP routing daemon.
 
@@ -119,7 +122,6 @@ class StaticRoutingDaemon(RoutingDaemon):
         depending on topology.use_file_routes.
         """
         self._equalize_routing_tables()
-        graph = self.topology.get_current_graph()
         gs_ifaces, sat_ifaces = self._prebuild_iface_maps()
         gs_array = list(self.topology.get_ground_stations())
         sat_array = list(self.topology.get_satellites())
@@ -127,7 +129,10 @@ class StaticRoutingDaemon(RoutingDaemon):
         if self.topology.use_file_routes:
             self._populate_from_file(gs_array, sat_array, gs_ifaces, sat_ifaces)
         else:
-            self._populate_dijkstra_igraph(graph, gs_array, sat_array, gs_ifaces, sat_ifaces)
+            graph = self.topology.get_current_graph()
+            self._populate_dijkstra_igraph(
+                graph, gs_array, sat_array, gs_ifaces, sat_ifaces
+            )
 
     def _apply_satellite_routes(self, max_workers: int = 128) -> None:
         """Apply satellite IPv4 route changes to containers using a diff.
@@ -500,7 +505,7 @@ class StaticRoutingDaemon(RoutingDaemon):
         Returns:
             Dict mapping integer peer_id to Interface objects.
         """
-        pattern = re.compile(r"^(Gnd|Sat)\d+\.\d+$")
+        pattern = _PEER_IFACE_PATTERN
         mapping = {}
         for iface in node.interfaces:
             name = str(iface.name)
