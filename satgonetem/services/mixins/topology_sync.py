@@ -453,7 +453,7 @@ class TopologySyncMixin:
         1. Tick the sat_com time manager.
         2. Sync satellite positions and link states from sat_com_model
            (including marking stale links for removal).
-        3. Execute bulk link operations (add/update/delete) via the launcher.
+        3. Delete stale links, then execute add/update link operations.
         4. Sync emulator interface state to reflect updated link topology.
 
         Returns:
@@ -483,8 +483,17 @@ class TopologySyncMixin:
             1 for link in self.links.values() if getattr(link, "to_remove", False)
         )
 
+        # Delete first: HIL handovers reuse bridge/interface names, so the old
+        # link must be gone before the new one is created.
+        delete_stats = self.bulk_link_operations(to_add=False, to_update=False)
+        self._perform_local_link_operations(to_add=False, to_update=False)
+
         link_stats = self.bulk_link_operations(to_del=False)
         self._perform_local_link_operations(to_del=False)
+
+        link_stats["deleted_count"] = delete_stats["deleted_count"]
+        link_stats["delete_time_total"] = delete_stats["delete_time_total"]
+        link_stats["delete_time_per_link"] = delete_stats["delete_time_per_link"]
 
         if (
             link_stats["added_count"]
@@ -492,12 +501,6 @@ class TopologySyncMixin:
             or pending_delete_count
         ):
             self._update_routing_after_link_changes(link_stats["links_to_add"])
-
-        delete_stats = self.bulk_link_operations(to_add=False, to_update=False)
-        self._perform_local_link_operations(to_add=False, to_update=False)
-        link_stats["deleted_count"] = delete_stats["deleted_count"]
-        link_stats["delete_time_total"] = delete_stats["delete_time_total"]
-        link_stats["delete_time_per_link"] = delete_stats["delete_time_per_link"]
 
         if (
             link_stats["added_count"] > 0
