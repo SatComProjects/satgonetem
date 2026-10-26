@@ -52,7 +52,10 @@ class NetworkLifecycleMixin:
             hil_links = []
 
         container_time, link_time = launcher.start_containers(
-            launch_nodes, MAX_WORKERS, controller=controller
+            launch_nodes,
+            MAX_WORKERS,
+            controller=controller,
+            links=launch_links,
         )
         launcher.wire_links(launch_links, MAX_WORKERS)
 

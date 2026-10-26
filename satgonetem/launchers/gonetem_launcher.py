@@ -53,24 +53,64 @@ class GoNetEmLauncher(NetworkLauncher):
     # Project file generation
 
     def get_gonetem_topology(
-        self, fallback: bool = False, controller: bool = False
+        self,
+        fallback: bool = False,
+        controller: bool = False,
+        nodes: Optional[list] = None,
+        links: Optional[list] = None,
     ) -> str:
-        """Build the GoNetem network.yml content from the current topology."""
+        """Build the GoNetem network.yml content from the current topology.
+
+        Args:
+            fallback: Use host networking instead of the Docker images.
+            controller: Add the controller switch and its links.
+            nodes: Optional filtered node set. When provided, only these
+                satellites/ground stations (and links between them) are
+                serialized. HIL-managed ground stations are excluded by the
+                caller.
+            links: Optional filtered link set. When omitted, all topology
+                links between the selected nodes are used.
+        """
         tm = self._topology_manager
         sat_type = "docker.host" if fallback else "docker.satellite"
         gs_type = (
             "docker.host" if fallback else "docker.satellite"
         )  # Borken if using gndstation TODO fix
 
-        satellites = self._write_satellites(tm.satellites.values(), sat_type)
+        if nodes is None:
+            satellite_nodes = list(tm.satellites.values())
+            ground_station_nodes = list(tm.ground_stations.values())
+            allowed_names = None
+        else:
+            allowed_names = {node.name for node in nodes}
+            satellite_nodes = [
+                sat for sat in tm.satellites.values() if sat.name in allowed_names
+            ]
+            ground_station_nodes = [
+                gs for gs in tm.ground_stations.values() if gs.name in allowed_names
+            ]
+
+        if links is None:
+            link_nodes = tm.links.values()
+        else:
+            link_nodes = links
+        if allowed_names is not None:
+            link_nodes = [
+                link
+                for link in link_nodes
+                if link.source.name in allowed_names
+                and link.target.name in allowed_names
+            ]
+
+        satellites = self._write_satellites(satellite_nodes, sat_type)
         groundStations = self._write_ground_stations(
-            tm.ground_stations.values(), gs_type
+            ground_station_nodes, gs_type
         )
-        controller = self._write_controller_switch() if controller else ""
-        links = self._write_links(tm.links.values())
+        controller_section = self._write_controller_switch() if controller else ""
+        link_section = self._write_links(link_nodes)
         controller_links = (
             self._write_controller_switch_links(
-                tm.satellites.values(), tm.ground_stations.values()
+                satellite_nodes, ground_station_nodes
             )
             if controller
             else ""
@@ -80,9 +120,9 @@ class GoNetEmLauncher(NetworkLauncher):
             "nodes: \n"
             + satellites
             + groundStations
-            + controller
+            + controller_section
             + "links: \n"
-            + links
+            + link_section
             + controller_links
         )
 
@@ -142,11 +182,28 @@ class GoNetEmLauncher(NetworkLauncher):
             )
         return result
 
-    def generate_project(self, dest_dir: str, controller: bool = False) -> str:
-        """Write a project.gnet archive to *dest_dir* and return its path."""
+    def generate_project(
+        self,
+        dest_dir: str,
+        controller: bool = False,
+        nodes: Optional[list] = None,
+        links: Optional[list] = None,
+    ) -> str:
+        """Write a project.gnet archive to *dest_dir* and return its path.
+
+        Args:
+            dest_dir: Directory for the generated archive.
+            controller: Add the controller switch and its links.
+            nodes: Optional filtered node set passed to
+                :meth:`get_gonetem_topology`.
+            links: Optional filtered link set passed to
+                :meth:`get_gonetem_topology`.
+        """
         import tempfile
 
-        data = self.get_gonetem_topology(controller=controller)
+        data = self.get_gonetem_topology(
+            controller=controller, nodes=nodes, links=links
+        )
         with tempfile.TemporaryDirectory() as tmp:
             network_yml = os.path.join(tmp, "network.yml")
             with open(network_yml, "w") as fd:
@@ -208,12 +265,20 @@ class GoNetEmLauncher(NetworkLauncher):
         workers: int = 64,
         progress_cb: Optional[Callable[[str, int, int], None]] = None,
         controller: bool = False,
+        links: Optional[list] = None,
     ) -> tuple[float, float]:
         """Open the project on the GoNetem server and run TopologyRun.
 
         GoNetem starts containers and wires links in a single streaming call,
         so start_containers handles both NODE_START and LINK_SETUP progress.
         wire_links() is therefore a no-op for this launcher.
+
+        Args:
+            nodes: Nodes to launch. HIL-managed nodes must be excluded.
+            workers: Unused; GoNetEm manages its own concurrency.
+            progress_cb: Optional progress callback.
+            controller: Add the controller switch and its links.
+            links: Links to create. HIL-managed links must be excluded.
 
         Returns:
             A tuple of (container_time, link_time) in seconds, where
@@ -238,7 +303,12 @@ class GoNetEmLauncher(NetworkLauncher):
                 self._server_address,
             )
 
-            project_file = self.generate_project(self._temp_path, controller=controller)
+            project_file = self.generate_project(
+                self._temp_path,
+                controller=controller,
+                nodes=nodes,
+                links=links,
+            )
             with open(project_file, "rb") as fd:
                 open_req = netem_pb2.OpenRequest(
                     name=self.project_name, data=fd.read()

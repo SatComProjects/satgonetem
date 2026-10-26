@@ -13,6 +13,42 @@ def _completed(command, returncode=0, stdout="", stderr=""):
     return subprocess.CompletedProcess(command, returncode, stdout, stderr)
 
 
+class FakeLink:
+    """Minimal link object for topology serialization tests."""
+
+    def __init__(self, source, target, delay=10, capacity=1000):
+        self.source = source
+        self.target = target
+        self.delay = delay
+        self.capacity = capacity
+
+    def get_capacity(self):
+        return self.capacity
+
+
+@pytest.fixture
+def topology_with_hil():
+    sat = SimpleNamespace(id=0, name="Sat0", image="satellite-image")
+    gnd = SimpleNamespace(id=0, name="Gnd0", image="gnd-image", type="GroundStation")
+    hil_gnd = SimpleNamespace(
+        id=1, name="Gnd1", image="hil-image", type="GroundStation"
+    )
+    sat_to_gnd = FakeLink(sat, gnd)
+    sat_to_hil = FakeLink(sat, hil_gnd)
+
+    topology_manager = MagicMock()
+    topology_manager.satellites = {sat.id: sat}
+    topology_manager.ground_stations = {
+        gnd.id: gnd,
+        hil_gnd.id: hil_gnd,
+    }
+    topology_manager.links = {
+        frozenset(("Sat0", "Gnd0")): sat_to_gnd,
+        frozenset(("Sat0", "Gnd1")): sat_to_hil,
+    }
+    return topology_manager, sat, gnd, hil_gnd, sat_to_gnd, sat_to_hil
+
+
 @pytest.fixture
 def launcher():
     instance = GoNetEmLauncher(
@@ -195,3 +231,80 @@ def test_force_close_attempts_remove_even_when_stop_fails(launcher):
 
     assert ["docker", "stop", "-t", "0", "id1"] in docker_calls
     assert ["docker", "rm", "id1"] in docker_calls
+
+
+def test_topology_omits_hil_nodes_and_links(topology_with_hil):
+    topology_manager, sat, gnd, _hil_gnd, sat_to_gnd, _sat_to_hil = (
+        topology_with_hil
+    )
+    launcher = GoNetEmLauncher(topology_manager, "localhost:10110", "test")
+
+    yaml = launcher.get_gonetem_topology(
+        nodes=[sat, gnd], links=[sat_to_gnd]
+    )
+
+    assert "Sat0:" in yaml
+    assert "Gnd0:" in yaml
+    assert "Gnd1" not in yaml
+    assert "Sat0.0" in yaml
+    assert "Sat0.1" not in yaml
+
+
+def test_topology_endpoint_filter_drops_links_to_unselected_nodes(topology_with_hil):
+    topology_manager, sat, gnd, _hil_gnd, _sat_to_gnd, _sat_to_hil = (
+        topology_with_hil
+    )
+    launcher = GoNetEmLauncher(topology_manager, "localhost:10110", "test")
+
+    yaml = launcher.get_gonetem_topology(nodes=[sat, gnd])
+
+    assert "Gnd1" not in yaml
+    assert "Sat0.1" not in yaml
+    assert "Gnd0.0" in yaml
+
+
+def test_generate_project_forwards_filtered_sets(topology_with_hil, tmp_path):
+    topology_manager, sat, _gnd, _hil_gnd, _sat_to_gnd, _sat_to_hil = (
+        topology_with_hil
+    )
+    launcher = GoNetEmLauncher(topology_manager, "localhost:10110", "test")
+
+    with patch.object(
+        launcher,
+        "get_gonetem_topology",
+        return_value="nodes: \nlinks: \n",
+    ) as mock_topology:
+        project_file = launcher.generate_project(
+            str(tmp_path), nodes=[sat], links=[]
+        )
+
+    mock_topology.assert_called_once_with(
+        controller=False, nodes=[sat], links=[]
+    )
+    assert project_file.endswith(".gnet")
+
+
+def test_start_containers_passes_filtered_sets_to_project_generation(
+    launcher, tmp_path
+):
+    launcher._request = None
+    project_file = tmp_path / "project.gnet"
+    project_file.write_bytes(b"fake-project")
+    client = launcher._client
+    client.ServerGetVersion.return_value.version = "test"
+    client.ProjectOpen.return_value.id = "abc123"
+    client.TopologyRun.return_value = []
+    nodes = [SimpleNamespace(name="Sat0")]
+    links = [SimpleNamespace(source=nodes[0], target=nodes[0])]
+
+    with patch.object(launcher, "_get_client", return_value=client), patch.object(
+        launcher, "generate_project", return_value=str(project_file)
+    ) as mock_generate, patch.object(launcher, "_attach_containers"):
+        launcher.start_containers(nodes, links=links)
+
+    mock_generate.assert_called_once_with(
+        launcher._temp_path,
+        controller=False,
+        nodes=nodes,
+        links=links,
+    )
