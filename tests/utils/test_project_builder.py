@@ -244,6 +244,29 @@ class TestSimulationManagerHelpers:
         after = len(sim_manager.get_ground_stations())
         assert after == before + 1
 
+    def test_add_custom_ground_station_attaches_existing_domain(self, sim_manager):
+        gs = create_custom_ground_station(
+            "DomainTest",
+            48.0,
+            2.0,
+            0.0,
+            domain="Ground Stations",
+        )
+        add_custom_ground_station(gs, sim_manager)
+
+        assert gs.ground_object_domain is not None
+        assert gs.ground_object_domain.identifier == "Ground Stations"
+        assert gs.ground_object_domain.type == "ground_station"
+
+    def test_add_custom_ground_station_supports_link_updates(self, sim_manager):
+        gs = create_custom_ground_station("LinkUpdateTest", 48.0, 2.0, 0.0)
+        add_custom_ground_station(gs, sim_manager)
+
+        # The documented flow calls this immediately after adding the station.
+        sim_manager.update_ground_station_links()
+
+        assert gs.ground_object_domain is not None
+
     def test_find_satellite_by_name(self, sim_manager):
         sat = _find_satellite_by_name("LEO 0", sim_manager)
         assert sat.satellite_name == "LEO 0"
