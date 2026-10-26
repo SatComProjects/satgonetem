@@ -102,6 +102,40 @@ def test_orbital_model_fast_and_reference_paths_agree():
     assert fast.altitude == pytest.approx(reference.altitude, abs=1.0)
 
 
+def test_non_utc_aware_time_matches_utc_instant():
+    """A non-UTC aware datetime must produce the same position as UTC."""
+    model = PyOrbitalModel(TLE, None)
+    utc_when = datetime.datetime(
+        2026, 5, 6, 12, 34, 56, tzinfo=datetime.timezone.utc
+    )
+    local_when = utc_when.astimezone(
+        datetime.timezone(datetime.timedelta(hours=2))
+    )
+
+    utc_position = model._compute_position_at(utc_when)
+    local_position = model._compute_position_at(local_when)
+
+    assert local_position.latitude == pytest.approx(utc_position.latitude, abs=1e-9)
+    assert local_position.longitude == pytest.approx(
+        utc_position.longitude, abs=1e-9
+    )
+    assert local_position.altitude == pytest.approx(utc_position.altitude, abs=1e-6)
+
+    model.high_precision_positions = True
+    utc_reference = model._compute_position_at(utc_when)
+    local_reference = model._compute_position_at(local_when)
+
+    assert local_reference.latitude == pytest.approx(
+        utc_reference.latitude, abs=1e-9
+    )
+    assert local_reference.longitude == pytest.approx(
+        utc_reference.longitude, abs=1e-9
+    )
+    assert local_reference.altitude == pytest.approx(
+        utc_reference.altitude, abs=1e-6
+    )
+
+
 def test_distance_model_patch_matches_sklearn():
     """Patched scalar haversine must match sklearn's pairwise implementation."""
     apply_satcom_fix()
