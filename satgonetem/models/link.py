@@ -176,7 +176,17 @@ class Link:
             unavailability_percent=unav,
         )
         dl_service = LinkBudgetService(capacity_strategy=ModCodCapacityStrategy())
-        self.peer1_capacity = dl_service.compute_one_way(dl_inputs)
+        dl_capacity = dl_service.compute_one_way(dl_inputs)
+        if dl_capacity > 0:
+            self.peer1_capacity = dl_capacity
+        else:
+            logger.warning(
+                "Downlink budget failed for %s->%s; using default %d kbps",
+                sat.name,
+                gs.name,
+                self.default_capacity_kbps,
+            )
+            self.peer1_capacity = self.default_capacity_kbps
 
         # Uplink (GS → SAT) – Shannon upper bound
         ul_inputs = LinkBudgetInputs(
@@ -193,7 +203,17 @@ class Link:
             unavailability_percent=unav,
         )
         ul_service = LinkBudgetService(capacity_strategy=ShannonCapacityStrategy())
-        self.peer2_capacity = ul_service.compute_one_way(ul_inputs)
+        ul_capacity = ul_service.compute_one_way(ul_inputs)
+        if ul_capacity > 0:
+            self.peer2_capacity = ul_capacity
+        else:
+            logger.warning(
+                "Uplink budget failed for %s->%s; using default %d kbps",
+                gs.name,
+                sat.name,
+                self.default_capacity_kbps,
+            )
+            self.peer2_capacity = self.default_capacity_kbps
 
         logger.info(
             "Link budget %s->%s | elev=%.2f deg, DL=%d kbps, UL=%d kbps",
