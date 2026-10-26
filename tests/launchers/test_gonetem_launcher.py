@@ -292,6 +292,51 @@ def test_topology_endpoint_filter_drops_links_to_unselected_nodes(topology_with_
     assert "Gnd0.0" in yaml
 
 
+def test_set_link_capacities_updates_existing_non_budget_links(launcher):
+    isl = SimpleNamespace(
+        type="InterSatelliteLink",
+        use_budget=False,
+        default_capacity_kbps=1,
+        peer1_capacity=1,
+        peer2_capacity=1,
+    )
+    gsl = SimpleNamespace(
+        type="GroundStationLink",
+        use_budget=False,
+        default_capacity_kbps=1,
+        peer1_capacity=1,
+        peer2_capacity=1,
+    )
+    ground_object = SimpleNamespace(
+        type="GroundObjectLink",
+        use_budget=False,
+        default_capacity_kbps=1,
+        peer1_capacity=1,
+        peer2_capacity=1,
+    )
+    budgeted = SimpleNamespace(
+        type="GroundStationLink",
+        use_budget=True,
+        default_capacity_kbps=1,
+        peer1_capacity=111,
+        peer2_capacity=222,
+    )
+    launcher.update_link = MagicMock()
+
+    launcher.set_link_capacities(
+        500, 300, [isl, gsl, ground_object, budgeted]
+    )
+
+    assert (isl.peer1_capacity, isl.peer2_capacity) == (500, 500)
+    assert (gsl.peer1_capacity, gsl.peer2_capacity) == (300, 300)
+    assert (
+        ground_object.peer1_capacity,
+        ground_object.peer2_capacity,
+    ) == (launcher.ground_object_capacity_kbps, launcher.ground_object_capacity_kbps)
+    assert (budgeted.peer1_capacity, budgeted.peer2_capacity) == (111, 222)
+    assert launcher.update_link.call_count == 4
+
+
 def test_generate_project_forwards_filtered_sets(topology_with_hil, tmp_path):
     topology_manager, sat, _gnd, _hil_gnd, _sat_to_gnd, _sat_to_hil = (
         topology_with_hil
