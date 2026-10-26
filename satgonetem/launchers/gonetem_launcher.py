@@ -10,7 +10,6 @@ since it is the only launcher that needs the GoNetem .gnet format.
 
 import logging
 import os
-import sys
 import tarfile
 import subprocess
 import time
@@ -221,82 +220,132 @@ class GoNetEmLauncher(NetworkLauncher):
             container_time is the elapsed time across all NODE_START events
             and link_time is the elapsed time across all LINK_SETUP events.
         """
-        client = self._get_client()
-
+        project_file = None
         try:
-            version = client.ServerGetVersion(empty_pb2.Empty()).version
+            client = self._get_client()
+
+            try:
+                version = client.ServerGetVersion(empty_pb2.Empty()).version
+            except Exception as exc:
+                raise RuntimeError(
+                    f"GoNetEmLauncher: cannot reach server "
+                    f"{self._server_address}: {exc}"
+                ) from exc
+
             logging.info(
                 "GoNetEmLauncher: connected to GoNetem %s at %s",
                 version,
                 self._server_address,
             )
+
+            project_file = self.generate_project(self._temp_path, controller=controller)
+            with open(project_file, "rb") as fd:
+                open_req = netem_pb2.OpenRequest(
+                    name=self.project_name, data=fd.read()
+                )
+            project_id = getattr(client.ProjectOpen(open_req), "id", "")
+            if not project_id:
+                raise RuntimeError(
+                    "GoNetEmLauncher: ProjectOpen returned an empty project id"
+                )
+            self._request = netem_pb2.ProjectRequest(id=project_id)
+            logging.info("GoNetEmLauncher: project opened with id=%s", project_id)
+
+            node_count = link_count = node_start = link_setup = node_config = 0
+            container_start_t = link_start_t = None
+            container_time = link_time = 0.0
+            try:
+                for msg in client.TopologyRun(self._request):
+                    code = msg.code
+                    if code == netem_pb2.TopologyRunMsg.NODE_COUNT:
+                        node_count = msg.total
+                        if progress_cb:
+                            progress_cb("NODE_COUNT", 0, node_count)
+                    elif code == netem_pb2.TopologyRunMsg.LINK_COUNT:
+                        link_count = msg.total
+                        if progress_cb:
+                            progress_cb("LINK_COUNT", 0, link_count)
+                    elif code == netem_pb2.TopologyRunMsg.NODE_START:
+                        if container_start_t is None:
+                            container_start_t = time.monotonic()
+                        node_start += 1
+                        container_time = time.monotonic() - container_start_t
+                        if progress_cb:
+                            progress_cb("NODE_START", node_start, node_count)
+                    elif code == netem_pb2.TopologyRunMsg.LINK_SETUP:
+                        if link_start_t is None:
+                            link_start_t = time.monotonic()
+                        link_setup += 1
+                        link_time = time.monotonic() - link_start_t
+                        if progress_cb:
+                            progress_cb("LINK_SETUP", link_setup, link_count)
+                    elif code == netem_pb2.TopologyRunMsg.NODE_LOADCONFIG:
+                        node_config += 1
+                        if progress_cb:
+                            progress_cb("NODE_LOADCONFIG", node_config, node_count)
+            except Exception as exc:
+                raise RuntimeError(
+                    f"GoNetEmLauncher: TopologyRun failed: {exc}"
+                ) from exc
+
+            logging.info(
+                "GoNetEmLauncher: topology running (%d nodes, %d links)",
+                node_count,
+                link_count,
+            )
+            if progress_cb:
+                progress_cb("COMPLETED", 0, 0)
+
+            # Expose client/request on topology_manager for callers that need them
+            self._topology_manager.project_id = project_id
+            self._topology_manager.client = client
+            self._topology_manager.request = self._request
+
+            # Attach docker-py container objects and PIDs to each node so that
+            # subsequent operations (exec_run, enable_mpls, FRR init, etc.) work.
+            self._attach_containers(nodes, project_id)
+
+            return (container_time, link_time)
+        except Exception:
+            self._cleanup_failed_start()
+            raise
+        finally:
+            if project_file is not None:
+                try:
+                    os.unlink(project_file)
+                except FileNotFoundError:
+                    pass
+                except OSError as exc:
+                    logging.warning(
+                        "GoNetEmLauncher: could not remove project file %s: %s",
+                        project_file,
+                        exc,
+                    )
+
+    def _close_transport(self) -> None:
+        """Close the gRPC channel and clear client state."""
+        if self._channel is not None:
+            try:
+                self._channel.close()
+            except Exception as exc:
+                logging.warning(
+                    "GoNetEmLauncher: failed to close gRPC channel: %s", exc
+                )
+        self._channel = None
+        self._client = None
+
+    def _cleanup_failed_start(self) -> None:
+        """Best-effort cleanup after a failed start_containers() call."""
+        try:
+            if self._client is not None and self._request is not None:
+                self.force_close_project()
         except Exception as exc:
             logging.error(
-                "GoNetEmLauncher: cannot reach server %s: %s", self._server_address, exc
+                "GoNetEmLauncher: cleanup after failed start failed: %s", exc
             )
-            sys.exit(1)
-
-        project_file = self.generate_project(self._temp_path, controller=controller)
-        with open(project_file, "rb") as fd:
-            open_req = netem_pb2.OpenRequest(name=self.project_name, data=fd.read())
-        project_id = client.ProjectOpen(open_req).id
-        self._request = netem_pb2.ProjectRequest(id=project_id)
-        logging.info("GoNetEmLauncher: project opened with id=%s", project_id)
-
-        node_count = link_count = node_start = link_setup = node_config = 0
-        container_start_t = link_start_t = None
-        container_time = link_time = 0.0
-        try:
-            for msg in client.TopologyRun(self._request):
-                code = msg.code
-                if code == netem_pb2.TopologyRunMsg.NODE_COUNT:
-                    node_count = msg.total
-                    if progress_cb:
-                        progress_cb("NODE_COUNT", 0, node_count)
-                elif code == netem_pb2.TopologyRunMsg.LINK_COUNT:
-                    link_count = msg.total
-                    if progress_cb:
-                        progress_cb("LINK_COUNT", 0, link_count)
-                elif code == netem_pb2.TopologyRunMsg.NODE_START:
-                    if container_start_t is None:
-                        container_start_t = time.monotonic()
-                    node_start += 1
-                    container_time = time.monotonic() - container_start_t
-                    if progress_cb:
-                        progress_cb("NODE_START", node_start, node_count)
-                elif code == netem_pb2.TopologyRunMsg.LINK_SETUP:
-                    if link_start_t is None:
-                        link_start_t = time.monotonic()
-                    link_setup += 1
-                    link_time = time.monotonic() - link_start_t
-                    if progress_cb:
-                        progress_cb("LINK_SETUP", link_setup, link_count)
-                elif code == netem_pb2.TopologyRunMsg.NODE_LOADCONFIG:
-                    node_config += 1
-                    if progress_cb:
-                        progress_cb("NODE_LOADCONFIG", node_config, node_count)
-        except Exception as exc:
-            logging.error("GoNetEmLauncher: TopologyRun failed: %s", exc)
-            sys.exit(1)
-
-        logging.info(
-            "GoNetEmLauncher: topology running (%d nodes, %d links)",
-            node_count,
-            link_count,
-        )
-        if progress_cb:
-            progress_cb("COMPLETED", 0, 0)
-
-        # Expose client/request on topology_manager for callers that need them
-        self._topology_manager.project_id = project_id
-        self._topology_manager.client = client
-        self._topology_manager.request = self._request
-
-        # Attach docker-py container objects and PIDs to each node so that
-        # subsequent operations (exec_run, enable_mpls, FRR init, etc.) work.
-        self._attach_containers(nodes, project_id)
-
-        return (container_time, link_time)
+        finally:
+            self._close_transport()
+            self._request = None
 
     def _attach_containers(self, nodes: list, project_id: str) -> None:
         """Resolve docker-py Container objects and PIDs for each node after TopologyRun."""
@@ -520,7 +569,4 @@ class GoNetEmLauncher(NetworkLauncher):
         except Exception as exc:
             logging.error("GoNetEmLauncher: force_close_project failed: %s", exc)
         finally:
-            if self._channel:
-                self._channel.close()
-                self._channel = None
-                self._client = None
+            self._close_transport()
