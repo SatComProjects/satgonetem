@@ -383,6 +383,56 @@ class TestLinkSyncDistanceAndDelay:
         assert isinstance(link.to_update, bool)
 
 
+class TestLinkCapacityRefresh:
+    """Capacity refreshes must propagate to the emulator when values change."""
+
+    def _make_budget_link(self, sat_node, gnd_node):
+        return Link(
+            source=sat_node,
+            target=gnd_node,
+            distance=550_000.0,
+            type="GroundStationLink",
+            default_capacity_kbps=500,
+            use_budget=True,
+        )
+
+    def test_refresh_marks_to_update_when_capacity_changes(
+        self, sat_node, gnd_node
+    ):
+        link = self._make_budget_link(sat_node, gnd_node)
+        link.to_update = False
+
+        def recompute():
+            link.peer1_capacity = 900
+            link.peer2_capacity = 800
+
+        with patch.object(link, "_compute_budget_capacity", side_effect=recompute):
+            assert link.refresh_link_capacities() is True
+
+        assert link.to_update is True
+
+    def test_refresh_does_not_mark_to_update_when_capacity_is_unchanged(
+        self, sat_node, gnd_node
+    ):
+        link = self._make_budget_link(sat_node, gnd_node)
+        link.to_update = False
+
+        with patch.object(link, "_compute_budget_capacity", return_value=None):
+            assert link.refresh_link_capacities() is False
+
+        assert link.to_update is False
+
+    def test_distance_change_refreshes_budget_capacity(self, sat_node, gnd_node):
+        link = self._make_budget_link(sat_node, gnd_node)
+        link.satcom_object = MagicMock()
+        link.distance = 1.0
+
+        with patch.object(link, "refresh_link_capacities") as mock_refresh:
+            link.sync_distance_from_satcom_and_delay()
+
+        mock_refresh.assert_called_once()
+
+
 class TestLinkUseBudget:
     """Tests for Link.use_budget flag."""
 

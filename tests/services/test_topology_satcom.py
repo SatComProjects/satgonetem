@@ -64,8 +64,60 @@ class TestSetLinkBudgetConfig:
 
         assert link.link_budget_config is cfg
 
+    def test_marks_link_for_update_when_capacity_changes(
+        self, mock_tm, sat_node, gnd_node
+    ):
+        link = Link(
+            source=sat_node,
+            target=gnd_node,
+            distance=550_000.0,
+            type="GroundStationLink",
+            default_capacity_kbps=500,
+            use_budget=True,
+        )
+        link.to_update = False
+        mock_tm.links[frozenset(["Sat0", "Gnd0"])] = link
+
+        def recompute():
+            link.peer1_capacity = 700
+            link.peer2_capacity = 600
+
+        cfg = LinkBudgetConfig(downlink_freq_ghz=20.0, uplink_freq_ghz=15.0)
+        with patch.object(link, "_compute_budget_capacity", side_effect=recompute):
+            mock_tm.set_link_budget_config(cfg)
+
+        assert link.to_update is True
+
 
 class TestSetAntenna:
+    def test_refreshes_budget_capacity_and_marks_link_for_update(
+        self, mock_tm, sat_node, gnd_node
+    ):
+        link = Link(
+            source=sat_node,
+            target=gnd_node,
+            distance=550_000.0,
+            type="GroundStationLink",
+            default_capacity_kbps=500,
+            use_budget=True,
+        )
+        link.to_update = False
+        mock_tm.links[frozenset(["Sat0", "Gnd0"])] = link
+
+        def recompute():
+            link.peer1_capacity = 900
+            link.peer2_capacity = 800
+
+        with patch.object(link, "_compute_budget_capacity", side_effect=recompute):
+            mock_tm.set_antenna(
+                [sat_node, gnd_node],
+                AntennaConfig(diameter=1.0, sspa_output_power_db=40.0),
+            )
+
+        assert link.to_update is True
+        assert link.peer1_capacity == 900
+        assert link.peer2_capacity == 800
+
     def test_creates_antenna_on_all_nodes(self, mock_tm, sat_node, gnd_node):
         cfg = AntennaConfig(diameter=1.0, efficiency=0.6, sspa_output_power_db=40.0)
         mock_tm.set_antenna([sat_node, gnd_node], cfg)

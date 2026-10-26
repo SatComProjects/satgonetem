@@ -78,6 +78,19 @@ class Link:
             self.peer1_capacity = self.default_capacity_kbps
             self.peer2_capacity = self.default_capacity_kbps
 
+    def refresh_link_capacities(self) -> bool:
+        """Recompute capacities and mark the link for update if they changed.
+
+        Returns:
+            True if either peer capacity changed.
+        """
+        before = (self.peer1_capacity, self.peer2_capacity)
+        self.update_link_capacities()
+        changed = (self.peer1_capacity, self.peer2_capacity) != before
+        if changed:
+            self.to_update = True
+        return changed
+
     # ------------------------------------------------------------------
     # Budget helpers (SOLID: thin wrappers around LinkBudgetService)
     # ------------------------------------------------------------------
@@ -215,7 +228,7 @@ class Link:
             )
             self.peer2_capacity = self.default_capacity_kbps
 
-        logger.info(
+        logger.debug(
             "Link budget %s->%s | elev=%.2f deg, DL=%d kbps, UL=%d kbps",
             sat.name,
             gs.name,
@@ -250,10 +263,13 @@ class Link:
         # Keep the exact distance current even when the rounded delay does not
         # change; consumers such as routing and diagnostics need the precise
         # value, not a value quantised to the millisecond delay bucket.
+        distance_changed = new_distance != self.distance
         self.distance = new_distance
         if new_delay != self.delay:
             self.delay = new_delay
             self.to_update = True
+        if distance_changed and self.use_budget and self.type == "GroundStationLink":
+            self.refresh_link_capacities()
         return None
 
     # ------------------------------------------------------------------
