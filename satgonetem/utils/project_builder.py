@@ -660,6 +660,36 @@ def add_mesh_links(
     print(f"Created {created_isls} ISLs, {created_gsls} GSLs")
 
 
+_DATE_FORMAT = "%d/%m/%Y %H:%M:%S"
+
+
+def _resolve_simulation_dates(
+    start_date: str, end_date: str
+) -> tuple[str, str]:
+    """Resolve optional simulation dates.
+
+    An omitted end date is always ten minutes after the effective start date,
+    not ten minutes after the wall clock.
+
+    Args:
+        start_date: Start datetime string, or empty for now.
+        end_date: End datetime string, or empty for start + 10 minutes.
+
+    Returns:
+        Tuple of ``(start_date, end_date)`` in the documented format.
+    """
+    if start_date:
+        start_dt = datetime.strptime(start_date, _DATE_FORMAT)
+    else:
+        start_dt = datetime.now(timezone.utc)
+        start_date = start_dt.strftime(_DATE_FORMAT)
+
+    if not end_date:
+        end_date = (start_dt + timedelta(minutes=10)).strftime(_DATE_FORMAT)
+
+    return start_date, end_date
+
+
 def create_test_project(
     simulation_name: str = "TestConstellation",
     start_date: str = "",
@@ -690,11 +720,7 @@ def create_test_project(
     Raises:
         OSError: If the ground object CSV file cannot be written.
     """
-    now = datetime.now(timezone.utc)  # .replace(second=0, microsecond=0)
-    if not start_date:
-        start_date = now.strftime("%d/%m/%Y %H:%M:%S")
-    if not end_date:
-        end_date = (now + timedelta(minutes=10)).strftime("%d/%m/%Y %H:%M:%S")
+    start_date, end_date = _resolve_simulation_dates(start_date, end_date)
     ground_files_dir = "/tmp/"
     if len(ground_stations_file) == 0:
         ground_stations = [
@@ -783,11 +809,7 @@ def create_empty_project(
     Raises:
         OSError: If the ground object CSV file cannot be written.
     """
-    now = datetime.now(timezone.utc)  # .replace(second=0, microsecond=0)
-    if not start_date:
-        start_date = now.strftime("%d/%m/%Y %H:%M:%S")
-    if not end_date:
-        end_date = (now + timedelta(minutes=10)).strftime("%d/%m/%Y %H:%M:%S")
+    start_date, end_date = _resolve_simulation_dates(start_date, end_date)
 
     return SimulationProperty(
         simulation_name=simulation_name,

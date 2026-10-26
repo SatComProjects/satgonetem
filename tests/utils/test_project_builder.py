@@ -14,6 +14,7 @@ from satgonetem.utils.project_builder import (
     GroundObjectFile,
     GroundStationEntry,
     create_test_project,
+    create_empty_project,
     create_and_load_simulation,
     create_custom_satellite,
     create_custom_ground_station,
@@ -183,6 +184,36 @@ class TestCreateCustomGroundStation:
         )
         assert gs.object_id == 42
         assert gs.domain == "private"
+
+
+class TestSimulationDates:
+    """Tests for default start/end date handling in project builders."""
+
+    def test_test_project_end_date_is_start_plus_ten_minutes(self):
+        project = create_test_project(start_date="01/01/2024 00:00:00")
+
+        assert project.start_date == "01/01/2024 00:00:00"
+        assert project.end_date == "01/01/2024 00:10:00"
+
+    def test_test_project_future_start_date_keeps_end_after_start(self):
+        project = create_test_project(start_date="01/01/2030 12:00:00")
+
+        assert project.start_date == "01/01/2030 12:00:00"
+        assert project.end_date == "01/01/2030 12:10:00"
+
+    def test_test_project_explicit_end_date_is_preserved(self):
+        project = create_test_project(
+            start_date="01/01/2024 00:00:00",
+            end_date="01/01/2024 02:00:00",
+        )
+
+        assert project.end_date == "01/01/2024 02:00:00"
+
+    def test_empty_project_end_date_is_start_plus_ten_minutes(self):
+        project = create_empty_project(start_date="02/02/2025 06:30:00")
+
+        assert project.start_date == "02/02/2025 06:30:00"
+        assert project.end_date == "02/02/2025 06:40:00"
 
 
 class TestSimulationManagerHelpers:
