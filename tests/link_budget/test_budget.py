@@ -1,5 +1,6 @@
 """Tests for satgonetem.link_budget.budget."""
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -30,6 +31,7 @@ def mock_sat():
     node.antenna.gain_db = 35.0
     node.antenna.sspa_output_power_db = 20.0
     node.antenna.losses_db = 1.0
+    node.antenna.calculate_gain_db.return_value = 35.0
     return node
 
 
@@ -99,6 +101,38 @@ class TestComputeOneWayShannonCapacity:
         )
         assert isinstance(capacity, int)
         assert capacity >= 0
+
+    @patch("satgonetem.link_budget.budget.calculate_atmospheric_attenuation_dB")
+    @patch("satgonetem.link_budget.budget.calculate_free_space_loss_db")
+    def test_real_aperture_antennas_use_derived_gain(
+        self, mock_fsl, mock_atm, calculator
+    ):
+        from satgonetem.link_budget.antenna import Antenna
+
+        mock_fsl.return_value = 200.0
+        mock_atm.return_value = (1.0, 0.5, 0.2, 0.2, 0.1)
+
+        tx_antenna = Antenna(
+            diameter=1.0, efficiency=0.6, sspa_output_power_db=40.0
+        )
+        rx_antenna = Antenna(diameter=2.0, efficiency=0.6)
+        assert tx_antenna.gain_db is None
+        assert rx_antenna.gain_db is None
+
+        capacity = calculator.compute_one_way_shannon_capacity(
+            tx_node=SimpleNamespace(antenna=tx_antenna),
+            rx_node=SimpleNamespace(antenna=rx_antenna),
+            frequency_ghz=19.0,
+            distance_km=1000.0,
+            elevation_angle=45.0,
+            gs_lat=0.0,
+            gs_lon=0.0,
+            gs_diameter=2.0,
+            bandwidth_hz=100e6,
+        )
+
+        assert isinstance(capacity, int)
+        assert capacity > 0
 
     def test_no_tx_antenna_returns_zero(self, calculator, mock_gs):
         node = MagicMock()
