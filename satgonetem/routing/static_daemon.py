@@ -654,20 +654,30 @@ class StaticRoutingDaemon(RoutingDaemon):
         return f"route {op} {addr} via {entry.gateway} dev {dev}"
 
     def _emit_batch_commands(self, prev_tbl, curr_tbl) -> list:
-        """Diff prev_tbl vs curr_tbl and return minimal ip route replace commands.
+        """Diff prev_tbl vs curr_tbl and return minimal ip route commands.
+
+        Routes that disappeared must be deleted explicitly; otherwise the
+        kernel keeps forwarding traffic to a next hop that is no longer part
+        of the topology. Deletions are emitted before replacements so a
+        changed next hop cannot leave the stale route behind.
 
         Args:
             prev_tbl: Previous routing table (list of RoutingEntry).
             curr_tbl: Current routing table (list of RoutingEntry).
 
         Returns:
-            List of ip route command strings for new routes only.
+            List of ip route command strings: deletions first, then
+            additions/replacements.
         """
         curr = {self._entry_key(e): e for e in curr_tbl}
         prev = {self._entry_key(e): e for e in prev_tbl}
-        return [
+        removed = [
+            self._route_line("del", e) for k, e in prev.items() if k not in curr
+        ]
+        added = [
             self._route_line("replace", e) for k, e in curr.items() if k not in prev
         ]
+        return removed + added
 
     def _exec_batch(self, device, lines: list) -> None:
         """Execute a list of ip commands in a single batch on a container.
