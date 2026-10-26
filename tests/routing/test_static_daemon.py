@@ -617,3 +617,62 @@ class TestPopulateDijkstraIgraph:
         }
 
         assert nx_routes == ig_routes
+
+
+class TestRouteDiff:
+    """Tests for the incremental route diff emitted by the daemon."""
+
+    def test_removed_destination_emits_delete(self, daemon):
+        stale = make_entry(
+            dst="10.0.0.1", gw="10.1.0.1", iface_name="Sat0.1", prefix=16
+        )
+
+        lines = daemon._emit_batch_commands([stale], [])
+
+        assert lines == ["route del 10.0.0.0/16 via 10.1.0.1 dev eth1"]
+
+    def test_changed_next_hop_deletes_old_route_before_replacing(self, daemon):
+        old = make_entry(
+            dst="10.0.0.1", gw="10.1.0.1", iface_name="Sat0.1", prefix=16
+        )
+        new = make_entry(
+            dst="10.0.0.1", gw="10.1.0.2", iface_name="Sat0.2", prefix=16
+        )
+
+        lines = daemon._emit_batch_commands([old], [new])
+
+        assert lines == [
+            "route del 10.0.0.0/16 via 10.1.0.1 dev eth1",
+            "route replace 10.0.0.0/16 via 10.1.0.2 dev eth2",
+        ]
+
+    def test_added_destination_still_emits_replace(self, daemon):
+        new = make_entry(
+            dst="10.0.0.1", gw="10.1.0.1", iface_name="Sat0.1", prefix=16
+        )
+
+        lines = daemon._emit_batch_commands([], [new])
+
+        assert lines == ["route replace 10.0.0.0/16 via 10.1.0.1 dev eth1"]
+
+    def test_unchanged_table_emits_nothing(self, daemon):
+        entry = make_entry(
+            dst="10.0.0.1", gw="10.1.0.1", iface_name="Sat0.1", prefix=16
+        )
+
+        assert daemon._emit_batch_commands([entry], [entry]) == []
+
+    def test_apply_satellite_routes_executes_stale_route_delete(
+        self, daemon, topology
+    ):
+        node = Node("Sat0")
+        node.ipv4_previous_routing_table = [make_entry()]
+        node.ipv4_routing_table = []
+        topology.satellites = {node.id: node}
+
+        with patch.object(daemon, "_exec_batch") as mock_batch:
+            daemon._apply_satellite_routes(max_workers=1)
+
+        mock_batch.assert_called_once()
+        lines = mock_batch.call_args[0][1]
+        assert lines == ["route del 10.0.0.0/16 via 10.1.0.1 dev eth1"]
