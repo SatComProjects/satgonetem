@@ -16,11 +16,12 @@ def _completed(command, returncode=0, stdout="", stderr=""):
 class FakeLink:
     """Minimal link object for topology serialization tests."""
 
-    def __init__(self, source, target, delay=10, capacity=1000):
+    def __init__(self, source, target, delay=10, capacity=1000, is_active=True):
         self.source = source
         self.target = target
         self.delay = delay
         self.capacity = capacity
+        self.is_active = is_active
 
     def get_capacity(self):
         return self.capacity
@@ -250,6 +251,22 @@ def test_topology_omits_hil_nodes_and_links(topology_with_hil):
     assert "Sat0.1" not in yaml
     assert "type: docker.gndstation" in yaml
     assert "image: gnd-image" in yaml
+
+
+def test_topology_skips_inactive_links(topology_with_hil):
+    topology_manager, sat, gnd, hil_gnd, sat_to_gnd, sat_to_hil = (
+        topology_with_hil
+    )
+    sat_to_hil.is_active = False
+    launcher = GoNetEmLauncher(topology_manager, "localhost:10110", "test")
+
+    yaml = launcher.get_gonetem_topology(
+        nodes=[sat, gnd, hil_gnd],
+        links=[sat_to_gnd, sat_to_hil],
+    )
+
+    assert "Sat0.0" in yaml
+    assert "Sat0.1" not in yaml
 
 
 def test_ground_station_defaults_to_ground_station_image(topology_with_hil):

@@ -19,7 +19,15 @@ class DummySync(TopologySyncMixin):
         return frozenset((source, target))
 
     def _create_link_from_satcom_link(self, sat_com_link):
-        raise AssertionError("unsupported links must not be converted")
+        from unittest.mock import MagicMock
+
+        return SimpleNamespace(
+            is_active=not getattr(sat_com_link, "disabled", False),
+            to_add=False,
+            to_remove=False,
+            satcom_object=sat_com_link,
+            sync_distance_from_satcom_and_delay=MagicMock(),
+        )
 
 
 def test_delete_sync_skips_unsupported_links_and_keeps_supported_ones():
@@ -67,6 +75,66 @@ def test_main_sync_refreshes_existing_satcom_object():
     dummy._sync_links()
 
     assert existing.satcom_object is new_satcom_link
+
+
+def test_main_sync_marks_link_removed_then_readded_on_active_transition():
+    from unittest.mock import MagicMock
+
+    existing = SimpleNamespace(
+        satcom_object=SimpleNamespace(type="GroundStationLink"),
+        is_active=True,
+        to_add=False,
+        to_remove=False,
+        sync_distance_from_satcom_and_delay=MagicMock(),
+    )
+    dummy = DummySync(
+        [
+            SimpleNamespace(
+                source="Sat0",
+                destination="Gnd0",
+                disabled=True,
+            )
+        ],
+        links={frozenset(("Sat0", "Gnd0")): existing},
+    )
+
+    dummy._sync_links()
+    assert existing.is_active is False
+    assert existing.to_remove is True
+    assert existing.to_add is False
+
+    dummy.simulation_manager = SimpleNamespace(
+        get_all_links=lambda: [
+            SimpleNamespace(
+                source="Sat0",
+                destination="Gnd0",
+                disabled=False,
+            )
+        ]
+    )
+    dummy._sync_links()
+    assert existing.is_active is True
+    assert existing.to_remove is False
+    assert existing.to_add is True
+
+
+def test_new_inactive_link_is_not_added_during_initial_sync():
+    dummy = DummySync(
+        [
+            SimpleNamespace(
+                source="Sat0",
+                destination="Gnd0",
+                disabled=True,
+            )
+        ]
+    )
+    dummy.initial_sync = True
+
+    dummy._sync_links()
+
+    created = dummy.links[frozenset(("Sat0", "Gnd0"))]
+    assert created.is_active is False
+    assert created.to_add is False
 
 
 def test_main_sync_survives_unsupported_links():
