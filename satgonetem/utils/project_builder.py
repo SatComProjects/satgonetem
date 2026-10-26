@@ -21,10 +21,12 @@ from sat_com_builder.models import (
 )
 from sat_com_constellation.models import WalkerConstellationProperty
 from sat_com_application.simulation_manager import SimulationManager
+from sat_com_model.exceptions import GroundObjectDomainNotFoundError
 from sat_com_model.models import (
     create_satellite,
     create_ground_station,
     GroundObject as SatComGroundObject,
+    GroundObjectDomain,
     GroundStation as SatComGroundStation,
     Satellite as SatComSatellite,
     InterSatelliteLinkDirection,
@@ -293,22 +295,68 @@ def create_custom_ground_station(
     return gs
 
 
+def _attach_ground_object_domain(
+    ground_object: SatComGroundObject, simulation_manager: SimulationManager
+) -> None:
+    """Attach a compatible ground-object domain to a custom ground object.
+
+    Custom objects created by this module do not belong to a domain yet.  The
+    simulation manager requires one for link updates and strategy resolution.
+    Prefer an existing domain with the requested identifier, then any existing
+    ground-station domain, and create a default one only if the simulation has
+    no domains at all.
+
+    Args:
+        ground_object: Ground object to update in place.
+        simulation_manager: Manager that owns the available domains.
+    """
+    if ground_object.ground_object_domain is not None:
+        return
+
+    domain = None
+    try:
+        domain = simulation_manager.get_ground_object_domain(ground_object.domain)
+    except GroundObjectDomainNotFoundError:
+        pass
+
+    # The ownership ``domain`` string may resolve to a generic domain with no
+    # connectivity strategy; a ground station needs a ground_station domain.
+    if domain is None or getattr(domain, "type", None) != "ground_station":
+        domain = next(
+            (
+                candidate
+                for candidate in simulation_manager.simulation.ground_object_domains
+                if getattr(candidate, "type", None) == "ground_station"
+            ),
+            None,
+        )
+
+    if domain is None:
+        domain = GroundObjectDomain(
+            identifier=ground_object.domain or "default",
+            type="ground_station",
+            ground_to_space_connections_strategy="best-angle-until-disconnection",
+        )
+        simulation_manager.add_ground_object_domain(domain)
+
+    ground_object.ground_object_domain = domain
+
+
 def add_custom_ground_station(
     ground_station: SatComGroundStation, simulation_manager: SimulationManager
 ) -> None:
     """Add a ground station to an existing simulation manager.
 
-    The ground station is appended to the manager but automatic ground-station
-    links are **not** refreshed.  If you want the simulation manager to connect
-    the station to visible satellites automatically, set a
-    `ground_object_domain` on the ground station and call
-    `simulation_manager.update_ground_station_links()` yourself after all
-    stations have been added.
+    The ground station is appended to the manager and attached to a compatible
+    ground-object domain. Automatic ground-station links are **not** refreshed;
+    call `simulation_manager.update_ground_station_links()` after all stations
+    have been added.
 
     Args:
         ground_station: GroundStation instance created by create_custom_ground_station.
         simulation_manager: Active SimulationManager to receive the ground station.
     """
+    _attach_ground_object_domain(ground_station, simulation_manager)
     simulation_manager.add_ground_station(ground_station)
     logging.info(f"Custom ground station {ground_station.topology_uniq_id} added")
 
