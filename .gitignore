@@ -55,6 +55,7 @@ MANIFEST
 sd/
 projects/
 main.py
+BUG_REPORT.md
 
 # Paper things
 paper/
