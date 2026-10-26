@@ -1,10 +1,10 @@
 """Tests for the Link model."""
 
 import pytest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from satgonetem.link_budget.config import LinkBudgetConfig
-from satgonetem.models.link import Link
+from satgonetem.models.link import Link, LinkBudgetService
 from satgonetem.models.node import Node
 from satgonetem.models.interface import Interface
 
@@ -441,6 +441,55 @@ class TestLinkUseBudget:
             use_budget=True,
         )
         assert link.peer1_capacity == 1000
+
+
+class TestLinkBudgetFallback:
+    """Budget failures must fall back to the configured default capacity."""
+
+    def _make_link(self, sat_node, gnd_node, default_capacity_kbps=777):
+        from satgonetem.link_budget.antenna import Antenna
+
+        sat_node.antenna = Antenna(
+            diameter=1.0, efficiency=0.6, sspa_output_power_db=40.0
+        )
+        gnd_node.antenna = Antenna(diameter=2.0, efficiency=0.6)
+        return Link(
+            source=sat_node,
+            target=gnd_node,
+            distance=550_000.0,
+            type="GroundStationLink",
+            default_capacity_kbps=default_capacity_kbps,
+            use_budget=True,
+        )
+
+    def test_both_directions_falling_back_use_default(self, sat_node, gnd_node):
+        with patch.object(
+            LinkBudgetService, "compute_one_way", side_effect=[0, 0]
+        ):
+            link = self._make_link(sat_node, gnd_node)
+
+        assert link.peer1_capacity == 777
+        assert link.peer2_capacity == 777
+
+    def test_single_failed_direction_falls_back_independently(
+        self, sat_node, gnd_node
+    ):
+        with patch.object(
+            LinkBudgetService, "compute_one_way", side_effect=[0, 4321]
+        ):
+            link = self._make_link(sat_node, gnd_node)
+
+        assert link.peer1_capacity == 777
+        assert link.peer2_capacity == 4321
+
+    def test_successful_capacities_are_preserved(self, sat_node, gnd_node):
+        with patch.object(
+            LinkBudgetService, "compute_one_way", side_effect=[1234, 5678]
+        ):
+            link = self._make_link(sat_node, gnd_node)
+
+        assert link.peer1_capacity == 1234
+        assert link.peer2_capacity == 5678
 
 
 class TestLinkBudgetConfigParam:
