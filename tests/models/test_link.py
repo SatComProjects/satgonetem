@@ -265,6 +265,69 @@ class TestLinkUpdateInterfacesState:
         isl_link.update_interfaces_state()
 
 
+class TestLinkElevationAngle:
+    """Regression tests for the elevation angle passed to the link budget."""
+
+    def test_overhead_satellite_returns_ninety_degrees(self, sat_node, gnd_node):
+        link = Link(
+            source=sat_node,
+            target=gnd_node,
+            distance=550_000.0,
+            type="GroundStationLink",
+            default_capacity_kbps=500,
+        )
+
+        assert link._compute_elevation_angle(sat_node, gnd_node) == pytest.approx(
+            90.0, abs=1e-6
+        )
+
+    def test_low_elevation_is_not_inverted(self, sat_node, gnd_node):
+        # At 20 degrees of central angle and 550 km altitude the true
+        # elevation is about 3.19 degrees; the old code returned ~86.8.
+        sat_node.position = {
+            "latitude": 20.0,
+            "longitude": 0.0,
+            "altitude": 550.0,
+        }
+        gnd_node.position = {
+            "latitude": 0.0,
+            "longitude": 0.0,
+            "altitude": 0.0,
+        }
+        link = Link(
+            source=sat_node,
+            target=gnd_node,
+            distance=550_000.0,
+            type="GroundStationLink",
+            default_capacity_kbps=500,
+        )
+
+        elevation = link._compute_elevation_angle(sat_node, gnd_node)
+        assert elevation == pytest.approx(3.1928435, abs=0.01)
+
+    def test_below_horizon_satellite_stays_negative(self, sat_node, gnd_node):
+        sat_node.position = {
+            "latitude": 0.0,
+            "longitude": 180.0,
+            "altitude": 550.0,
+        }
+        gnd_node.position = {
+            "latitude": 0.0,
+            "longitude": 0.0,
+            "altitude": 0.0,
+        }
+        link = Link(
+            source=sat_node,
+            target=gnd_node,
+            distance=20_000_000.0,
+            type="GroundStationLink",
+            default_capacity_kbps=500,
+        )
+
+        elevation = link._compute_elevation_angle(sat_node, gnd_node)
+        assert elevation < 0.0
+
+
 class TestLinkSyncDistanceAndDelay:
     """Tests for Link.sync_distance_from_satcom_and_delay."""
 
