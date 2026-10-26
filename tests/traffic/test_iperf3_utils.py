@@ -366,6 +366,44 @@ class TestIperf3Flow:
         cfg = Iperf3Config(duration=1)
         return Iperf3Flow(src, dst, cfg)
 
+    @pytest.mark.parametrize(
+        "protocol,reverse,bidir,expected_side",
+        [
+            ("TCP", False, False, "source"),
+            ("TCP", True, False, "destination"),
+            ("UDP", False, False, "destination"),
+            ("UDP", True, False, "source"),
+            ("TCP", False, True, "source"),
+            ("UDP", True, True, "source"),
+        ],
+    )
+    def test_json_side_matches_measurement_direction(
+        self, protocol, reverse, bidir, expected_side
+    ):
+        src = _make_node("gs0", "10.0.0.1")
+        dst = _make_node("gs1", "10.0.0.2")
+        cfg = Iperf3Config(
+            protocol=protocol,
+            reverse=reverse,
+            bidir=bidir,
+        )
+        flow = Iperf3Flow(src, dst, cfg)
+
+        preferred, preferred_path, fallback, fallback_path = flow._json_side(
+            "/tmp/client.json", "/tmp/server.json"
+        )
+
+        expected = src if expected_side == "source" else dst
+        other = dst if expected_side == "source" else src
+        assert preferred is expected
+        assert fallback is other
+        assert preferred_path == (
+            "/tmp/client.json" if expected_side == "source" else "/tmp/server.json"
+        )
+        assert fallback_path == (
+            "/tmp/server.json" if expected_side == "source" else "/tmp/client.json"
+        )
+
     def test_initial_status_is_idle(self):
         flow = self._make_flow(_TCP_JSON)
         assert flow.status() == FlowStatus.IDLE
