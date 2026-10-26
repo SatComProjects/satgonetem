@@ -181,6 +181,10 @@ class TopologySyncMixin:
                     self.links[key] = link
                     new_count += 1
                 else:
+                    # Strategies that recreate link objects every tick must not
+                    # leave the wrapper pointing at an object that is no longer
+                    # in the simulation manager.
+                    link.satcom_object = sat_com_link
                     link.is_active = getattr(
                         sat_com_link,
                         "is_active",
