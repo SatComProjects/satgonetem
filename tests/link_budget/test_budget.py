@@ -134,6 +134,42 @@ class TestComputeOneWayShannonCapacity:
         assert isinstance(capacity, int)
         assert capacity > 0
 
+    def test_precomputed_eirp_is_preferred_over_component_formula(self, calculator):
+        from satgonetem.link_budget.antenna import Antenna
+
+        tx_antenna = Antenna(
+            diameter=1.0,
+            efficiency=0.6,
+            sspa_output_power_db=20.0,
+            losses_db=1.0,
+            eirp_db=50.0,
+        )
+        rx_antenna = Antenna(diameter=2.0, efficiency=0.6)
+
+        with patch(
+            "satgonetem.link_budget.budget.calculate_free_space_loss_db",
+            return_value=200.0,
+        ), patch(
+            "satgonetem.link_budget.budget.calculate_atmospheric_attenuation_dB",
+            return_value=(1.0, 0.5, 0.2, 0.2, 0.1),
+        ), patch(
+            "satgonetem.link_budget.budget.calculate_transmitter_eirp"
+        ) as mock_component_eirp:
+            capacity = calculator.compute_one_way_shannon_capacity(
+                tx_node=SimpleNamespace(antenna=tx_antenna),
+                rx_node=SimpleNamespace(antenna=rx_antenna),
+                frequency_ghz=19.0,
+                distance_km=1000.0,
+                elevation_angle=45.0,
+                gs_lat=0.0,
+                gs_lon=0.0,
+                gs_diameter=2.0,
+                bandwidth_hz=100e6,
+            )
+
+        mock_component_eirp.assert_not_called()
+        assert capacity > 0
+
     def test_no_tx_antenna_returns_zero(self, calculator, mock_gs):
         node = MagicMock()
         node.antenna = None
