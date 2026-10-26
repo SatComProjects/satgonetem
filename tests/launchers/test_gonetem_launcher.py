@@ -248,6 +248,35 @@ def test_topology_omits_hil_nodes_and_links(topology_with_hil):
     assert "Gnd1" not in yaml
     assert "Sat0.0" in yaml
     assert "Sat0.1" not in yaml
+    assert "type: docker.gndstation" in yaml
+    assert "image: gnd-image" in yaml
+
+
+def test_ground_station_defaults_to_ground_station_image(topology_with_hil):
+    topology_manager, sat, gnd, _hil_gnd, sat_to_gnd, _sat_to_hil = (
+        topology_with_hil
+    )
+    gnd.image = ""
+    launcher = GoNetEmLauncher(topology_manager, "localhost:10110", "test")
+
+    yaml = launcher.get_gonetem_topology(nodes=[sat, gnd], links=[sat_to_gnd])
+
+    assert "type: docker.gndstation" in yaml
+    assert "image: jariassuarez/sgnt:ground-station" in yaml
+
+
+def test_fallback_uses_docker_host_for_ground_stations(topology_with_hil):
+    topology_manager, sat, gnd, _hil_gnd, sat_to_gnd, _sat_to_hil = (
+        topology_with_hil
+    )
+    launcher = GoNetEmLauncher(topology_manager, "localhost:10110", "test")
+
+    yaml = launcher.get_gonetem_topology(
+        fallback=True, nodes=[sat, gnd], links=[sat_to_gnd]
+    )
+
+    assert yaml.count("type: docker.host") == 2
+    assert "docker.gndstation" not in yaml
 
 
 def test_topology_endpoint_filter_drops_links_to_unselected_nodes(topology_with_hil):
