@@ -43,6 +43,32 @@ def test_delete_sync_skips_unsupported_links_and_keeps_supported_ones():
     assert stale_link.to_remove is True
 
 
+def test_main_sync_refreshes_existing_satcom_object():
+    from unittest.mock import MagicMock
+
+    old_satcom_link = SimpleNamespace(type="GroundStationLink")
+    new_satcom_link = SimpleNamespace(
+        source="Sat0",
+        destination="Gnd0",
+        disabled=False,
+    )
+    existing = SimpleNamespace(
+        satcom_object=old_satcom_link,
+        is_active=True,
+        to_add=False,
+        to_remove=False,
+        sync_distance_from_satcom_and_delay=MagicMock(),
+    )
+    dummy = DummySync(
+        [new_satcom_link],
+        links={frozenset(("Sat0", "Gnd0")): existing},
+    )
+
+    dummy._sync_links()
+
+    assert existing.satcom_object is new_satcom_link
+
+
 def test_main_sync_survives_unsupported_links():
     unsupported = SimpleNamespace(source="UT0", destination="Sat1")
     dummy = DummySync([unsupported])
