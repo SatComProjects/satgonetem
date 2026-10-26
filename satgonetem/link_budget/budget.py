@@ -149,22 +149,23 @@ class LinkBudgetCalculator:
             return 0
 
         try:
-            ant.calculate_gain_db(frequency_ghz)
+            gdb = ant.calculate_gain_db(frequency_ghz)
         except (AttributeError, TypeError, ValueError):
-            pass
+            gdb = getattr(ant, "gain_db", None)
+        gdb = gdb if gdb is not None else 0.0
 
-        gdb = getattr(ant, "gain_db", 0.0)
         sspa = getattr(ant, "sspa_output_power_db", 0.0)
         losses = getattr(ant, "losses_db", 0.0)
         eirp_db = calculate_transmitter_eirp(sspa, gdb, losses)
 
         rx_ant = getattr(rx_node, "antenna", None)
+        rx_gain_db = 0.0
         if rx_ant is not None:
             try:
-                rx_ant.calculate_gain_db(frequency_ghz)
+                rx_gain_db = rx_ant.calculate_gain_db(frequency_ghz)
             except (AttributeError, TypeError, ValueError):
-                pass
-        rx_gain_db = getattr(rx_ant, "gain_db", 0.0)
+                rx_gain_db = getattr(rx_ant, "gain_db", None)
+            rx_gain_db = rx_gain_db if rx_gain_db is not None else 0.0
         g_over_t_db = rx_gain_db - linear_to_db(self.rx_tsys_k)
 
         fsl_db = calculate_free_space_loss_db(frequency_ghz, distance_km)
