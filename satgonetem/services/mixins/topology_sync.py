@@ -219,7 +219,19 @@ class TopologySyncMixin:
 
         current_keys = set()
         for sat_com_link in links:
-            key = self._build_link_key(sat_com_link.source, sat_com_link.destination)
+            source = getattr(sat_com_link, "source", None)
+            destination = getattr(sat_com_link, "destination", None)
+            if not source or not destination:
+                continue
+            try:
+                key = self._build_link_key(source, destination)
+            except ValueError as exc:
+                logging.warning(
+                    "Skipping link with unsupported endpoints during delete "
+                    "sync: %s",
+                    exc,
+                )
+                continue
             current_keys.add(key)
 
         keys_to_delete = set(self.links.keys()) - current_keys
