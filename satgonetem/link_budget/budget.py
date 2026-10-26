@@ -156,7 +156,16 @@ class LinkBudgetCalculator:
 
         sspa = getattr(ant, "sspa_output_power_db", 0.0)
         losses = getattr(ant, "losses_db", 0.0)
-        eirp_db = calculate_transmitter_eirp(sspa, gdb, losses)
+
+        eirp_db = None
+        get_eirp_db = getattr(ant, "get_eirp_db", None)
+        if callable(get_eirp_db):
+            try:
+                eirp_db = float(get_eirp_db(frequency_ghz))
+            except (AttributeError, TypeError, ValueError):
+                eirp_db = None
+        if eirp_db is None:
+            eirp_db = calculate_transmitter_eirp(sspa, gdb, losses)
 
         rx_ant = getattr(rx_node, "antenna", None)
         rx_gain_db = 0.0
