@@ -92,7 +92,7 @@ class Link:
     def _compute_elevation_angle(self, sat: Node, gs: Node) -> float:
         """Compute the elevation angle from the ground station to the satellite."""
         try:
-            central_angle = get_elevation_angle(
+            elevation = get_elevation_angle(
                 sat_coordinates=(
                     sat.position["latitude"],
                     sat.position["longitude"],
@@ -104,7 +104,7 @@ class Link:
                     gs.position["altitude"],
                 ),
             )
-            return 90.0 - central_angle
+            return elevation
         except (KeyError, TypeError, ValueError) as exc:
             logger.warning(
                 "Failed to compute elevation angle for %s->%s: %s",
