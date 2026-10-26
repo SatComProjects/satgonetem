@@ -213,6 +213,8 @@ class Iperf3Results:
 
         for it in intervals:
             for s in it.get("streams", []):
+                if s.get("omitted", False):
+                    continue
                 row = dict(s)
                 row["_t"] = s.get("end", s.get("start"))
                 row["_label"] = f"Socket {s.get('socket', '?')}"
@@ -226,6 +228,8 @@ class Iperf3Results:
             ):
                 if sum_key in it:
                     entry = dict(it[sum_key])
+                    if entry.get("omitted", False):
+                        continue
                     entry["_t"] = entry.get("end", entry.get("start"))
                     entry["_label"] = sum_key
                     sum_rows.append(entry)
@@ -325,9 +329,40 @@ class Iperf3Results:
 
     # ---- Shared throughput metrics (TCP + UDP) ----
 
+    def _summary_series(self) -> Optional[pd.DataFrame]:
+        """Return one consistent interval summary series, if available.
+
+        Prefers the aggregate ``sum`` rows, then sender/receiver summaries.
+        Using one label avoids mixing three different rate series per interval.
+
+        Returns:
+            The selected summary DataFrame, or None when no summary is present.
+        """
+        if self._df_summaries.empty or "_label" not in self._df_summaries.columns:
+            return None
+        for label in ("sum", "sum_received", "sum_sent"):
+            series = self._df_summaries[self._df_summaries["_label"] == label]
+            if not series.empty:
+                return series
+        return None
+
     @property
     def avg_throughput_mbps(self) -> float:
-        """Mean throughput across all reporting intervals in Mbps."""
+        """Mean throughput in Mbps, excluding omitted warm-up intervals."""
+        series = self._summary_series()
+        if (
+            series is not None
+            and "bytes" in series.columns
+            and "seconds" in series.columns
+        ):
+            total_seconds = float(series["seconds"].sum())
+            if total_seconds > 0:
+                return (
+                    float(series["bytes"].sum())
+                    * 8.0
+                    / total_seconds
+                    / self._BPS_TO_MBPS
+                )
         return self._col_mean(self._primary_df(), "bits_per_second") / self._BPS_TO_MBPS
 
     @property
