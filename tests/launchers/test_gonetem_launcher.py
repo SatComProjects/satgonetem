@@ -111,6 +111,70 @@ def test_force_close_still_closes_project_when_docker_ps_fails(launcher):
     channel.close.assert_called_once()
 
 
+def test_start_containers_raises_runtime_error_when_server_unreachable(launcher):
+    launcher._request = None
+    client = launcher._client
+    client.ServerGetVersion.side_effect = RuntimeError("connection refused")
+    channel = launcher._channel
+
+    with patch.object(launcher, "_get_client", return_value=client):
+        with pytest.raises(RuntimeError, match="cannot reach server"):
+            launcher.start_containers([])
+
+    channel.close.assert_called_once()
+    assert launcher._client is None
+    assert launcher._channel is None
+
+
+def test_start_containers_topology_failure_raises_and_cleans_up(
+    launcher, tmp_path
+):
+    launcher._request = None
+    project_file = tmp_path / "project.gnet"
+    project_file.write_bytes(b"fake-project")
+    client = launcher._client
+    client.ServerGetVersion.return_value.version = "test"
+    client.ProjectOpen.return_value.id = "abc123"
+    client.TopologyRun.side_effect = RuntimeError("topology exploded")
+    channel = launcher._channel
+
+    with patch.object(launcher, "_get_client", return_value=client), patch.object(
+        launcher, "generate_project", return_value=str(project_file)
+    ), patch.object(launcher, "_list_project_containers", return_value=[]):
+        with pytest.raises(RuntimeError, match="TopologyRun failed"):
+            launcher.start_containers([])
+
+    client.ProjectClose.assert_called_once()
+    channel.close.assert_called_once()
+    assert not project_file.exists()
+    assert launcher._request is None
+    assert launcher._client is None
+    assert launcher._channel is None
+
+
+def test_start_containers_rejects_empty_project_id_and_cleans_up(
+    launcher, tmp_path
+):
+    launcher._request = None
+    project_file = tmp_path / "project.gnet"
+    project_file.write_bytes(b"fake-project")
+    client = launcher._client
+    client.ServerGetVersion.return_value.version = "test"
+    client.ProjectOpen.return_value.id = ""
+    channel = launcher._channel
+
+    with patch.object(launcher, "_get_client", return_value=client), patch.object(
+        launcher, "generate_project", return_value=str(project_file)
+    ):
+        with pytest.raises(RuntimeError, match="empty project id"):
+            launcher.start_containers([])
+
+    client.ProjectClose.assert_not_called()
+    channel.close.assert_called_once()
+    assert not project_file.exists()
+    assert launcher._request is None
+
+
 def test_force_close_attempts_remove_even_when_stop_fails(launcher):
     ps_result = _completed(["docker", "ps"], stdout="id1\tntmabc123.Sat0\n")
     docker_calls = []
