@@ -185,25 +185,22 @@ def distance_3d_km(
     Returns:
         Distance in km.
     """
-    lat1_rad = math.radians(lat1)
-    lon1_rad = math.radians(lon1)
-    lat2_rad = math.radians(lat2)
-    lon2_rad = math.radians(lon2)
+    earth_radius_km = 6371.0
 
-    dlat = lat2_rad - lat1_rad
-    dlon = lon2_rad - lon1_rad
+    def to_ecef(lat_deg: float, lon_deg: float, alt_km: float) -> tuple:
+        lat_rad = math.radians(lat_deg)
+        lon_rad = math.radians(lon_deg)
+        radius = earth_radius_km + alt_km
+        return (
+            radius * math.cos(lat_rad) * math.cos(lon_rad),
+            radius * math.cos(lat_rad) * math.sin(lon_rad),
+            radius * math.sin(lat_rad),
+        )
 
-    a = (
-        math.sin(dlat / 2) ** 2
-        + math.cos(lat1_rad) * math.cos(lat2_rad) * math.sin(dlon / 2) ** 2
-    )
-    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+    x1, y1, z1 = to_ecef(lat1, lon1, alt1)
+    x2, y2, z2 = to_ecef(lat2, lon2, alt2)
 
-    R = 6371.0
-    horizontal_distance_km = R * c
-    vertical_distance_km = alt2 - alt1
-
-    return math.sqrt(horizontal_distance_km**2 + vertical_distance_km**2)
+    return math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2 + (z2 - z1) ** 2)
 
 
 def fetch_iss_data() -> dict[str, str]:
