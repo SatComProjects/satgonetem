@@ -806,6 +806,28 @@ class Iperf3Flow:
                 case _ as unexpected:
                     raise TypeError(f"Unexpected FlowStatus: {unexpected!r}")
 
+    def _json_side(self, client_json: str, server_json: str):
+        """Return the preferred and fallback JSON locations.
+
+        UDP metrics (loss/jitter) live on the receiver; TCP metrics
+        (RTT/CWND/retransmits) live on the sender. Bidirectional runs use the
+        client JSON because it contains both direction streams.
+
+        Returns:
+            Tuple of (preferred_node, preferred_path, fallback_node,
+            fallback_path).
+        """
+        if self.config.bidir:
+            preferred = self.source
+            fallback = self.destination
+            return preferred, client_json, fallback, server_json
+
+        is_udp = self.config.protocol.upper() == "UDP"
+        use_source = self.config.reverse if is_udp else not self.config.reverse
+        if use_source:
+            return self.source, client_json, self.destination, server_json
+        return self.destination, server_json, self.source, client_json
+
     def _run(self) -> None:
         """Execute the iperf3 flow and update status on completion."""
         if self.delay > 0.0:
@@ -834,14 +856,16 @@ class Iperf3Flow:
             self.source.execute_command(client_cmd, detach=False)
             time.sleep(0.3)
 
-            if self.config.protocol.upper() == "UDP":
-                raw = self.destination.execute_command(f"cat {server_json}")
-                if not isinstance(raw, str) or not raw.strip().startswith("{"):
-                    raw = self.source.execute_command(f"cat {client_json}")
-            else:
-                raw = self.source.execute_command(f"cat {client_json}")
-                if not isinstance(raw, str) or not raw.strip().startswith("{"):
-                    raw = self.destination.execute_command(f"cat {server_json}")
+            preferred_node, preferred_path, fallback_node, fallback_path = (
+                self._json_side(client_json, server_json)
+            )
+            raw = preferred_node.execute_command(
+                f"cat {shlex.quote(preferred_path)}"
+            )
+            if not isinstance(raw, str) or not raw.strip().startswith("{"):
+                raw = fallback_node.execute_command(
+                    f"cat {shlex.quote(fallback_path)}"
+                )
 
             self.source.execute_command(f"rm -f {client_json}", detach=True)
             self.destination.execute_command(f"rm -f {server_json}", detach=True)
