@@ -428,30 +428,95 @@ class GoNetEmLauncher(NetworkLauncher):
         for link in links:
             self.update_link(link)
 
-    def force_close_project(self) -> None:
-        """Forcefully close the project without waiting for progress messages."""
-        if self._client is None or self._request is None:
-            return
+    @staticmethod
+    def _parse_project_containers(stdout: str, project_id: str) -> list[str]:
+        """Return container IDs belonging to *project_id*.
+
+        GoNetEm names containers ``ntm{project_id}.{node}``. Docker's
+        ``name`` filter is a substring match, so filtering on ``ntm`` alone
+        also matches every other project on the host. Match the exact project
+        prefix instead.
+
+        Args:
+            stdout: Output of ``docker ps --format '{{.ID}}\t{{.Names}}'``.
+            project_id: GoNetEm project identifier.
+
+        Returns:
+            IDs of containers scoped to the project.
+        """
+        prefix = f"ntm{project_id}"
+        container_ids: list[str] = []
+        for line in stdout.splitlines():
+            parts = line.strip().split("\t", 1)
+            if len(parts) != 2:
+                continue
+            container_id, name = parts
+            if name == prefix or name.startswith(prefix + "."):
+                container_ids.append(container_id)
+        return container_ids
+
+    @staticmethod
+    def _run_docker_command(command: list[str]) -> bool:
+        """Run a Docker cleanup command and report whether it succeeded."""
+        try:
+            result = subprocess.run(command, capture_output=True, text=True)
+        except OSError as exc:
+            logging.error(
+                "GoNetEmLauncher: failed to run %s: %s", " ".join(command), exc
+            )
+            return False
+        if result.returncode != 0:
+            logging.error(
+                "GoNetEmLauncher: %s failed (exit %s): %s",
+                " ".join(command),
+                result.returncode,
+                (result.stderr or "").strip(),
+            )
+            return False
+        return True
+
+    def _list_project_containers(self, project_id: str) -> list[str]:
+        """List Docker containers scoped to *project_id*."""
         try:
             result = subprocess.run(
-                ["docker", "ps", "-a", "-q", "--filter", "name=ntm"],
+                ["docker", "ps", "-a", "--format", "{{.ID}}\t{{.Names}}"],
                 capture_output=True,
                 text=True,
             )
-            container_ids = result.stdout.strip().split()
-            for cid in container_ids:
-                subprocess.run(
-                    ["docker", "stop", "-t", "0", cid],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
+        except OSError as exc:
+            logging.error("GoNetEmLauncher: could not list Docker containers: %s", exc)
+            return []
+        if result.returncode != 0:
+            logging.error(
+                "GoNetEmLauncher: docker ps failed (exit %s): %s",
+                result.returncode,
+                (result.stderr or "").strip(),
+            )
+            return []
+        return self._parse_project_containers(result.stdout, project_id)
+
+    def force_close_project(self) -> None:
+        """Forcefully close the project without waiting for progress messages.
+
+        Only containers whose names belong to this project are stopped and
+        removed. If the project id is unavailable, container cleanup is
+        skipped rather than falling back to a host-wide match.
+        """
+        if self._client is None or self._request is None:
+            return
+        project_id = str(getattr(self._request, "id", "") or "")
+        try:
+            if not project_id:
+                logging.warning(
+                    "GoNetEmLauncher: project id is empty; skipping Docker cleanup"
                 )
-            for cid in container_ids:
-                subprocess.run(
-                    ["docker", "rm", cid],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
-            self._client.ProjectClose(self._request)
+            else:
+                container_ids = self._list_project_containers(project_id)
+                for cid in container_ids:
+                    self._run_docker_command(["docker", "stop", "-t", "0", cid])
+                for cid in container_ids:
+                    self._run_docker_command(["docker", "rm", cid])
+                self._client.ProjectClose(self._request)
         except Exception as exc:
             logging.error("GoNetEmLauncher: force_close_project failed: %s", exc)
         finally:
