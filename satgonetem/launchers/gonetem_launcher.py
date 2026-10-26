@@ -548,6 +548,19 @@ class GoNetEmLauncher(NetworkLauncher):
         self.isl_capacity_kbps = isl_kbps
         self.gnd_capacity_kbps = gnd_kbps
         for link in links:
+            if not getattr(link, "use_budget", False):
+                link_type = getattr(link, "type", "")
+                if link_type == "GroundStationLink":
+                    capacity = gnd_kbps
+                elif link_type == "GroundObjectLink":
+                    capacity = self.ground_object_capacity_kbps
+                else:
+                    capacity = isl_kbps
+
+                link.default_capacity_kbps = capacity
+                link.peer1_capacity = capacity
+                link.peer2_capacity = capacity
+
             self.update_link(link)
 
     @staticmethod
