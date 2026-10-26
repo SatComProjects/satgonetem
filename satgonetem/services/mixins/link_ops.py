@@ -281,15 +281,14 @@ class LinkOpsMixin:
         """
         Perform local link operations in parallel where thread-safe.
         """
+        # Interface removals mutate shared node.interfaces lists. Run them
+        # sequentially; concurrent scans/removals can skip entries.
+        for link in links_to_remove:
+            self._remove_link_interfaces(link)
+
         # Thread-safe operations that can be parallelized
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = []
-
-            # Parallel operations for individual link processing
-            # Remove interface operations (can be done in parallel per link)
-            for link in links_to_remove:
-                future = executor.submit(self._remove_link_interfaces, link)
-                futures.append(future)
 
             # Update operations (thread-safe flag updates)
             for link in links_to_update:
