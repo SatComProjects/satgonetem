@@ -24,6 +24,7 @@ from sat_com_application.simulation_manager import SimulationManager
 from sat_com_model.models import (
     create_satellite,
     create_ground_station,
+    GroundObject as SatComGroundObject,
     GroundStation as SatComGroundStation,
     Satellite as SatComSatellite,
     InterSatelliteLinkDirection,
@@ -312,6 +313,67 @@ def add_custom_ground_station(
     logging.info(f"Custom ground station {ground_station.topology_uniq_id} added")
 
 
+def _find_satellite_by_name(
+    name: str, simulation_manager: SimulationManager
+) -> SatComSatellite:
+    """Return the satellite whose ``satellite_name`` matches *name*.
+
+    Args:
+        name: Satellite name to look up.
+        simulation_manager: Simulation manager to search.
+
+    Returns:
+        The matching satellite.
+
+    Raises:
+        ValueError: If no satellite with that name exists.
+    """
+    for satellite in simulation_manager.get_satellites():
+        if getattr(satellite, "satellite_name", None) == name:
+            return satellite
+    raise ValueError(f"Satellite with name '{name}' not found")
+
+
+def _find_ground_station_by_name(
+    name: str, simulation_manager: SimulationManager
+) -> SatComGroundStation:
+    """Return the ground station whose ``label`` matches *name*.
+
+    Args:
+        name: Ground-station label to look up.
+        simulation_manager: Simulation manager to search.
+
+    Returns:
+        The matching ground station.
+
+    Raises:
+        ValueError: If no ground station with that label exists.
+    """
+    for ground_station in simulation_manager.get_ground_stations():
+        if getattr(ground_station, "label", None) == name:
+            return ground_station
+    raise ValueError(f"Ground station with name '{name}' not found")
+
+
+def _find_ground_object_by_name(
+    name: str, simulation_manager: SimulationManager
+) -> SatComGroundObject:
+    """Return the ground object (station or terminal) whose ``label`` matches.
+
+    Args:
+        name: Ground-object label to look up.
+        simulation_manager: Simulation manager to search.
+
+    Returns:
+        The matching ground object.
+
+    Raises:
+        ValueError: If no ground object with that label exists.
+    """
+    for ground_object in simulation_manager.get_all_ground_objects():
+        if getattr(ground_object, "label", None) == name:
+            return ground_object
+    raise ValueError(f"Ground object with name '{name}' not found")
 
 
 def _get_orbital_elements(
