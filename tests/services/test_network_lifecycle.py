@@ -17,15 +17,26 @@ class DummyTopology(NetworkLifecycleMixin):
         self.status = False
         self.gonetem_status = False
         self.launcher = None
+        self.running = False
+        self._sim_thread = None
+        self._active_flows = []
+        self.hil_manager = None
+        self.routing_method = "static"
 
     def get_gonetem_status(self):
         return self.gonetem_status
+
+    def get_running(self):
+        return self.running
 
     def set_status(self, value):
         self.status = value
 
     def set_gonetem_status(self, value):
         self.gonetem_status = value
+
+    def set_routing_initiated(self, value):
+        self.routing_initiated = value
 
 
 def test_start_gonetem_passes_only_non_hil_nodes_and_active_links():
@@ -73,3 +84,34 @@ def test_start_gonetem_passes_only_non_hil_nodes_and_active_links():
     assert topology.launcher is fake_launcher
     assert topology.status is True
     assert topology.gonetem_status is True
+
+
+def test_stop_gonetem_stops_flows_and_clears_tracking():
+    topology = DummyTopology()
+    flow = MagicMock()
+    flow.status.return_value = SimpleNamespace(name="RUNNING")
+    thread = MagicMock()
+    thread.is_alive.return_value = True
+    flow._thread = thread
+    topology._active_flows = [flow]
+
+    topology.stop_gonetem()
+
+    flow.stop.assert_called_once()
+    thread.join.assert_called_once()
+    assert "timeout" in thread.join.call_args.kwargs
+    assert topology._active_flows == []
+
+
+def test_stop_gonetem_continues_when_flow_stop_fails():
+    topology = DummyTopology()
+    flow = MagicMock()
+    flow.status.return_value = SimpleNamespace(name="PENDING")
+    flow.stop.side_effect = RuntimeError("cannot stop")
+    flow._thread = None
+    topology._active_flows = [flow]
+
+    topology.stop_gonetem()
+
+    assert topology._active_flows == []
+    assert topology.gonetem_status is False
