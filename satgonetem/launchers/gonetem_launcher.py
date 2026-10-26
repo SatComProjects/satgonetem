@@ -73,9 +73,7 @@ class GoNetEmLauncher(NetworkLauncher):
         """
         tm = self._topology_manager
         sat_type = "docker.host" if fallback else "docker.satellite"
-        gs_type = (
-            "docker.host" if fallback else "docker.satellite"
-        )  # Borken if using gndstation TODO fix
+        gs_type = "docker.host" if fallback else "docker.gndstation"
 
         if nodes is None:
             satellite_nodes = list(tm.satellites.values())
@@ -104,7 +102,7 @@ class GoNetEmLauncher(NetworkLauncher):
 
         satellites = self._write_satellites(satellite_nodes, sat_type)
         groundStations = self._write_ground_stations(
-            ground_station_nodes, gs_type
+            ground_station_nodes, gs_type, fallback=fallback
         )
         controller_section = self._write_controller_switch() if controller else ""
         link_section = self._write_links(link_nodes)
@@ -159,11 +157,16 @@ class GoNetEmLauncher(NetworkLauncher):
         return result
 
     @staticmethod
-    def _write_ground_stations(ground_stations, gs_type: str) -> str:
+    def _write_ground_stations(
+        ground_stations, gs_type: str, fallback: bool = False
+    ) -> str:
         result = ""
         for gs in ground_stations:
             prefix = "Gnd" if gs.type == "GroundStation" else "Usr"
-            result += f" {prefix}{gs.id}:\n  type: {gs_type}\n  image: {gs.image}\n  volumes:\n  - /tmp:/tmp\n"
+            image = gs.image
+            if not image and not fallback:
+                image = "jariassuarez/sgnt:ground-station"
+            result += f" {prefix}{gs.id}:\n  type: {gs_type}\n  image: {image}\n  volumes:\n  - /tmp:/tmp\n"
         return result
 
     @staticmethod
