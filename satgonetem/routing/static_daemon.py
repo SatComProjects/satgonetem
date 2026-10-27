@@ -775,10 +775,11 @@ class StaticRoutingDaemon(RoutingDaemon):
     ) -> list:
         """Diff prev_tbl vs curr_tbl and return minimal ip route commands.
 
-        Routes that disappeared must be deleted explicitly; otherwise the
-        kernel keeps forwarding traffic to a next hop that is no longer part
-        of the topology. Deletions are emitted before replacements so a
-        changed next hop cannot leave the stale route behind.
+        A destination prefix that disappeared entirely must be deleted
+        explicitly; otherwise the kernel keeps forwarding traffic to a next
+        hop that is no longer part of the topology. If the destination prefix
+        still exists with a different gateway/interface, ``ip route replace``
+        updates it in place and a preceding delete is redundant.
 
         Deletions are skipped when the entry's outgoing device is no longer
         present on the node. Removing a veth makes the kernel purge every
@@ -802,10 +803,12 @@ class StaticRoutingDaemon(RoutingDaemon):
 
         curr = {self._entry_key(e): e for e in curr_tbl}
         prev = {self._entry_key(e): e for e in prev_tbl}
+        curr_prefixes = {(e.destination, e.get_prefix()) for e in curr_tbl}
         removed = [
             self._route_line("del", e)
             for k, e in prev.items()
             if k not in curr
+            and (e.destination, e.get_prefix()) not in curr_prefixes
             and (live_devs is None or e.interface.get_iname() in live_devs)
         ]
         added = [
