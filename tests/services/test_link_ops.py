@@ -198,6 +198,7 @@ def test_updates_and_additions_still_run():
     fake._update_link_flags.assert_called_once_with(update)
     fake._add_link_interfaces.assert_called_once_with(addition)
 
+
 def test_update_routing_after_link_changes_uses_route_apply_workers():
     routing_daemon = MagicMock()
     fake = SimpleNamespace(
@@ -226,3 +227,14 @@ def test_update_routing_after_link_changes_honors_explicit_workers():
     LinkOpsMixin._update_routing_after_link_changes(fake, [], max_workers=3)
 
     routing_daemon.update.assert_called_once_with([], max_workers=3)
+
+
+def test_remove_link_interfaces_bumps_interface_version():
+    source = SimpleNamespace(remove_interface_connected_to_node=MagicMock())
+    target = SimpleNamespace(remove_interface_connected_to_node=MagicMock())
+    link = SimpleNamespace(source=source, target=target)
+    fake = SimpleNamespace(interface_version=7)
+
+    LinkOpsMixin._remove_link_interfaces(fake, link)
+
+    assert fake.interface_version == 8

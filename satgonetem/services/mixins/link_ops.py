@@ -403,6 +403,7 @@ class LinkOpsMixin:
             target = link.target
             source.remove_interface_connected_to_node(target)
             target.remove_interface_connected_to_node(source)
+            self.interface_version = getattr(self, "interface_version", 0) + 1
         except (AttributeError, KeyError, TypeError) as e:
             logging.error(
                 f"Failed to remove interfaces for link {link.source.name}--{link.target.name}: {e}"

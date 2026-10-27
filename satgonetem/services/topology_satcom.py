@@ -575,6 +575,7 @@ class TopologyManager(
         self.ground_stations: dict[int, GroundStation] = {}
         self.links: dict[frozenset[(str)], Link] = {}
         self.interfaces: list[Interface] = []  # List of all interfaces in the network
+        self.interface_version = 0
 
         # QoS thingies
         self.use_file_routes = False
