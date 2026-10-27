@@ -128,7 +128,7 @@ class LinkOpsMixin:
         return operation_stats
 
     def _update_routing_after_link_changes(
-        self, new_links: List[Link], max_workers: int = 4
+        self, new_links: List[Link], max_workers: int = MAX_WORKERS
     ) -> None:
         """
         Update routing after link topology changes based on the configured routing method.
