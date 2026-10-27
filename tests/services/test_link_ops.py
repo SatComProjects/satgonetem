@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from satgonetem.services.mixins.link_ops import LinkOpsMixin
+from satgonetem.utils.constants import ROUTE_APPLY_WORKERS
 
 
 def test_interface_removals_run_on_the_calling_thread():
@@ -196,3 +197,32 @@ def test_updates_and_additions_still_run():
 
     fake._update_link_flags.assert_called_once_with(update)
     fake._add_link_interfaces.assert_called_once_with(addition)
+
+def test_update_routing_after_link_changes_uses_route_apply_workers():
+    routing_daemon = MagicMock()
+    fake = SimpleNamespace(
+        get_routing_initiated=lambda: True,
+        routing_daemon=routing_daemon,
+        routing="static",
+        _daemon_registry={},
+    )
+
+    LinkOpsMixin._update_routing_after_link_changes(fake, [])
+
+    routing_daemon.update.assert_called_once_with(
+        [], max_workers=ROUTE_APPLY_WORKERS
+    )
+
+
+def test_update_routing_after_link_changes_honors_explicit_workers():
+    routing_daemon = MagicMock()
+    fake = SimpleNamespace(
+        get_routing_initiated=lambda: True,
+        routing_daemon=routing_daemon,
+        routing="static",
+        _daemon_registry={},
+    )
+
+    LinkOpsMixin._update_routing_after_link_changes(fake, [], max_workers=3)
+
+    routing_daemon.update.assert_called_once_with([], max_workers=3)
