@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from satgonetem.launchers.gonetem_launcher import GoNetEmLauncher
+from satgonetem.launchers.gonetem_launcher import GoNetEmLauncher, _tbf_qos
 
 
 def _completed(command, returncode=0, stdout="", stderr=""):
@@ -399,3 +399,44 @@ def test_start_containers_passes_filtered_sets_to_project_generation(
         nodes=nodes,
         links=links,
     )
+
+def test_tbf_qos_uses_burst_plus_bdp():
+    burst, buffer = _tbf_qos(100_000, 1)
+
+    assert burst == 51_514
+    assert pytest.approx(buffer) == 5.12112
+
+    limit = int(buffer * 100_000 * 1 / 8)
+    assert limit == burst + 12_500
+    assert _tbf_qos(0, 1) == (0, 0.0)
+
+
+def test_write_links_uses_corrected_tbf_values(topology_with_hil):
+    topology_manager, sat, gnd, _hil_gnd, _sat_to_gnd, _sat_to_hil = (
+        topology_with_hil
+    )
+    launcher = GoNetEmLauncher(topology_manager, "localhost:10110", "test")
+
+    yaml = launcher.get_gonetem_topology(nodes=[sat, gnd])
+
+    assert "burst: 2014" in yaml
+    assert "buffer: 2.6112" in yaml
+
+
+def test_link_request_includes_corrected_tbf_values(launcher):
+    link = SimpleNamespace(
+        source=SimpleNamespace(name="Sat0", id=0),
+        target=SimpleNamespace(name="Gnd0", id=1),
+        delay=10,
+        loss=0,
+        jitter=0,
+        type="GroundStationLink",
+        peer1_capacity=1000,
+        peer2_capacity=1000,
+    )
+
+    request = launcher._link_request(link)
+
+    assert request.link.peer1qos.burst == 2014
+    assert request.link.peer1qos.buffer == pytest.approx(2.6112)
+    assert request.link.peer2qos.burst == 2014

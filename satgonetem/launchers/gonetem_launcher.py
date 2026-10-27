@@ -23,6 +23,25 @@ import satgonetem.proto.netem_pb2_grpc as netem_grpc
 from satgonetem.launchers.base_launcher import NetworkLauncher
 
 
+def _tbf_qos(rate_kbps: int, delay_ms: int) -> tuple[int, float]:
+    """Return TBF burst bytes and BDP multiplier for a link.
+
+    gonetem computes ``limit = buffer * rate * delay / 8``. Choosing the
+    buffer factor as ``(burst + BDP) / BDP`` makes the resulting limit equal
+    to ``burst + BDP`` without changing the server.
+    """
+    rate_kbps = int(rate_kbps)
+    delay_ms = max(int(delay_ms), 1)
+    if rate_kbps <= 0:
+        return 0, 0.0
+
+    rate_bytes_per_sec = rate_kbps * 125
+    burst = rate_bytes_per_sec // 250 + 1514
+    bdp_bytes = rate_kbps * delay_ms / 8.0
+    buffer_factor = (burst + bdp_bytes) / bdp_bytes
+    return burst, buffer_factor
+
+
 class GoNetEmLauncher(NetworkLauncher):
     """Launch and manage a network topology through a GoNetem gRPC server."""
 
@@ -130,17 +149,19 @@ class GoNetEmLauncher(NetworkLauncher):
         result = ""
         for sat in satellites:
             eth_id = 50000 + sat.id
+            burst, buffer = _tbf_qos(1_000_000, 1)
             result += (
                 f" - {{peer1: Controller.{sat.id}, peer2: {sat.name}.{eth_id},"
-                f" peer1qos: {{ rate: 1000000, buffer: 10000, jitter: 0, delay: 1}},"
-                f" peer2qos: {{ rate: 1000000, buffer: 10000, jitter: 0, delay: 1}}}} \n"
+                f" peer1qos: {{ rate: 1000000, buffer: {buffer}, jitter: 0, delay: 1, burst: {burst}}},"
+                f" peer2qos: {{ rate: 1000000, buffer: {buffer}, jitter: 0, delay: 1, burst: {burst}}}}} \n"
             )
         for gs in ground_stations:
             eth_id = 50000 + gs.id
+            burst, buffer = _tbf_qos(1_000_000, 1)
             result += (
                 f" - {{peer1: Controller.{gs.id}, peer2: {gs.name}.{eth_id},"
-                f" peer1qos: {{ rate: 1000000, buffer: 10000, jitter: 0, delay: 1}},"
-                f" peer2qos: {{ rate: 1000000, buffer: 10000, jitter: 0, delay: 1}}}} \n"
+                f" peer1qos: {{ rate: 1000000, buffer: {buffer}, jitter: 0, delay: 1, burst: {burst}}},"
+                f" peer2qos: {{ rate: 1000000, buffer: {buffer}, jitter: 0, delay: 1, burst: {burst}}}}} \n"
             )
         return result
 
@@ -177,12 +198,12 @@ class GoNetEmLauncher(NetworkLauncher):
                 continue
             delay = max(int(link.delay), 1)
             rate = link.get_capacity()
-            burst = rate * 5
+            burst, buffer = _tbf_qos(rate, delay)
             result += (
                 f" - {{peer1: {link.source.name}.{link.target.id},"
                 f" peer2: {link.target.name}.{link.source.id},"
-                f" peer1qos: {{ rate: {rate}, buffer: 10, jitter: 0, delay: {delay}, burst: {burst}}},"
-                f" peer2qos: {{ rate: {rate}, buffer: 10, jitter: 0, delay: {delay}, burst: {burst}}}}}"
+                f" peer1qos: {{ rate: {rate}, buffer: {buffer}, jitter: 0, delay: {delay}, burst: {burst}}},"
+                f" peer2qos: {{ rate: {rate}, buffer: {buffer}, jitter: 0, delay: {delay}, burst: {burst}}}}}"
                 f" #Latency of {delay}ms \n"
             )
         return result
@@ -235,11 +256,23 @@ class GoNetEmLauncher(NetworkLauncher):
         loss = float(getattr(link, "loss", 0) or 0)
         jitter = int(getattr(link, "jitter", 0) or 0)
         p1_kbps, p2_kbps = self._link_capacities_for(link)
+        burst1, buffer1 = _tbf_qos(p1_kbps, delay_ms)
+        burst2, buffer2 = _tbf_qos(p2_kbps, delay_ms)
         qos1 = netem_pb2.LinkConfig.QoSConfig(
-            delay=delay_ms, rate=p1_kbps, loss=loss, jitter=jitter
+            delay=delay_ms,
+            rate=p1_kbps,
+            loss=loss,
+            jitter=jitter,
+            buffer=buffer1,
+            burst=burst1,
         )
         qos2 = netem_pb2.LinkConfig.QoSConfig(
-            delay=delay_ms, rate=p2_kbps, loss=loss, jitter=jitter
+            delay=delay_ms,
+            rate=p2_kbps,
+            loss=loss,
+            jitter=jitter,
+            buffer=buffer2,
+            burst=burst2,
         )
         link_cfg = netem_pb2.LinkConfig(
             peer1=f"{link.source.name}.{link.target.id}",
