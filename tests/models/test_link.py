@@ -365,6 +365,16 @@ class TestLinkSyncDistanceAndDelay:
 
         assert link.to_update is True
 
+    def test_update_distance_and_delay_updates_state(self, gsl_link):
+        gsl_link.satcom_object = MagicMock()
+        gsl_link.to_update = False
+
+        gsl_link.update_distance_and_delay(299_792_458.0)
+
+        assert gsl_link.distance == 299_792_458.0
+        assert gsl_link.delay == 1000
+        assert gsl_link.to_update is True
+
     def test_to_update_stays_false_when_delay_unchanged(self, sat_node, gnd_node):
         link = Link(
             source=sat_node,

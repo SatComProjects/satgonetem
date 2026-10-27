@@ -2,6 +2,10 @@
 
 from types import SimpleNamespace
 
+import pytest
+
+from satgonetem.models.link import Link
+from satgonetem.models.node import Node
 from satgonetem.services.mixins.topology_sync import TopologySyncMixin
 
 
@@ -145,3 +149,34 @@ def test_main_sync_survives_unsupported_links():
 
     assert dummy.initial_sync is True
     assert dummy.links == {}
+
+
+def test_main_sync_vectorizes_real_link_distance_and_returns_changes():
+    source = Node("Sat0")
+    target = Node("Gnd1")
+    source.position = {"latitude": 0.0, "longitude": 0.0, "altitude": 550.0}
+    target.position = {"latitude": 10.0, "longitude": 0.0, "altitude": 0.0}
+
+    link = Link(
+        source=source,
+        target=target,
+        distance=1.0,
+        type="GroundStationLink",
+    )
+    satcom_link = SimpleNamespace(
+        source="Sat0",
+        destination="Gnd1",
+        disabled=False,
+    )
+    dummy = DummySync(
+        [satcom_link],
+        links={frozenset(("Sat0", "Gnd1")): link},
+    )
+
+    changes = dummy._sync_links()
+
+    assert link.distance == pytest.approx(1_281_509.0, abs=1.0)
+    assert link.to_update is True
+    assert changes["links_to_update"] == [link]
+    assert changes["links_to_add"] == []
+    assert changes["links_to_remove"] == []

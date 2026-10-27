@@ -239,6 +239,25 @@ class Link:
 
     # Sync helpers
 
+    def update_distance_and_delay(self, new_distance: float) -> None:
+        """Update distance and delay from an already-computed distance.
+
+        Args:
+            new_distance: New link distance in metres.
+        """
+        new_delay = int((new_distance / 299_792_458) * 1000)  # ms, speed of light
+
+        # Keep the exact distance current even when the rounded delay does not
+        # change; consumers such as routing and diagnostics need the precise
+        # value, not a value quantised to the millisecond delay bucket.
+        distance_changed = new_distance != self.distance
+        self.distance = new_distance
+        if new_delay != self.delay:
+            self.delay = new_delay
+            self.to_update = True
+        if distance_changed and self.use_budget and self.type == "GroundStationLink":
+            self.refresh_link_capacities()
+
     def sync_distance_from_satcom_and_delay(self) -> None:
         """
         A method that syncs the distance from the satcom object.
@@ -258,18 +277,7 @@ class Link:
             * 1000
         )  # Convert to meters
 
-        new_delay = int((new_distance / 299_792_458) * 1000)  # in ms, speed of light
-
-        # Keep the exact distance current even when the rounded delay does not
-        # change; consumers such as routing and diagnostics need the precise
-        # value, not a value quantised to the millisecond delay bucket.
-        distance_changed = new_distance != self.distance
-        self.distance = new_distance
-        if new_delay != self.delay:
-            self.delay = new_delay
-            self.to_update = True
-        if distance_changed and self.use_budget and self.type == "GroundStationLink":
-            self.refresh_link_capacities()
+        self.update_distance_and_delay(new_distance)
         return None
 
     # ------------------------------------------------------------------
