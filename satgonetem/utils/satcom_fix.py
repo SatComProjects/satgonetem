@@ -380,18 +380,33 @@ def _3d_distance_km(self, position_1, position_2) -> float:
 
 def apply_satcom_fix() -> None:
     """
-    Monkey-patch the orbital model in sat_com_trajectopy with the local implementation.
+    Monkey-patch sat_com_trajectopy with the local implementations.
 
-    Replaces PyOrbitalModel in sat_com_trajectopy.orbital_models with the version
-    defined in this module, and installs direct-haversine distance methods on the
-    default SkLearningDistanceModel. The scalar haversine is mathematically
-    identical to sklearn's pairwise implementation but avoids its per-call
-    validation overhead.
+    Replaces PyOrbitalModel in sat_com_trajectopy.orbital_models with the
+    version defined in this module, and installs direct-haversine distance
+    methods on the default SkLearningDistanceModel. The scalar haversine is
+    mathematically identical to sklearn's pairwise implementation but avoids
+    its per-call validation overhead.
+
+    Modules that imported PyOrbitalModel before this function ran keep the old
+    binding in their module globals. The most important one is
+    ``sat_com_trajectopy.satellites.generate_satellite``, which does
+    ``from ...orbital_models import PyOrbitalModel`` at import time. Rebind
+    those references too, so the patch does not depend on import order.
     """
     import importlib
 
-    pkg = importlib.import_module("sat_com_trajectopy.orbital_models")
-    setattr(pkg, "PyOrbitalModel", PyOrbitalModel)
+    orbital_models = importlib.import_module("sat_com_trajectopy.orbital_models")
+    setattr(orbital_models, "PyOrbitalModel", PyOrbitalModel)
+
+    try:
+        generate_satellite = importlib.import_module(
+            "sat_com_trajectopy.satellites.generate_satellite"
+        )
+    except ImportError:
+        pass
+    else:
+        setattr(generate_satellite, "PyOrbitalModel", PyOrbitalModel)
 
     distance_models = importlib.import_module("sat_com_trajectopy.distance_models")
     model_class = distance_models.SkLearningDistanceModel
