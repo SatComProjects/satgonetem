@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from satgonetem.utils.constants import MAX_WORKERS
+from satgonetem.utils.constants import MAX_WORKERS, ROUTE_APPLY_WORKERS
 
 from typing import TYPE_CHECKING
 
@@ -194,7 +194,7 @@ class LinkOpsMixin:
         return operation_stats
 
     def _update_routing_after_link_changes(
-        self, new_links: List[Link], max_workers: int = MAX_WORKERS
+        self, new_links: List[Link], max_workers: int = ROUTE_APPLY_WORKERS
     ) -> None:
         """
         Update routing after link topology changes based on the configured routing method.
