@@ -838,6 +838,7 @@ class TestRouteReuse:
         assert new_sat0_to_gnd0 is old_sat0_to_gnd0
         assert new_gnd0_to_gnd1 is not old_gnd0_to_gnd1
 
+
 class TestRouteBuildGc:
     """Tests for the route-build GC suppression helper."""
 
@@ -860,3 +861,30 @@ class TestRouteBuildGc:
 
         disable.assert_not_called()
         enable.assert_not_called()
+
+
+class TestInterfaceMapCache:
+    """Tests for the interface-map cache used by routing updates."""
+
+    def test_iface_maps_are_reused_until_interface_version_changes(self):
+        gs = Node("Gnd0")
+        gs.interfaces = [Interface(name="Gnd0.1")]
+        sat = Node("Sat1")
+        sat.interfaces = [Interface(name="Sat1.0")]
+
+        topology = MagicMock()
+        topology.interface_version = 1
+        topology.ground_stations = {gs.id: gs}
+        topology.satellites = {sat.id: sat}
+        daemon = StaticRoutingDaemon(topology)
+
+        first = daemon._prebuild_iface_maps()
+        second = daemon._prebuild_iface_maps()
+
+        assert first is second
+
+        topology.interface_version = 2
+        third = daemon._prebuild_iface_maps()
+
+        assert third is not first
+        assert third[0][gs.id] is not first[0][gs.id]

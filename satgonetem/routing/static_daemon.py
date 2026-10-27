@@ -70,6 +70,8 @@ class StaticRoutingDaemon(RoutingDaemon):
         # route did not move instead of rebuilding all tables from scratch.
         self._source_signatures: dict[int, list] = {}
         self._entry_cache: dict[int, dict[int, RoutingEntry]] = {}
+        self._iface_cache_version: int | None = None
+        self._iface_cache = None
 
     def init(self, max_workers: int = 128) -> bool:
         """Initialize static IP routing.
@@ -619,10 +621,21 @@ class StaticRoutingDaemon(RoutingDaemon):
     def _prebuild_iface_maps(self):
         """Build fast peer_id->Interface lookups for every node.
 
+        The maps are cached by the topology's interface version and rebuilt
+        only when link interfaces are added or removed.
+
         Returns:
             Tuple of (gs_ifaces, sat_ifaces) where each value is a dict
             mapping node_id to a {peer_id: Interface} dict.
         """
+        version = getattr(self.topology, "interface_version", None)
+        if (
+            isinstance(version, int)
+            and self._iface_cache is not None
+            and self._iface_cache_version == version
+        ):
+            return self._iface_cache
+
         gs_ifaces = {
             gs.id: self._peer_iface_map(gs)
             for gs in self.topology.ground_stations.values()
@@ -631,7 +644,11 @@ class StaticRoutingDaemon(RoutingDaemon):
             sat.id: self._peer_iface_map(sat)
             for sat in self.topology.satellites.values()
         }
-        return gs_ifaces, sat_ifaces
+        result = (gs_ifaces, sat_ifaces)
+        if isinstance(version, int):
+            self._iface_cache = result
+            self._iface_cache_version = version
+        return result
 
     def _peer_iface_map(self, node) -> dict:
         """Return {peer_id: Interface} by parsing interface names.

@@ -94,6 +94,7 @@ class InterfaceMgrMixin:
         link.peer_interfaces.extend([int1, int2])  # Add interfaces to the link
 
         self.interfaces.extend([int1, int2])  # Add interfaces to the global list
+        self.interface_version = getattr(self, "interface_version", 0) + 1
 
         if not self.get_status():
             return
