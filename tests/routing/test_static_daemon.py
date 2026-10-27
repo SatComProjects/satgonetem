@@ -750,3 +750,90 @@ class TestRouteDiff:
             daemon._apply_ground_station_routes(max_workers=1)
 
         mock_batch.assert_not_called()
+
+
+class TestRouteReuse:
+    """Tests for route-entry reuse across topology updates."""
+
+    def test_equalize_keeps_previous_table_by_reference(self, daemon, topology):
+        node = Node("Sat0")
+        table = [make_entry()]
+        node.ipv4_routing_table = table
+        topology.get_satellites.return_value = [node]
+        topology.get_ground_stations.return_value = []
+
+        daemon._equalize_routing_tables()
+
+        assert node.ipv4_previous_routing_table is table
+        assert node.ipv4_routing_table == []
+        assert node.ipv4_routing_table is not table
+
+    def test_identical_tables_skip_the_diff(self, daemon):
+        table = [make_entry()]
+
+        assert daemon._emit_batch_commands(table, table) == []
+
+    def test_update_reuses_entries_when_routes_are_unchanged(self):
+        topo, gnd0, gnd1, sat0, sat1 = _make_line_topology()
+        daemon = StaticRoutingDaemon(topo)
+        nodes = [gnd0, gnd1, sat0, sat1]
+
+        with patch.object(daemon, "_apply_ground_station_routes"), \
+             patch.object(daemon, "_apply_satellite_routes"):
+            daemon.init()
+
+        before = {node.id: list(node.ipv4_routing_table) for node in nodes}
+
+        with patch.object(daemon, "_apply_ground_station_routes"), \
+             patch.object(daemon, "_apply_satellite_routes"):
+            daemon.update([])
+
+        for node in nodes:
+            assert len(node.ipv4_routing_table) == len(before[node.id])
+            for old_entry, new_entry in zip(
+                before[node.id], node.ipv4_routing_table
+            ):
+                assert new_entry is old_entry
+            assert node.ipv4_previous_routing_table is node.ipv4_routing_table
+
+    def test_update_reuses_only_unaffected_entries(self):
+        topo, gnd0, gnd1, sat0, _sat1 = _make_line_topology()
+        _link_nodes(gnd0, gnd1)
+        graph = topo.get_current_graph.return_value
+        graph.add_edge(gnd0.id, gnd1.id, weight=100)
+
+        daemon = StaticRoutingDaemon(topo)
+        with patch.object(daemon, "_apply_ground_station_routes"), \
+             patch.object(daemon, "_apply_satellite_routes"):
+            daemon.init()
+
+        old_sat0_to_gnd0 = next(
+            entry
+            for entry in sat0.ipv4_routing_table
+            if entry.target_node == "Gnd0"
+        )
+        old_gnd0_to_gnd1 = next(
+            entry
+            for entry in gnd0.ipv4_routing_table
+            if entry.target_node == "Gnd1"
+        )
+
+        graph[gnd0.id][gnd1.id]["weight"] = 0.1
+
+        with patch.object(daemon, "_apply_ground_station_routes"), \
+             patch.object(daemon, "_apply_satellite_routes"):
+            daemon.update([])
+
+        new_sat0_to_gnd0 = next(
+            entry
+            for entry in sat0.ipv4_routing_table
+            if entry.target_node == "Gnd0"
+        )
+        new_gnd0_to_gnd1 = next(
+            entry
+            for entry in gnd0.ipv4_routing_table
+            if entry.target_node == "Gnd1"
+        )
+
+        assert new_sat0_to_gnd0 is old_sat0_to_gnd0
+        assert new_gnd0_to_gnd1 is not old_gnd0_to_gnd1
