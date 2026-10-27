@@ -9,9 +9,11 @@ only used to access node/graph data.
 from __future__ import annotations
 
 import base64
+import gc
 import json
 import logging
 import re
+from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import TYPE_CHECKING, List, Optional
 
@@ -33,6 +35,19 @@ if TYPE_CHECKING:
 
 
 _PEER_IFACE_PATTERN = re.compile(r"^(Gnd|Sat)\d+\.\d+$")
+
+
+@contextmanager
+def _gc_disabled():
+    """Temporarily disable cyclic GC, restoring the previous state."""
+    was_enabled = gc.isenabled()
+    if was_enabled:
+        gc.disable()
+    try:
+        yield
+    finally:
+        if was_enabled:
+            gc.enable()
 
 
 class StaticRoutingDaemon(RoutingDaemon):
@@ -149,10 +164,15 @@ class StaticRoutingDaemon(RoutingDaemon):
         if self.topology.use_file_routes:
             self._populate_from_file(gs_array, sat_array, gs_ifaces, sat_ifaces)
         else:
-            graph = self.topology.get_current_graph()
-            self._populate_dijkstra_igraph(
-                graph, gs_array, sat_array, gs_ifaces, sat_ifaces
-            )
+            # The route build creates tens of thousands of short-lived path
+            # lists and dict entries. They are acyclic and released by
+            # reference counting, so cyclic scans during the build are pure
+            # overhead and cause the 140/300 ms GC-dependent spikes.
+            with _gc_disabled():
+                graph = self.topology.get_current_graph()
+                self._populate_dijkstra_igraph(
+                    graph, gs_array, sat_array, gs_ifaces, sat_ifaces
+                )
 
     def _apply_satellite_routes(self, max_workers: int = 128) -> None:
         """Apply satellite IPv4 route changes to containers using a diff.
