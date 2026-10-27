@@ -676,7 +676,7 @@ class TestRouteDiff:
             "route replace 10.3.0.0/16 via 10.1.0.3 dev eth2",
         ]
 
-    def test_changed_next_hop_deletes_old_route_before_replacing(self, daemon):
+    def test_changed_next_hop_replaces_without_deleting(self, daemon):
         old = make_entry(
             dst="10.0.0.1", gw="10.1.0.1", iface_name="Sat0.1", prefix=16
         )
@@ -687,7 +687,6 @@ class TestRouteDiff:
         lines = daemon._emit_batch_commands([old], [new])
 
         assert lines == [
-            "route del 10.0.0.0/16 via 10.1.0.1 dev eth1",
             "route replace 10.0.0.0/16 via 10.1.0.2 dev eth2",
         ]
 
