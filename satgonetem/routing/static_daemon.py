@@ -145,7 +145,9 @@ class StaticRoutingDaemon(RoutingDaemon):
             for sat in self.topology.satellites.values()
             if (
                 lines := self._emit_batch_commands(
-                    sat.ipv4_previous_routing_table, sat.ipv4_routing_table
+                    sat.ipv4_previous_routing_table,
+                    sat.ipv4_routing_table,
+                    live_devs={iface.get_iname() for iface in sat.interfaces},
                 )
             )
         ]
@@ -186,7 +188,9 @@ class StaticRoutingDaemon(RoutingDaemon):
             for gs in self.topology.ground_stations.values()
             if (
                 lines := self._emit_batch_commands(
-                    gs.ipv4_previous_routing_table, gs.ipv4_routing_table
+                    gs.ipv4_previous_routing_table,
+                    gs.ipv4_routing_table,
+                    live_devs={iface.get_iname() for iface in gs.interfaces},
                 )
             )
         ]
@@ -653,7 +657,9 @@ class StaticRoutingDaemon(RoutingDaemon):
         dev = entry.interface.get_iname()
         return f"route {op} {addr} via {entry.gateway} dev {dev}"
 
-    def _emit_batch_commands(self, prev_tbl, curr_tbl) -> list:
+    def _emit_batch_commands(
+        self, prev_tbl, curr_tbl, live_devs: Optional[set[str]] = None
+    ) -> list:
         """Diff prev_tbl vs curr_tbl and return minimal ip route commands.
 
         Routes that disappeared must be deleted explicitly; otherwise the
@@ -661,9 +667,18 @@ class StaticRoutingDaemon(RoutingDaemon):
         of the topology. Deletions are emitted before replacements so a
         changed next hop cannot leave the stale route behind.
 
+        Deletions are skipped when the entry's outgoing device is no longer
+        present on the node. Removing a veth makes the kernel purge every
+        route that referenced it, so issuing ``ip route del ... dev <gone>``
+        is guaranteed to fail with "Cannot find device" and would mark an
+        otherwise successful batch as failed.
+
         Args:
             prev_tbl: Previous routing table (list of RoutingEntry).
             curr_tbl: Current routing table (list of RoutingEntry).
+            live_devs: Device names currently present on the node. When
+                provided, stale entries whose device is absent are not
+                deleted. When None, every removed entry is deleted.
 
         Returns:
             List of ip route command strings: deletions first, then
@@ -672,7 +687,10 @@ class StaticRoutingDaemon(RoutingDaemon):
         curr = {self._entry_key(e): e for e in curr_tbl}
         prev = {self._entry_key(e): e for e in prev_tbl}
         removed = [
-            self._route_line("del", e) for k, e in prev.items() if k not in curr
+            self._route_line("del", e)
+            for k, e in prev.items()
+            if k not in curr
+            and (live_devs is None or e.interface.get_iname() in live_devs)
         ]
         added = [
             self._route_line("replace", e) for k, e in curr.items() if k not in prev

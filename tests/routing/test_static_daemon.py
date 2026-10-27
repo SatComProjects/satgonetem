@@ -631,6 +631,51 @@ class TestRouteDiff:
 
         assert lines == ["route del 10.0.0.0/16 via 10.1.0.1 dev eth1"]
 
+    def test_removed_destination_deletes_when_device_is_present(self, daemon):
+        stale = make_entry(
+            dst="10.0.0.1", gw="10.1.0.1", iface_name="Sat0.1", prefix=16
+        )
+
+        lines = daemon._emit_batch_commands([stale], [], live_devs={"eth1"})
+
+        assert lines == ["route del 10.0.0.0/16 via 10.1.0.1 dev eth1"]
+
+    def test_removed_destination_skips_delete_when_device_is_gone(self, daemon):
+        stale = make_entry(
+            dst="10.0.0.1", gw="10.1.0.1", iface_name="Sat0.1", prefix=16
+        )
+
+        lines = daemon._emit_batch_commands([stale], [], live_devs={"eth2"})
+
+        assert lines == []
+
+    def test_empty_live_devs_skips_all_deletions(self, daemon):
+        stale = make_entry(
+            dst="10.0.0.1", gw="10.1.0.1", iface_name="Sat0.1", prefix=16
+        )
+
+        assert daemon._emit_batch_commands([stale], [], live_devs=set()) == []
+
+    def test_mixed_batch_keeps_live_deletions_and_additions(self, daemon):
+        gone = make_entry(
+            dst="10.1.0.1", gw="10.1.0.1", iface_name="Sat0.1", prefix=16
+        )
+        live = make_entry(
+            dst="10.2.0.1", gw="10.1.0.2", iface_name="Sat0.2", prefix=16
+        )
+        new = make_entry(
+            dst="10.3.0.1", gw="10.1.0.3", iface_name="Sat0.2", prefix=16
+        )
+
+        lines = daemon._emit_batch_commands(
+            [gone, live], [new], live_devs={"eth2"}
+        )
+
+        assert lines == [
+            "route del 10.2.0.0/16 via 10.1.0.2 dev eth2",
+            "route replace 10.3.0.0/16 via 10.1.0.3 dev eth2",
+        ]
+
     def test_changed_next_hop_deletes_old_route_before_replacing(self, daemon):
         old = make_entry(
             dst="10.0.0.1", gw="10.1.0.1", iface_name="Sat0.1", prefix=16
@@ -666,7 +711,9 @@ class TestRouteDiff:
         self, daemon, topology
     ):
         node = Node("Sat0")
-        node.ipv4_previous_routing_table = [make_entry()]
+        entry = make_entry()
+        node.interfaces.append(entry.interface)
+        node.ipv4_previous_routing_table = [entry]
         node.ipv4_routing_table = []
         topology.satellites = {node.id: node}
 
@@ -676,3 +723,30 @@ class TestRouteDiff:
         mock_batch.assert_called_once()
         lines = mock_batch.call_args[0][1]
         assert lines == ["route del 10.0.0.0/16 via 10.1.0.1 dev eth1"]
+
+    def test_apply_satellite_routes_skips_deletes_for_removed_interfaces(
+        self, daemon, topology
+    ):
+        """Routes on a torn-down link are already purged by the kernel."""
+        node = Node("Sat0")
+        node.ipv4_previous_routing_table = [make_entry()]
+        node.ipv4_routing_table = []
+        topology.satellites = {node.id: node}
+
+        with patch.object(daemon, "_exec_batch") as mock_batch:
+            daemon._apply_satellite_routes(max_workers=1)
+
+        mock_batch.assert_not_called()
+
+    def test_apply_ground_station_routes_skips_deletes_for_removed_interfaces(
+        self, daemon, topology
+    ):
+        node = Node("Gnd0")
+        node.ipv4_previous_routing_table = [make_entry()]
+        node.ipv4_routing_table = []
+        topology.ground_stations = {node.id: node}
+
+        with patch.object(daemon, "_exec_batch") as mock_batch:
+            daemon._apply_ground_station_routes(max_workers=1)
+
+        mock_batch.assert_not_called()
