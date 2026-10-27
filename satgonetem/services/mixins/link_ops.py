@@ -82,7 +82,7 @@ class LinkOpsMixin:
         t_update_start = time.perf_counter()
         t_add_start = time.perf_counter()
 
-        with ThreadPoolExecutor(max_workers=1) as executor:
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = []
 
             if to_del:
