@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 from satgonetem.models.interface import Interface
 from satgonetem.models.node import Node
 from satgonetem.models.routing_entry import RoutingEntry
+from satgonetem.routing import static_daemon
 from satgonetem.routing.static_daemon import StaticRoutingDaemon
 
 
@@ -836,3 +837,26 @@ class TestRouteReuse:
 
         assert new_sat0_to_gnd0 is old_sat0_to_gnd0
         assert new_gnd0_to_gnd1 is not old_gnd0_to_gnd1
+
+class TestRouteBuildGc:
+    """Tests for the route-build GC suppression helper."""
+
+    def test_gc_disabled_restores_previous_enabled_state(self):
+        with patch.object(static_daemon.gc, "isenabled", return_value=True), \
+             patch.object(static_daemon.gc, "disable") as disable, \
+             patch.object(static_daemon.gc, "enable") as enable:
+            with static_daemon._gc_disabled():
+                pass
+
+        disable.assert_called_once()
+        enable.assert_called_once()
+
+    def test_gc_disabled_preserves_already_disabled_state(self):
+        with patch.object(static_daemon.gc, "isenabled", return_value=False), \
+             patch.object(static_daemon.gc, "disable") as disable, \
+             patch.object(static_daemon.gc, "enable") as enable:
+            with static_daemon._gc_disabled():
+                pass
+
+        disable.assert_not_called()
+        enable.assert_not_called()
