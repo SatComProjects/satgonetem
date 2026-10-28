@@ -5,13 +5,45 @@ from __future__ import annotations
 import logging
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from satgonetem.utils.constants import MAX_WORKERS
+from satgonetem.utils.constants import MAX_WORKERS, ROUTE_APPLY_WORKERS
 
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from satgonetem.models.link import Link
     from typing import List
+
+
+def _collect_link_operation_lists(
+    links,
+    links_to_add: "List[Link] | None" = None,
+    links_to_update: "List[Link] | None" = None,
+    links_to_remove: "List[Link] | None" = None,
+) -> tuple[list[Link], list[Link], list[Link]]:
+    """Return add/update/remove lists, scanning ``links`` at most once."""
+    if (
+        links_to_add is not None
+        and links_to_update is not None
+        and links_to_remove is not None
+    ):
+        return links_to_add, links_to_update, links_to_remove
+
+    scanned_add: list[Link] = []
+    scanned_update: list[Link] = []
+    scanned_remove: list[Link] = []
+    for link in links.values():
+        if getattr(link, "to_add", False):
+            scanned_add.append(link)
+        if getattr(link, "to_update", False):
+            scanned_update.append(link)
+        if getattr(link, "to_remove", False):
+            scanned_remove.append(link)
+
+    return (
+        links_to_add if links_to_add is not None else scanned_add,
+        links_to_update if links_to_update is not None else scanned_update,
+        links_to_remove if links_to_remove is not None else scanned_remove,
+    )
 
 
 class LinkOpsMixin:
@@ -23,6 +55,9 @@ class LinkOpsMixin:
         to_update: bool = True,
         to_del: bool = True,
         max_workers: int = MAX_WORKERS,
+        links_to_add: "List[Link] | None" = None,
+        links_to_update: "List[Link] | None" = None,
+        links_to_remove: "List[Link] | None" = None,
     ) -> dict:
         """
         Perform all link operations (add, update, delete) using a single gRPC channel
@@ -39,96 +74,127 @@ class LinkOpsMixin:
                 - 'added_count': Number of links added
                 - 'updated_count': Number of links updated
                 - 'deleted_count': Number of links deleted
-                - 'add_time_total': Total time to add all links
-                - 'add_time_per_link': Time per link for add operations
-                - 'update_time_total': Total time to update all links
-                - 'update_time_per_link': Time per link for update operations
-                - 'delete_time_total': Total time to delete all links
-                - 'delete_time_per_link': Time per link for delete operations
+                - 'add_time_total': Sum of actual add-operation durations
+                - 'add_time_wall': First add submission to last add completion
+                - 'add_time_per_link': Average actual add-operation duration
+                - 'update_time_total': Sum of actual update-operation durations
+                - 'update_time_wall': First update submission to last completion
+                - 'update_time_per_link': Average actual update-operation duration
+                - 'delete_time_total': Sum of actual delete durations
+                - 'delete_time_wall': First delete submission to last completion
+                - 'delete_time_per_link': Average actual delete-operation duration
         """
-        # Collect all link operations that need to be performed
-        links_to_add = [
-            link for link in self.links.values() if getattr(link, "to_add", False)
-        ]
-        links_to_update = [
-            link for link in self.links.values() if getattr(link, "to_update", False)
-        ]
-        links_to_remove = [
-            link for link in self.links.values() if getattr(link, "to_remove", False)
-        ]
+        # Collect all link operations that need to be performed. Callers that
+        # already have the lists pass them in so this scan is done only once
+        # per simulation step.
+        links_to_add, links_to_update, links_to_remove = (
+            _collect_link_operation_lists(
+                self.links,
+                links_to_add,
+                links_to_update,
+                links_to_remove,
+            )
+        )
 
-        # Initialize timing information
+        processed_add = links_to_add if to_add else []
+        processed_update = links_to_update if to_update else []
+        processed_remove = links_to_remove if to_del else []
+
+        # Initialize timing information.  *_time_total is the sum of the actual
+        # per-operation durations; *_time_wall is the first-submit-to-last-
+        # completion span for that category.
         operation_stats = {
-            "added_count": len(links_to_add),
-            "updated_count": len(links_to_update),
-            "deleted_count": len(links_to_remove),
-            "links_to_add": links_to_add,
+            "added_count": len(processed_add),
+            "updated_count": len(processed_update),
+            "deleted_count": len(processed_remove),
+            "links_to_add": processed_add,
             "add_time_total": 0.0,
+            "add_time_wall": 0.0,
             "add_time_per_link": 0.0,
             "update_time_total": 0.0,
+            "update_time_wall": 0.0,
             "update_time_per_link": 0.0,
             "delete_time_total": 0.0,
+            "delete_time_wall": 0.0,
             "delete_time_per_link": 0.0,
         }
 
         # If no gRPC operations needed or status is False, return early
         if not self.get_status() or not (
-            links_to_add or links_to_update or links_to_remove
+            processed_add or processed_update or processed_remove
         ):
             return operation_stats
 
-        # Direct veth/tc operations (no gRPC)
-        t_delete_start = time.perf_counter()
-        t_update_start = time.perf_counter()
-        t_add_start = time.perf_counter()
+        durations: dict[str, list[float]] = {
+            "add": [],
+            "update": [],
+            "delete": [],
+        }
+        started: dict[str, float] = {}
+        finished: dict[str, float] = {}
+        submit_times: dict = {}
+        future_categories: dict = {}
 
-        with ThreadPoolExecutor(max_workers=1) as executor:
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = []
 
+            def submit(category: str, operation, link) -> None:
+                submitted_at = time.perf_counter()
+                future = executor.submit(operation, link)
+                submit_times[future] = submitted_at
+                future_categories[future] = category
+                started.setdefault(category, submitted_at)
+                futures.append(future)
+
             if to_del:
-                t_delete_start = time.perf_counter()
-                for link in links_to_remove:
-                    futures.append(executor.submit(self._execute_link_delete, link))
+                for link in processed_remove:
+                    submit("delete", self._execute_link_delete, link)
 
             if to_update:
-                t_update_start = time.perf_counter()
-                for link in links_to_update:
-                    futures.append(executor.submit(self._execute_link_update, link))
+                for link in processed_update:
+                    submit("update", self._execute_link_update, link)
 
             if to_add:
-                t_add_start = time.perf_counter()
-                for link in links_to_add:
-                    futures.append(executor.submit(self._execute_link_add, link))
+                for link in processed_add:
+                    submit("add", self._execute_link_add, link)
 
             for future in as_completed(futures):
+                category = future_categories[future]
                 try:
-                    future.result()
+                    duration = future.result()
                 except Exception as e:
                     logging.error(f"Link operation failed: {e}")
+                    duration = time.perf_counter() - submit_times[future]
+                else:
+                    try:
+                        duration = float(duration)
+                    except (TypeError, ValueError):
+                        # Mocks and non-timed callers do not return a duration.
+                        duration = time.perf_counter() - submit_times[future]
 
-        t_end = time.perf_counter()
-        operation_stats["delete_time_total"] = t_end - t_delete_start
-        operation_stats["update_time_total"] = t_end - t_update_start
-        operation_stats["add_time_total"] = t_end - t_add_start
+                durations[category].append(duration)
+                finished[category] = time.perf_counter()
 
-        # Calculate per-link timing
-        if operation_stats["added_count"] > 0:
-            operation_stats["add_time_per_link"] = (
-                operation_stats["add_time_total"] / operation_stats["added_count"]
+        for category, prefix in (
+            ("add", "add"),
+            ("update", "update"),
+            ("delete", "delete"),
+        ):
+            category_durations = durations[category]
+            total = sum(category_durations)
+            operation_stats[f"{prefix}_time_total"] = total
+            operation_stats[f"{prefix}_time_per_link"] = (
+                total / len(category_durations) if category_durations else 0.0
             )
-        if operation_stats["updated_count"] > 0:
-            operation_stats["update_time_per_link"] = (
-                operation_stats["update_time_total"] / operation_stats["updated_count"]
-            )
-        if operation_stats["deleted_count"] > 0:
-            operation_stats["delete_time_per_link"] = (
-                operation_stats["delete_time_total"] / operation_stats["deleted_count"]
-            )
+            if category in started and category in finished:
+                operation_stats[f"{prefix}_time_wall"] = (
+                    finished[category] - started[category]
+                )
 
         return operation_stats
 
     def _update_routing_after_link_changes(
-        self, new_links: List[Link], max_workers: int = 4
+        self, new_links: List[Link], max_workers: int = ROUTE_APPLY_WORKERS
     ) -> None:
         """
         Update routing after link topology changes based on the configured routing method.
@@ -160,61 +226,75 @@ class LinkOpsMixin:
                 f"Unknown routing method '{self.routing}', skipping routing update"
             )
 
-    def _execute_link_delete(self, link: Link) -> None:
+    def _execute_link_delete(self, link: Link) -> float:
         """Delete a link's veth pair directly via nsenter+ip."""
+        start = time.perf_counter()
         if self.hil_manager is not None and self.hil_manager.is_hil_link(link):
             self.hil_manager.teardown_link(link)
             link.to_delete = False
-            return
+            return time.perf_counter() - start
         if self.launcher is None:
             logging.warning("launcher not set, skipping link delete")
-            return
+            return 0.0
         try:
             self.launcher.delete_link(link)
             link.to_delete = False
-            logging.info(f"Deleted link {link.source.name} -- {link.target.name}")
+            logging.debug(
+                "Deleted link %s -- %s", link.source.name, link.target.name
+            )
         except (RuntimeError, OSError) as err:
             logging.error(
                 f"Unable to delete link {link.source.name}--{link.target.name}: {err}"
             )
+        return time.perf_counter() - start
 
-    def _execute_link_update(self, link) -> None:
+    def _execute_link_update(self, link) -> float:
         """Update a link's netem delay and TBF rate directly via nsenter+tc."""
+        start = time.perf_counter()
         if self.hil_manager is not None and self.hil_manager.is_hil_link(link):
             self.hil_manager.update_link(link)
-            return
+            return time.perf_counter() - start
         if self.launcher is None:
             logging.warning("launcher not set, skipping link update")
-            return
+            return 0.0
         try:
             self.launcher.update_link(link)
             delay = max(int(link.delay), 1)
-            logging.info(
-                f"Updated link {link.source.name} -- {link.target.name} with delay {delay} ms"
+            logging.debug(
+                "Updated link %s -- %s with delay %d ms",
+                link.source.name,
+                link.target.name,
+                delay,
             )
         except (RuntimeError, OSError) as err:
             logging.error(
                 f"Unable to update link {link.source.name}--{link.target.name}: {err}"
             )
+        return time.perf_counter() - start
 
-    def _execute_link_add(self, link) -> None:
+    def _execute_link_add(self, link) -> float:
         """Add a link by creating a veth pair and applying qdiscs directly."""
+        start = time.perf_counter()
         if self.hil_manager is not None and self.hil_manager.is_hil_link(link):
             self.hil_manager.setup_link(link)
-            return
+            return time.perf_counter() - start
         if self.launcher is None:
             logging.warning("launcher not set, skipping link add")
-            return
+            return 0.0
         try:
             self.launcher.add_link(link)
             delay = max(int(link.delay), 1)
-            logging.info(
-                f"Added link {link.source.name} -- {link.target.name} with delay {delay} ms"
+            logging.debug(
+                "Added link %s -- %s with delay %d ms",
+                link.source.name,
+                link.target.name,
+                delay,
             )
         except (RuntimeError, OSError) as err:
             logging.error(
                 f"Unable to add link {link.source.name}--{link.target.name}: {err}"
             )
+        return time.perf_counter() - start
 
     def _process_links_sequentially(
         self, links_to_remove, links_to_update, links_to_add
@@ -233,6 +313,9 @@ class LinkOpsMixin:
         to_update: bool = True,
         to_del: bool = True,
         max_workers: int = MAX_WORKERS,
+        links_to_add: "List[Link] | None" = None,
+        links_to_update: "List[Link] | None" = None,
+        links_to_remove: "List[Link] | None" = None,
     ) -> None:
         """
         Perform local link operations (interface management, state updates)
@@ -243,22 +326,24 @@ class LinkOpsMixin:
             to_update: Whether to process link updates.
             to_del: Whether to process link deletions.
             max_workers: Maximum number of parallel workers.
+            links_to_add: Optional precomputed additions.
+            links_to_update: Optional precomputed updates.
+            links_to_remove: Optional precomputed removals.
         """
-        links_to_remove = (
-            [link for link in self.links.values() if getattr(link, "to_remove", False)]
-            if to_del
-            else []
+        links_to_add, links_to_update, links_to_remove = (
+            _collect_link_operation_lists(
+                self.links,
+                links_to_add,
+                links_to_update,
+                links_to_remove,
+            )
         )
-        links_to_update = (
-            [link for link in self.links.values() if getattr(link, "to_update", False)]
-            if to_update
-            else []
-        )
-        links_to_add = (
-            [link for link in self.links.values() if getattr(link, "to_add", False)]
-            if to_add
-            else []
-        )
+        if not to_del:
+            links_to_remove = []
+        if not to_update:
+            links_to_update = []
+        if not to_add:
+            links_to_add = []
 
         total_operations = (
             len(links_to_remove) + len(links_to_update) + len(links_to_add)
@@ -281,15 +366,14 @@ class LinkOpsMixin:
         """
         Perform local link operations in parallel where thread-safe.
         """
+        # Interface removals mutate shared node.interfaces lists. Run them
+        # sequentially; concurrent scans/removals can skip entries.
+        for link in links_to_remove:
+            self._remove_link_interfaces(link)
+
         # Thread-safe operations that can be parallelized
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = []
-
-            # Parallel operations for individual link processing
-            # Remove interface operations (can be done in parallel per link)
-            for link in links_to_remove:
-                future = executor.submit(self._remove_link_interfaces, link)
-                futures.append(future)
 
             # Update operations (thread-safe flag updates)
             for link in links_to_update:
@@ -319,6 +403,7 @@ class LinkOpsMixin:
             target = link.target
             source.remove_interface_connected_to_node(target)
             target.remove_interface_connected_to_node(source)
+            self.interface_version = getattr(self, "interface_version", 0) + 1
         except (AttributeError, KeyError, TypeError) as e:
             logging.error(
                 f"Failed to remove interfaces for link {link.source.name}--{link.target.name}: {e}"

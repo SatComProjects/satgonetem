@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 from satgonetem.models.interface import Interface
 from satgonetem.models.node import Node
 from satgonetem.models.routing_entry import RoutingEntry
+from satgonetem.routing import static_daemon
 from satgonetem.routing.static_daemon import StaticRoutingDaemon
 
 
@@ -617,3 +618,273 @@ class TestPopulateDijkstraIgraph:
         }
 
         assert nx_routes == ig_routes
+
+
+class TestRouteDiff:
+    """Tests for the incremental route diff emitted by the daemon."""
+
+    def test_removed_destination_emits_delete(self, daemon):
+        stale = make_entry(
+            dst="10.0.0.1", gw="10.1.0.1", iface_name="Sat0.1", prefix=16
+        )
+
+        lines = daemon._emit_batch_commands([stale], [])
+
+        assert lines == ["route del 10.0.0.0/16 via 10.1.0.1 dev eth1"]
+
+    def test_removed_destination_deletes_when_device_is_present(self, daemon):
+        stale = make_entry(
+            dst="10.0.0.1", gw="10.1.0.1", iface_name="Sat0.1", prefix=16
+        )
+
+        lines = daemon._emit_batch_commands([stale], [], live_devs={"eth1"})
+
+        assert lines == ["route del 10.0.0.0/16 via 10.1.0.1 dev eth1"]
+
+    def test_removed_destination_skips_delete_when_device_is_gone(self, daemon):
+        stale = make_entry(
+            dst="10.0.0.1", gw="10.1.0.1", iface_name="Sat0.1", prefix=16
+        )
+
+        lines = daemon._emit_batch_commands([stale], [], live_devs={"eth2"})
+
+        assert lines == []
+
+    def test_empty_live_devs_skips_all_deletions(self, daemon):
+        stale = make_entry(
+            dst="10.0.0.1", gw="10.1.0.1", iface_name="Sat0.1", prefix=16
+        )
+
+        assert daemon._emit_batch_commands([stale], [], live_devs=set()) == []
+
+    def test_mixed_batch_keeps_live_deletions_and_additions(self, daemon):
+        gone = make_entry(
+            dst="10.1.0.1", gw="10.1.0.1", iface_name="Sat0.1", prefix=16
+        )
+        live = make_entry(
+            dst="10.2.0.1", gw="10.1.0.2", iface_name="Sat0.2", prefix=16
+        )
+        new = make_entry(
+            dst="10.3.0.1", gw="10.1.0.3", iface_name="Sat0.2", prefix=16
+        )
+
+        lines = daemon._emit_batch_commands(
+            [gone, live], [new], live_devs={"eth2"}
+        )
+
+        assert lines == [
+            "route del 10.2.0.0/16 via 10.1.0.2 dev eth2",
+            "route replace 10.3.0.0/16 via 10.1.0.3 dev eth2",
+        ]
+
+    def test_changed_next_hop_replaces_without_deleting(self, daemon):
+        old = make_entry(
+            dst="10.0.0.1", gw="10.1.0.1", iface_name="Sat0.1", prefix=16
+        )
+        new = make_entry(
+            dst="10.0.0.1", gw="10.1.0.2", iface_name="Sat0.2", prefix=16
+        )
+
+        lines = daemon._emit_batch_commands([old], [new])
+
+        assert lines == [
+            "route replace 10.0.0.0/16 via 10.1.0.2 dev eth2",
+        ]
+
+    def test_added_destination_still_emits_replace(self, daemon):
+        new = make_entry(
+            dst="10.0.0.1", gw="10.1.0.1", iface_name="Sat0.1", prefix=16
+        )
+
+        lines = daemon._emit_batch_commands([], [new])
+
+        assert lines == ["route replace 10.0.0.0/16 via 10.1.0.1 dev eth1"]
+
+    def test_unchanged_table_emits_nothing(self, daemon):
+        entry = make_entry(
+            dst="10.0.0.1", gw="10.1.0.1", iface_name="Sat0.1", prefix=16
+        )
+
+        assert daemon._emit_batch_commands([entry], [entry]) == []
+
+    def test_apply_satellite_routes_executes_stale_route_delete(
+        self, daemon, topology
+    ):
+        node = Node("Sat0")
+        entry = make_entry()
+        node.interfaces.append(entry.interface)
+        node.ipv4_previous_routing_table = [entry]
+        node.ipv4_routing_table = []
+        topology.satellites = {node.id: node}
+
+        with patch.object(daemon, "_exec_batch") as mock_batch:
+            daemon._apply_satellite_routes(max_workers=1)
+
+        mock_batch.assert_called_once()
+        lines = mock_batch.call_args[0][1]
+        assert lines == ["route del 10.0.0.0/16 via 10.1.0.1 dev eth1"]
+
+    def test_apply_satellite_routes_skips_deletes_for_removed_interfaces(
+        self, daemon, topology
+    ):
+        """Routes on a torn-down link are already purged by the kernel."""
+        node = Node("Sat0")
+        node.ipv4_previous_routing_table = [make_entry()]
+        node.ipv4_routing_table = []
+        topology.satellites = {node.id: node}
+
+        with patch.object(daemon, "_exec_batch") as mock_batch:
+            daemon._apply_satellite_routes(max_workers=1)
+
+        mock_batch.assert_not_called()
+
+    def test_apply_ground_station_routes_skips_deletes_for_removed_interfaces(
+        self, daemon, topology
+    ):
+        node = Node("Gnd0")
+        node.ipv4_previous_routing_table = [make_entry()]
+        node.ipv4_routing_table = []
+        topology.ground_stations = {node.id: node}
+
+        with patch.object(daemon, "_exec_batch") as mock_batch:
+            daemon._apply_ground_station_routes(max_workers=1)
+
+        mock_batch.assert_not_called()
+
+
+class TestRouteReuse:
+    """Tests for route-entry reuse across topology updates."""
+
+    def test_equalize_keeps_previous_table_by_reference(self, daemon, topology):
+        node = Node("Sat0")
+        table = [make_entry()]
+        node.ipv4_routing_table = table
+        topology.get_satellites.return_value = [node]
+        topology.get_ground_stations.return_value = []
+
+        daemon._equalize_routing_tables()
+
+        assert node.ipv4_previous_routing_table is table
+        assert node.ipv4_routing_table == []
+        assert node.ipv4_routing_table is not table
+
+    def test_identical_tables_skip_the_diff(self, daemon):
+        table = [make_entry()]
+
+        assert daemon._emit_batch_commands(table, table) == []
+
+    def test_update_reuses_entries_when_routes_are_unchanged(self):
+        topo, gnd0, gnd1, sat0, sat1 = _make_line_topology()
+        daemon = StaticRoutingDaemon(topo)
+        nodes = [gnd0, gnd1, sat0, sat1]
+
+        with patch.object(daemon, "_apply_ground_station_routes"), \
+             patch.object(daemon, "_apply_satellite_routes"):
+            daemon.init()
+
+        before = {node.id: list(node.ipv4_routing_table) for node in nodes}
+
+        with patch.object(daemon, "_apply_ground_station_routes"), \
+             patch.object(daemon, "_apply_satellite_routes"):
+            daemon.update([])
+
+        for node in nodes:
+            assert len(node.ipv4_routing_table) == len(before[node.id])
+            for old_entry, new_entry in zip(
+                before[node.id], node.ipv4_routing_table
+            ):
+                assert new_entry is old_entry
+            assert node.ipv4_previous_routing_table is node.ipv4_routing_table
+
+    def test_update_reuses_only_unaffected_entries(self):
+        topo, gnd0, gnd1, sat0, _sat1 = _make_line_topology()
+        _link_nodes(gnd0, gnd1)
+        graph = topo.get_current_graph.return_value
+        graph.add_edge(gnd0.id, gnd1.id, weight=100)
+
+        daemon = StaticRoutingDaemon(topo)
+        with patch.object(daemon, "_apply_ground_station_routes"), \
+             patch.object(daemon, "_apply_satellite_routes"):
+            daemon.init()
+
+        old_sat0_to_gnd0 = next(
+            entry
+            for entry in sat0.ipv4_routing_table
+            if entry.target_node == "Gnd0"
+        )
+        old_gnd0_to_gnd1 = next(
+            entry
+            for entry in gnd0.ipv4_routing_table
+            if entry.target_node == "Gnd1"
+        )
+
+        graph[gnd0.id][gnd1.id]["weight"] = 0.1
+
+        with patch.object(daemon, "_apply_ground_station_routes"), \
+             patch.object(daemon, "_apply_satellite_routes"):
+            daemon.update([])
+
+        new_sat0_to_gnd0 = next(
+            entry
+            for entry in sat0.ipv4_routing_table
+            if entry.target_node == "Gnd0"
+        )
+        new_gnd0_to_gnd1 = next(
+            entry
+            for entry in gnd0.ipv4_routing_table
+            if entry.target_node == "Gnd1"
+        )
+
+        assert new_sat0_to_gnd0 is old_sat0_to_gnd0
+        assert new_gnd0_to_gnd1 is not old_gnd0_to_gnd1
+
+
+class TestRouteBuildGc:
+    """Tests for the route-build GC suppression helper."""
+
+    def test_gc_disabled_restores_previous_enabled_state(self):
+        with patch.object(static_daemon.gc, "isenabled", return_value=True), \
+             patch.object(static_daemon.gc, "disable") as disable, \
+             patch.object(static_daemon.gc, "enable") as enable:
+            with static_daemon._gc_disabled():
+                pass
+
+        disable.assert_called_once()
+        enable.assert_called_once()
+
+    def test_gc_disabled_preserves_already_disabled_state(self):
+        with patch.object(static_daemon.gc, "isenabled", return_value=False), \
+             patch.object(static_daemon.gc, "disable") as disable, \
+             patch.object(static_daemon.gc, "enable") as enable:
+            with static_daemon._gc_disabled():
+                pass
+
+        disable.assert_not_called()
+        enable.assert_not_called()
+
+
+class TestInterfaceMapCache:
+    """Tests for the interface-map cache used by routing updates."""
+
+    def test_iface_maps_are_reused_until_interface_version_changes(self):
+        gs = Node("Gnd0")
+        gs.interfaces = [Interface(name="Gnd0.1")]
+        sat = Node("Sat1")
+        sat.interfaces = [Interface(name="Sat1.0")]
+
+        topology = MagicMock()
+        topology.interface_version = 1
+        topology.ground_stations = {gs.id: gs}
+        topology.satellites = {sat.id: sat}
+        daemon = StaticRoutingDaemon(topology)
+
+        first = daemon._prebuild_iface_maps()
+        second = daemon._prebuild_iface_maps()
+
+        assert first is second
+
+        topology.interface_version = 2
+        third = daemon._prebuild_iface_maps()
+
+        assert third is not first
+        assert third[0][gs.id] is not first[0][gs.id]

@@ -9,7 +9,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from satgonetem.models.ground_station import GroundStation
 from satgonetem.models.satellite import Satellite
 from satgonetem.models.link import Link
-from satgonetem.utils.utils import distance_3d_km
+from satgonetem.utils.utils import distance_3d_km, distance_3d_km_many
 from sat_com_model.models import InterSatelliteLinkDirection
 from sat_com_model.models import Link as SatComLink
 from sat_com_model.models import Satellite as SatComSatellite
@@ -133,16 +133,22 @@ class TopologySyncMixin:
             f"(Ok: {synced_count} | Fail: {error_count})"
         )
 
-    def _sync_links(self, add_anyway: bool = False) -> None:
+    def _sync_links(self, add_anyway: bool = False) -> dict[str, list[Link]]:
         """Sync all links from the simulation manager into self.links.
 
-        Workers compute link results in parallel without mutating shared state.
-        All writes to self.links are applied in the main thread after the pool
-        completes, avoiding data races.
+        Performs a single sequential pass: existing links have their state
+        refreshed, new links are created, and links that disappeared from the
+        simulation manager are flagged for removal. Distances for real Link
+        objects are computed in one vectorized batch.
 
         Args:
             add_anyway: If True, mark newly discovered links with to_add=True
                 even outside the initial sync phase.
+
+        Returns:
+            Dict with ``links_to_add``, ``links_to_update`` and
+            ``links_to_remove`` lists, collected in one pass so callers do not
+            need to rescan ``self.links``.
 
         Raises:
             ValueError: If self.simulation_manager is None.
@@ -153,70 +159,149 @@ class TopologySyncMixin:
         links_data = self.simulation_manager.get_all_links()
         num_links = len(links_data)
 
-        if num_links == 0:
-            logging.info("No links found to sync.")
-            return
+        current_keys: set = set()
+        new_count = 0
+        error_count = 0
+        distance_refresh_links: list[Link] = []
 
-        existing_keys = frozenset(self.links.keys())
-
-        def compute_link_result(sat_com_link):
+        for sat_com_link in links_data:
             src = getattr(sat_com_link, "source", None)
             dst = getattr(sat_com_link, "destination", None)
             if not src or not dst:
-                return None
-            key = self._build_link_key(src, dst)
-            if key in existing_keys:
-                is_active = getattr(
-                    sat_com_link,
-                    "is_active",
-                    not getattr(sat_com_link, "disabled", False),
-                )
-                return ("update", key, is_active)
-            new_link = self._create_link_from_satcom_link(sat_com_link)
-            return ("new", key, new_link)
+                continue
+            try:
+                key = self._build_link_key(src, dst)
+            except ValueError as exc:
+                error_count += 1
+                logging.error(f"Error building link key: {exc}")
+                continue
 
-        max_workers = min(32, (os.cpu_count() or 4) * 4, num_links)
-        results = []
-        done_count = 0
-        error_count = 0
+            current_keys.add(key)
+            try:
+                link = self.links.get(key)
+                if link is None:
+                    link = self._create_link_from_satcom_link(sat_com_link)
+                    if (self.initial_sync or add_anyway) and link.is_active:
+                        link.to_add = True
+                    self.links[key] = link
+                    new_count += 1
+                else:
+                    # Strategies that recreate link objects every tick must not
+                    # leave the wrapper pointing at an object that is no longer
+                    # in the simulation manager.
+                    link.satcom_object = sat_com_link
+                    new_active = getattr(
+                        sat_com_link,
+                        "is_active",
+                        not getattr(sat_com_link, "disabled", False),
+                    )
+                    if link.is_active != new_active:
+                        link.is_active = new_active
+                        if new_active:
+                            link.to_add = True
+                            link.to_remove = False
+                        else:
+                            link.to_add = False
+                            link.to_remove = True
+                    if isinstance(link, Link):
+                        distance_refresh_links.append(link)
+                    else:
+                        link.sync_distance_from_satcom_and_delay()
+            except Exception as exc:
+                error_count += 1
+                logging.error(f"Error syncing link: {exc}")
 
-        with ThreadPoolExecutor(max_workers=max_workers) as pool:
-            futures = {
-                pool.submit(compute_link_result, link): link for link in links_data
-            }
-            for future in as_completed(futures):
-                try:
-                    result = future.result()
-                    if result is not None:
-                        results.append(result)
-                    done_count += 1
-                except Exception as e:
-                    error_count += 1
-                    logging.error(f"Error syncing link: {e}")
+        error_count += self._refresh_link_distances(distance_refresh_links)
 
-        new_count = 0
-        for action, key, payload in results:
-            if action == "new":
-                self.links[key] = payload
-                if self.initial_sync or add_anyway:
-                    payload.to_add = True
-                new_count += 1
-            else:
-                self.links[key].is_active = payload
-                self.links[key].sync_distance_from_satcom_and_delay()
+        removed_count = 0
+        for key in self.links.keys() - current_keys:
+            self.links[key].to_remove = True
+            removed_count += 1
+
+        links_to_add: list[Link] = []
+        links_to_update: list[Link] = []
+        links_to_remove: list[Link] = []
+        for link in self.links.values():
+            if getattr(link, "to_remove", False):
+                links_to_remove.append(link)
+                continue
+            if getattr(link, "to_add", False):
+                links_to_add.append(link)
+            elif getattr(link, "to_update", False):
+                links_to_update.append(link)
 
         self.initial_sync = True
         logging.info(
-            f"Link sync complete: {done_count}/{num_links} "
-            f"(Ok: {done_count} | Fail: {error_count} | Added: {new_count})"
+            f"Link sync complete: {num_links} links "
+            f"(Errors: {error_count} | Added: {new_count} | Removed: {removed_count})"
         )
+        return {
+            "links_to_add": links_to_add,
+            "links_to_update": links_to_update,
+            "links_to_remove": links_to_remove,
+        }
+
+    def _refresh_link_distances(self, links: list[Link]) -> int:
+        """Refresh link distances and delays in one vectorized batch.
+
+        Args:
+            links: Existing Link objects whose endpoints have fresh positions.
+
+        Returns:
+            Number of links that could not be refreshed.
+        """
+        if not links:
+            return 0
+
+        try:
+            distances_km = distance_3d_km_many(
+                [link.source.position["latitude"] for link in links],
+                [link.source.position["longitude"] for link in links],
+                [link.source.position["altitude"] for link in links],
+                [link.target.position["latitude"] for link in links],
+                [link.target.position["longitude"] for link in links],
+                [link.target.position["altitude"] for link in links],
+            )
+        except Exception as exc:
+            # Keep the per-link path as a fallback for malformed positions.
+            logging.error(
+                "Vectorized link-distance refresh failed (%s); falling back",
+                exc,
+            )
+            errors = 0
+            for link in links:
+                try:
+                    link.sync_distance_from_satcom_and_delay()
+                except Exception as link_exc:
+                    errors += 1
+                    logging.error(
+                        "Error refreshing distance for %s--%s: %s",
+                        link.source.name,
+                        link.target.name,
+                        link_exc,
+                    )
+            return errors
+
+        errors = 0
+        for link, distance_km in zip(links, distances_km):
+            try:
+                link.update_distance_and_delay(float(distance_km) * 1000.0)
+            except Exception as exc:
+                errors += 1
+                logging.error(
+                    "Error refreshing distance for %s--%s: %s",
+                    link.source.name,
+                    link.target.name,
+                    exc,
+                )
+        return errors
 
     def _sync_links_to_delete(self) -> None:
         """Mark links absent from the simulation manager for removal.
 
-        Compares the current set of link keys in self.links against those
-        reported by the simulation manager. Any key no longer present is
-        flagged with to_remove=True for downstream cleanup.
+        Retained for callers that need a delete-only pass. The main update loop
+        folds this into :meth:`_sync_links` to avoid rebuilding every link key
+        twice per tick.
 
         Raises:
             ValueError: If self.simulation_manager is None.
@@ -228,7 +313,19 @@ class TopologySyncMixin:
 
         current_keys = set()
         for sat_com_link in links:
-            key = self._build_link_key(sat_com_link.source, sat_com_link.destination)
+            source = getattr(sat_com_link, "source", None)
+            destination = getattr(sat_com_link, "destination", None)
+            if not source or not destination:
+                continue
+            try:
+                key = self._build_link_key(source, destination)
+            except ValueError as exc:
+                logging.warning(
+                    "Skipping link with unsupported endpoints during delete "
+                    "sync: %s",
+                    exc,
+                )
+                continue
             current_keys.add(key)
 
         keys_to_delete = set(self.links.keys()) - current_keys
@@ -448,10 +545,10 @@ class TopologySyncMixin:
 
         Steps:
         1. Tick the sat_com time manager.
-        2. Sync satellite positions and link states from sat_com_model.
-        3. Mark stale links for deletion.
-        4. Execute bulk link operations (add/update/delete) via the launcher.
-        5. Sync emulator interface state to reflect updated link topology.
+        2. Sync satellite positions and link states from sat_com_model
+           (including marking stale links for removal).
+        3. Delete stale links, then execute add/update link operations.
+        4. Sync emulator interface state to reflect updated link topology.
 
         Returns:
             None
@@ -459,7 +556,7 @@ class TopologySyncMixin:
         Raises:
             ValueError: If simulation_manager has not been initialised.
         """
-        start_t = time.time()
+        start_t = time.perf_counter()
         logging.info(
             "Simulation update started for time step %d, %.3fs",
             self.current_time_step,
@@ -474,15 +571,46 @@ class TopologySyncMixin:
             self._update_simulation_manager_time()
             
         self._sync_node_positions()
-        self._sync_links()
-        self._sync_links_to_delete()
+        link_changes = self._sync_links()
+        links_to_add = link_changes["links_to_add"]
+        links_to_update = link_changes["links_to_update"]
+        links_to_remove = link_changes["links_to_remove"]
+        pending_delete_count = len(links_to_remove)
 
-        pending_delete_count = sum(
-            1 for link in self.links.values() if getattr(link, "to_remove", False)
+        # Delete first: HIL handovers reuse bridge/interface names, so the old
+        # link must be gone before the new one is created.
+        delete_stats = self.bulk_link_operations(
+            to_add=False,
+            to_update=False,
+            links_to_add=[],
+            links_to_update=[],
+            links_to_remove=links_to_remove,
+        )
+        self._perform_local_link_operations(
+            to_add=False,
+            to_update=False,
+            links_to_add=[],
+            links_to_update=[],
+            links_to_remove=links_to_remove,
         )
 
-        link_stats = self.bulk_link_operations(to_del=False)
-        self._perform_local_link_operations(to_del=False)
+        link_stats = self.bulk_link_operations(
+            to_del=False,
+            links_to_add=links_to_add,
+            links_to_update=links_to_update,
+            links_to_remove=[],
+        )
+        self._perform_local_link_operations(
+            to_del=False,
+            links_to_add=links_to_add,
+            links_to_update=links_to_update,
+            links_to_remove=[],
+        )
+
+        link_stats["deleted_count"] = delete_stats["deleted_count"]
+        link_stats["delete_time_total"] = delete_stats["delete_time_total"]
+        link_stats["delete_time_wall"] = delete_stats.get("delete_time_wall", 0.0)
+        link_stats["delete_time_per_link"] = delete_stats["delete_time_per_link"]
 
         if (
             link_stats["added_count"]
@@ -490,12 +618,6 @@ class TopologySyncMixin:
             or pending_delete_count
         ):
             self._update_routing_after_link_changes(link_stats["links_to_add"])
-
-        delete_stats = self.bulk_link_operations(to_add=False, to_update=False)
-        self._perform_local_link_operations(to_add=False, to_update=False)
-        link_stats["deleted_count"] = delete_stats["deleted_count"]
-        link_stats["delete_time_total"] = delete_stats["delete_time_total"]
-        link_stats["delete_time_per_link"] = delete_stats["delete_time_per_link"]
 
         if (
             link_stats["added_count"] > 0
@@ -508,26 +630,29 @@ class TopologySyncMixin:
             ]
             if link_stats["added_count"] > 0:
                 parts.append(
-                    f"(total: {link_stats['add_time_total'] * 1000:.2f}ms, "
+                    f"(sum: {link_stats['add_time_total'] * 1000:.2f}ms, "
+                    f"wall: {link_stats['add_time_wall'] * 1000:.2f}ms, "
                     f"per-link: {link_stats['add_time_per_link'] * 1000:.4f}ms)"
                 )
             parts.append(f"Updated: {link_stats['updated_count']}")
             if link_stats["updated_count"] > 0:
                 parts.append(
-                    f"(total: {link_stats['update_time_total'] * 1000:.2f}ms, "
+                    f"(sum: {link_stats['update_time_total'] * 1000:.2f}ms, "
+                    f"wall: {link_stats['update_time_wall'] * 1000:.2f}ms, "
                     f"per-link: {link_stats['update_time_per_link'] * 1000:.4f}ms)"
                 )
             parts.append(f"Deleted: {link_stats['deleted_count']}")
             if link_stats["deleted_count"] > 0:
                 parts.append(
-                    f"(total: {link_stats['delete_time_total'] * 1000:.2f}ms, "
+                    f"(sum: {link_stats['delete_time_total'] * 1000:.2f}ms, "
+                    f"wall: {link_stats['delete_time_wall'] * 1000:.2f}ms, "
                     f"per-link: {link_stats['delete_time_per_link'] * 1000:.4f}ms)"
                 )
             logging.info(" ".join(parts))
 
         self._sync_interfaces_and_links()
 
-        elapsed_ms = (time.time() - start_t) * 1000
+        elapsed_ms = (time.perf_counter() - start_t) * 1000
         logging.info(
             "Simulation update completed for time step %d, total time: %.2fms",
             self.current_time_step,

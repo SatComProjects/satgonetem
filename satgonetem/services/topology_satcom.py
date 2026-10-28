@@ -575,6 +575,7 @@ class TopologyManager(
         self.ground_stations: dict[int, GroundStation] = {}
         self.links: dict[frozenset[(str)], Link] = {}
         self.interfaces: list[Interface] = []  # List of all interfaces in the network
+        self.interface_version = 0
 
         # QoS thingies
         self.use_file_routes = False
@@ -749,7 +750,7 @@ class TopologyManager(
         for link in self.links.values():
             link.link_budget_config = config
             if link.use_budget and link.type == "GroundStationLink":
-                link.update_link_capacities()
+                link.refresh_link_capacities()
 
     def set_antenna(
         self, nodes: list[Satellite] | list[GroundStation], config: AntennaConfig
@@ -763,6 +764,10 @@ class TopologyManager(
         antenna = config.to_antenna()
         for node in nodes:
             node.antenna = antenna
+
+        for link in self.links.values():
+            if link.use_budget and link.type == "GroundStationLink":
+                link.refresh_link_capacities()
 
     def check_for_updates(self) -> dict:
         """Check for updates in satellites, ground stations, and links.
@@ -882,6 +887,33 @@ class TopologyManager(
             export_link_length=True,
             export_object_position=True,
             enable_export_flows_data=False,
+        )
+
+        def wrapper_link(u, v):
+            def ref(node_id):
+                if node_id in self.satellites:
+                    return f"Sat{node_id}"
+                if node_id in self.ground_stations:
+                    return f"Gnd{node_id}"
+                return None
+
+            source, target = ref(u), ref(v)
+            if source is None or target is None:
+                return None
+            return self.links.get(frozenset((source, target)))
+
+        def is_routable(u, v, data):
+            if data.get("disabled", False):
+                return False
+            link = wrapper_link(u, v)
+            return link is None or link.is_active
+
+        graph.remove_edges_from(
+            [
+                (u, v)
+                for u, v, data in graph.edges(data=True)
+                if not is_routable(u, v, data)
+            ]
         )
 
         for u, v in graph.edges():

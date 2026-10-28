@@ -17,8 +17,8 @@
           "shell_white_lists": [
             "LEO"
           ],
-          "maximum_connected_satellites": 3,
-          "ground_to_space_connections_strategy": "everything-visible"
+          "maximum_connected_satellites": 1,
+          "ground_to_space_connections_strategy": "best-angle-until-disconnection"
         }
       }
     ],
@@ -29,7 +29,7 @@
           "identifier": "LEO",
           "amount_of_orbit_plane": 34,
           "amount_of_satellite_per_orbit_plane": 34,
-          "inclination": 51.9,
+          "inclination": 71.9,
           "phase_difference_between_satellites": false,
           "mean_revolution_per_day": 14.82
         },
@@ -54,7 +54,7 @@
   },
   "network_config": {
     "project_name": "Constellation",
-    "update_time": 1,
+    "update_time": 10,
     "gnd_link_capacity": 100000,
     "isl_link_capacity": 100000,
     "protocol": "ipv4",

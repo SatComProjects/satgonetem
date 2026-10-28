@@ -21,9 +21,12 @@ from sat_com_builder.models import (
 )
 from sat_com_constellation.models import WalkerConstellationProperty
 from sat_com_application.simulation_manager import SimulationManager
+from sat_com_model.exceptions import GroundObjectDomainNotFoundError
 from sat_com_model.models import (
     create_satellite,
     create_ground_station,
+    GroundObject as SatComGroundObject,
+    GroundObjectDomain,
     GroundStation as SatComGroundStation,
     Satellite as SatComSatellite,
     InterSatelliteLinkDirection,
@@ -292,26 +295,133 @@ def create_custom_ground_station(
     return gs
 
 
+def _attach_ground_object_domain(
+    ground_object: SatComGroundObject, simulation_manager: SimulationManager
+) -> None:
+    """Attach a compatible ground-object domain to a custom ground object.
+
+    Custom objects created by this module do not belong to a domain yet.  The
+    simulation manager requires one for link updates and strategy resolution.
+    Prefer an existing domain with the requested identifier, then any existing
+    ground-station domain, and create a default one only if the simulation has
+    no domains at all.
+
+    Args:
+        ground_object: Ground object to update in place.
+        simulation_manager: Manager that owns the available domains.
+    """
+    if ground_object.ground_object_domain is not None:
+        return
+
+    domain = None
+    try:
+        domain = simulation_manager.get_ground_object_domain(ground_object.domain)
+    except GroundObjectDomainNotFoundError:
+        pass
+
+    # The ownership ``domain`` string may resolve to a generic domain with no
+    # connectivity strategy; a ground station needs a ground_station domain.
+    if domain is None or getattr(domain, "type", None) != "ground_station":
+        domain = next(
+            (
+                candidate
+                for candidate in simulation_manager.simulation.ground_object_domains
+                if getattr(candidate, "type", None) == "ground_station"
+            ),
+            None,
+        )
+
+    if domain is None:
+        domain = GroundObjectDomain(
+            identifier=ground_object.domain or "default",
+            type="ground_station",
+            ground_to_space_connections_strategy="best-angle-until-disconnection",
+        )
+        simulation_manager.add_ground_object_domain(domain)
+
+    ground_object.ground_object_domain = domain
+
+
 def add_custom_ground_station(
     ground_station: SatComGroundStation, simulation_manager: SimulationManager
 ) -> None:
     """Add a ground station to an existing simulation manager.
 
-    The ground station is appended to the manager but automatic ground-station
-    links are **not** refreshed.  If you want the simulation manager to connect
-    the station to visible satellites automatically, set a
-    `ground_object_domain` on the ground station and call
-    `simulation_manager.update_ground_station_links()` yourself after all
-    stations have been added.
+    The ground station is appended to the manager and attached to a compatible
+    ground-object domain. Automatic ground-station links are **not** refreshed;
+    call `simulation_manager.update_ground_station_links()` after all stations
+    have been added.
 
     Args:
         ground_station: GroundStation instance created by create_custom_ground_station.
         simulation_manager: Active SimulationManager to receive the ground station.
     """
+    _attach_ground_object_domain(ground_station, simulation_manager)
     simulation_manager.add_ground_station(ground_station)
     logging.info(f"Custom ground station {ground_station.topology_uniq_id} added")
 
 
+def _find_satellite_by_name(
+    name: str, simulation_manager: SimulationManager
+) -> SatComSatellite:
+    """Return the satellite whose ``satellite_name`` matches *name*.
+
+    Args:
+        name: Satellite name to look up.
+        simulation_manager: Simulation manager to search.
+
+    Returns:
+        The matching satellite.
+
+    Raises:
+        ValueError: If no satellite with that name exists.
+    """
+    for satellite in simulation_manager.get_satellites():
+        if getattr(satellite, "satellite_name", None) == name:
+            return satellite
+    raise ValueError(f"Satellite with name '{name}' not found")
+
+
+def _find_ground_station_by_name(
+    name: str, simulation_manager: SimulationManager
+) -> SatComGroundStation:
+    """Return the ground station whose ``label`` matches *name*.
+
+    Args:
+        name: Ground-station label to look up.
+        simulation_manager: Simulation manager to search.
+
+    Returns:
+        The matching ground station.
+
+    Raises:
+        ValueError: If no ground station with that label exists.
+    """
+    for ground_station in simulation_manager.get_ground_stations():
+        if getattr(ground_station, "label", None) == name:
+            return ground_station
+    raise ValueError(f"Ground station with name '{name}' not found")
+
+
+def _find_ground_object_by_name(
+    name: str, simulation_manager: SimulationManager
+) -> SatComGroundObject:
+    """Return the ground object (station or terminal) whose ``label`` matches.
+
+    Args:
+        name: Ground-object label to look up.
+        simulation_manager: Simulation manager to search.
+
+    Returns:
+        The matching ground object.
+
+    Raises:
+        ValueError: If no ground object with that label exists.
+    """
+    for ground_object in simulation_manager.get_all_ground_objects():
+        if getattr(ground_object, "label", None) == name:
+            return ground_object
+    raise ValueError(f"Ground object with name '{name}' not found")
 
 
 def _get_orbital_elements(
@@ -598,6 +708,36 @@ def add_mesh_links(
     print(f"Created {created_isls} ISLs, {created_gsls} GSLs")
 
 
+_DATE_FORMAT = "%d/%m/%Y %H:%M:%S"
+
+
+def _resolve_simulation_dates(
+    start_date: str, end_date: str
+) -> tuple[str, str]:
+    """Resolve optional simulation dates.
+
+    An omitted end date is always ten minutes after the effective start date,
+    not ten minutes after the wall clock.
+
+    Args:
+        start_date: Start datetime string, or empty for now.
+        end_date: End datetime string, or empty for start + 10 minutes.
+
+    Returns:
+        Tuple of ``(start_date, end_date)`` in the documented format.
+    """
+    if start_date:
+        start_dt = datetime.strptime(start_date, _DATE_FORMAT)
+    else:
+        start_dt = datetime.now(timezone.utc)
+        start_date = start_dt.strftime(_DATE_FORMAT)
+
+    if not end_date:
+        end_date = (start_dt + timedelta(minutes=10)).strftime(_DATE_FORMAT)
+
+    return start_date, end_date
+
+
 def create_test_project(
     simulation_name: str = "TestConstellation",
     start_date: str = "",
@@ -628,11 +768,7 @@ def create_test_project(
     Raises:
         OSError: If the ground object CSV file cannot be written.
     """
-    now = datetime.now(timezone.utc)  # .replace(second=0, microsecond=0)
-    if not start_date:
-        start_date = now.strftime("%d/%m/%Y %H:%M:%S")
-    if not end_date:
-        end_date = (now + timedelta(minutes=10)).strftime("%d/%m/%Y %H:%M:%S")
+    start_date, end_date = _resolve_simulation_dates(start_date, end_date)
     ground_files_dir = "/tmp/"
     if len(ground_stations_file) == 0:
         ground_stations = [
@@ -721,11 +857,7 @@ def create_empty_project(
     Raises:
         OSError: If the ground object CSV file cannot be written.
     """
-    now = datetime.now(timezone.utc)  # .replace(second=0, microsecond=0)
-    if not start_date:
-        start_date = now.strftime("%d/%m/%Y %H:%M:%S")
-    if not end_date:
-        end_date = (now + timedelta(minutes=10)).strftime("%d/%m/%Y %H:%M:%S")
+    start_date, end_date = _resolve_simulation_dates(start_date, end_date)
 
     return SimulationProperty(
         simulation_name=simulation_name,
