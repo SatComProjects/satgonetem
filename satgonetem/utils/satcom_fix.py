@@ -1,4 +1,5 @@
 import datetime
+import math
 
 import numpy as np
 
@@ -14,6 +15,16 @@ import astropy.units as u
 from sat_com_application.time_managers import TimeManager
 from sat_com_model.models import MovementModel, SpatialPosition
 
+# WGS-84 ellipsoid constants (kilometres).
+WGS84_A = 6378.137
+WGS84_F = 1 / 298.257223563
+WGS84_B = WGS84_A * (1 - WGS84_F)
+WGS84_E2 = 1 - (WGS84_B * WGS84_B) / (WGS84_A * WGS84_A)
+WGS84_EP2 = (WGS84_A * WGS84_A) / (WGS84_B * WGS84_B) - 1
+
+# Earth radius used by sat_com_trajectopy's sklearn distance model.
+EARTH_RADIUS_KM = 6371.009
+
 SGP4_ERRORS = {
     1: "Mean eccentricity is outside the range 0 ≤ e < 1",
     2: "Mean motion has fallen below zero",
@@ -23,18 +34,71 @@ SGP4_ERRORS = {
 }  # From https://pypi.org/project/sgp4/, scroll down to "The possible error codes are"
 
 
+def teme_to_geodetic(
+    r_teme_km: Tuple[float, float, float],
+    jd: float,
+    fr: float,
+) -> Tuple[float, float, float]:
+    """Convert a TEME position to WGS-84 geodetic coordinates.
+
+    Uses the standard Vallado/Bowring approach: rotate the TEME vector into an
+    Earth-fixed frame with GMST, then solve for latitude/altitude on the WGS-84
+    ellipsoid. Polar motion and the UT1-UTC offset are ignored; the resulting
+    error is well below one millisecond of propagation delay.
+
+    Args:
+        r_teme_km: TEME position vector in kilometres.
+        jd: Julian day number (integer part).
+        fr: Fractional Julian day.
+
+    Returns:
+        Tuple of (latitude degrees, longitude degrees, altitude metres).
+    """
+    # GMST from the IAU-82 expression, in seconds of time.
+    tut1 = (jd + fr - 2451545.0) / 36525.0
+    theta = (
+        -6.2e-6 * tut1**3
+        + 0.093104 * tut1**2
+        + (876600.0 * 3600 + 8640184.812866) * tut1
+        + 67310.54841
+    )
+    theta = math.radians(theta / 240.0) % (2 * math.pi)
+
+    x, y, z = r_teme_km
+    xe = math.cos(theta) * x + math.sin(theta) * y
+    ye = -math.sin(theta) * x + math.cos(theta) * y
+    ze = z
+
+    p = math.hypot(xe, ye)
+    th = math.atan2(ze * WGS84_A, p * WGS84_B)
+    lat = math.atan2(
+        ze + WGS84_EP2 * WGS84_B * math.sin(th) ** 3,
+        p - WGS84_E2 * WGS84_A * math.cos(th) ** 3,
+    )
+    lon = math.atan2(ye, xe)
+    n = WGS84_A / math.sqrt(1 - WGS84_E2 * math.sin(lat) ** 2)
+    alt_km = p / math.cos(lat) - n
+
+    return math.degrees(lat), math.degrees(lon), alt_km * 1000.0
+
+
 class PyOrbitalModel(MovementModel):
     """
     Orbital model for computing the position of an orbiting object using TLE elements.
 
-    Uses the SGP4/SDP4 library for propagation and astropy for TEME-to-geodetic conversion.
+    Uses the SGP4/SDP4 library for propagation. TEME-to-geodetic conversion uses
+    a direct GMST + WGS-84 solution by default; set ``high_precision_positions``
+    to True to use the slower Astropy IERS path instead.
 
     Attributes:
         orbital_object: SGP4 satellite record built from TLE.
         clock: Time source used to determine the current epoch.
         last_spatial_position: Cached geodetic position from the last computation.
         last_time_position_calculated: Timestamp of the last cached computation.
+        high_precision_positions: Use Astropy's TEME/ITRS transform when True.
     """
+
+    high_precision_positions: bool = False
 
     orbital_object: Satrec
     clock: TimeManager
@@ -91,6 +155,9 @@ class PyOrbitalModel(MovementModel):
         Raises:
             RuntimeError: If SGP4/SDP4 propagation returns a non-zero error code.
         """
+        if t.tzinfo is not None and t.utcoffset() is not None:
+            t = t.astimezone(timezone.utc)
+
         jd, fr = jday(
             t.year,
             t.month,
@@ -105,6 +172,25 @@ class PyOrbitalModel(MovementModel):
             msg = SGP4_ERRORS.get(error_code, "Unknown SGP4 error")
             raise RuntimeError(f"SGP4/SDP4 propagation error {error_code}: {msg}")
 
+        if self.high_precision_positions:
+            return self._compute_position_astropy(t, r_teme)
+
+        lat_deg, lon_deg, alt_m = teme_to_geodetic(r_teme, jd, fr)
+        return SpatialPosition(longitude=lon_deg, latitude=lat_deg, altitude=alt_m)
+
+    def _compute_position_astropy(self, t: datetime.datetime, r_teme) -> SpatialPosition:
+        """Compute the geodetic position with Astropy's IERS-aware transform.
+
+        Kept as a reference implementation for regression tests and for users
+        that need polar motion and UT1-UTC corrections.
+
+        Args:
+            t: UTC datetime at which to evaluate the position.
+            r_teme: TEME position vector in kilometres.
+
+        Returns:
+            SpatialPosition with longitude (deg), latitude (deg), altitude (m).
+        """
         obstime = Time(t, scale="utc")
         teme = TEME(
             CartesianRepresentation(
@@ -254,14 +340,77 @@ def get_half_cone_angle(
     return float((90.0 - min_elevation_deg) - np.degrees(np.arcsin(ratio)))
 
 
+def _haversine_ground_distance_km(position_1, position_2) -> float:
+    """Great-circle distance in kilometres between two spatial positions."""
+    lat1, lon1, lat2, lon2 = map(
+        math.radians,
+        (
+            position_1.latitude,
+            position_1.longitude,
+            position_2.latitude,
+            position_2.longitude,
+        ),
+    )
+    a = (
+        math.sin((lat2 - lat1) / 2) ** 2
+        + math.cos(lat1) * math.cos(lat2) * math.sin((lon2 - lon1) / 2) ** 2
+    )
+    return 2 * EARTH_RADIUS_KM * math.asin(math.sqrt(min(1.0, a)))
+
+
+def _ground_distance_km(self, position_1, position_2) -> float:
+    return _haversine_ground_distance_km(position_1, position_2)
+
+
+def _ground_distance_meters(self, position_1, position_2) -> float:
+    return _haversine_ground_distance_km(position_1, position_2) * 1000.0
+
+
+def _3d_distance_meters(self, position_1, position_2) -> float:
+    ground_m = _haversine_ground_distance_km(position_1, position_2) * 1000.0
+    alt_diff_m = (position_1.altitude or 0) - (position_2.altitude or 0)
+    return math.sqrt(ground_m**2 + alt_diff_m**2)
+
+
+def _3d_distance_km(self, position_1, position_2) -> float:
+    ground_km = _haversine_ground_distance_km(position_1, position_2)
+    alt_diff_km = ((position_1.altitude or 0) - (position_2.altitude or 0)) / 1000.0
+    return math.sqrt(ground_km**2 + alt_diff_km**2)
+
+
 def apply_satcom_fix() -> None:
     """
-    Monkey-patch the orbital model in sat_com_trajectopy with the local implementation.
+    Monkey-patch sat_com_trajectopy with the local implementations.
 
-    Replaces PyOrbitalModel in sat_com_trajectopy.orbital_models with the version
-    defined in this module.
+    Replaces PyOrbitalModel in sat_com_trajectopy.orbital_models with the
+    version defined in this module, and installs direct-haversine distance
+    methods on the default SkLearningDistanceModel. The scalar haversine is
+    mathematically identical to sklearn's pairwise implementation but avoids
+    its per-call validation overhead.
+
+    Modules that imported PyOrbitalModel before this function ran keep the old
+    binding in their module globals. The most important one is
+    ``sat_com_trajectopy.satellites.generate_satellite``, which does
+    ``from ...orbital_models import PyOrbitalModel`` at import time. Rebind
+    those references too, so the patch does not depend on import order.
     """
     import importlib
 
-    pkg = importlib.import_module("sat_com_trajectopy.orbital_models")
-    setattr(pkg, "PyOrbitalModel", PyOrbitalModel)
+    orbital_models = importlib.import_module("sat_com_trajectopy.orbital_models")
+    setattr(orbital_models, "PyOrbitalModel", PyOrbitalModel)
+
+    try:
+        generate_satellite = importlib.import_module(
+            "sat_com_trajectopy.satellites.generate_satellite"
+        )
+    except ImportError:
+        pass
+    else:
+        setattr(generate_satellite, "PyOrbitalModel", PyOrbitalModel)
+
+    distance_models = importlib.import_module("sat_com_trajectopy.distance_models")
+    model_class = distance_models.SkLearningDistanceModel
+    model_class.get_ground_distance_km = _ground_distance_km
+    model_class.get_ground_distance_meters = _ground_distance_meters
+    model_class.get_3d_distance_meters = _3d_distance_meters
+    model_class.get_3d_distance_km = _3d_distance_km

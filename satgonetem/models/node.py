@@ -360,8 +360,11 @@ class Node:
 
         if interface_to_remove:
             self.interfaces.remove(interface_to_remove)
-            logging.info(
-                f"Removed interface {interface_to_remove.name} from node {self.name} connected to {peer.name}"
+            logging.debug(
+                "Removed interface %s from node %s connected to %s",
+                interface_to_remove.name,
+                self.name,
+                peer.name,
             )
         else:
             logging.warning(

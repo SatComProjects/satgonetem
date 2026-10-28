@@ -4,6 +4,8 @@ from functools import wraps
 from typing import Any, Callable, Optional
 from urllib.request import urlopen
 
+import numpy as np
+
 from sgp4.api import Satrec, WGS72  # type: ignore
 from sgp4.api import jday  # type: ignore
 from sgp4.exporter import export_tle
@@ -185,25 +187,65 @@ def distance_3d_km(
     Returns:
         Distance in km.
     """
-    lat1_rad = math.radians(lat1)
-    lon1_rad = math.radians(lon1)
-    lat2_rad = math.radians(lat2)
-    lon2_rad = math.radians(lon2)
+    earth_radius_km = 6371.0
 
-    dlat = lat2_rad - lat1_rad
-    dlon = lon2_rad - lon1_rad
+    def to_ecef(lat_deg: float, lon_deg: float, alt_km: float) -> tuple:
+        lat_rad = math.radians(lat_deg)
+        lon_rad = math.radians(lon_deg)
+        radius = earth_radius_km + alt_km
+        return (
+            radius * math.cos(lat_rad) * math.cos(lon_rad),
+            radius * math.cos(lat_rad) * math.sin(lon_rad),
+            radius * math.sin(lat_rad),
+        )
 
-    a = (
-        math.sin(dlat / 2) ** 2
-        + math.cos(lat1_rad) * math.cos(lat2_rad) * math.sin(dlon / 2) ** 2
-    )
-    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+    x1, y1, z1 = to_ecef(lat1, lon1, alt1)
+    x2, y2, z2 = to_ecef(lat2, lon2, alt2)
 
-    R = 6371.0
-    horizontal_distance_km = R * c
-    vertical_distance_km = alt2 - alt1
+    return math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2 + (z2 - z1) ** 2)
 
-    return math.sqrt(horizontal_distance_km**2 + vertical_distance_km**2)
+
+def distance_3d_km_many(
+    lat1: Any,
+    lon1: Any,
+    alt1: Any,
+    lat2: Any,
+    lon2: Any,
+    alt2: Any,
+) -> np.ndarray:
+    """Vectorized 3D distance in km between arrays of geodetic points.
+
+    This is the array equivalent of :func:`distance_3d_km`; it uses the same
+    spherical-Earth ECEF formula so per-link distances remain comparable.
+
+    Args:
+        lat1/lon1/alt1: Latitude, longitude (degrees), and altitude (km) of
+            the first endpoint.
+        lat2/lon2/alt2: Latitude, longitude (degrees), and altitude (km) of
+            the second endpoint.
+
+    Returns:
+        NumPy array of distances in kilometres.
+    """
+    earth_radius_km = 6371.0
+
+    lat1_rad = np.radians(np.asarray(lat1, dtype=np.float64))
+    lon1_rad = np.radians(np.asarray(lon1, dtype=np.float64))
+    lat2_rad = np.radians(np.asarray(lat2, dtype=np.float64))
+    lon2_rad = np.radians(np.asarray(lon2, dtype=np.float64))
+
+    radius1 = earth_radius_km + np.asarray(alt1, dtype=np.float64)
+    radius2 = earth_radius_km + np.asarray(alt2, dtype=np.float64)
+
+    x1 = radius1 * np.cos(lat1_rad) * np.cos(lon1_rad)
+    y1 = radius1 * np.cos(lat1_rad) * np.sin(lon1_rad)
+    z1 = radius1 * np.sin(lat1_rad)
+
+    x2 = radius2 * np.cos(lat2_rad) * np.cos(lon2_rad)
+    y2 = radius2 * np.cos(lat2_rad) * np.sin(lon2_rad)
+    z2 = radius2 * np.sin(lat2_rad)
+
+    return np.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2 + (z2 - z1) ** 2)
 
 
 def fetch_iss_data() -> dict[str, str]:

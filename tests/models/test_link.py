@@ -1,10 +1,10 @@
 """Tests for the Link model."""
 
 import pytest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from satgonetem.link_budget.config import LinkBudgetConfig
-from satgonetem.models.link import Link
+from satgonetem.models.link import Link, LinkBudgetService
 from satgonetem.models.node import Node
 from satgonetem.models.interface import Interface
 
@@ -265,6 +265,69 @@ class TestLinkUpdateInterfacesState:
         isl_link.update_interfaces_state()
 
 
+class TestLinkElevationAngle:
+    """Regression tests for the elevation angle passed to the link budget."""
+
+    def test_overhead_satellite_returns_ninety_degrees(self, sat_node, gnd_node):
+        link = Link(
+            source=sat_node,
+            target=gnd_node,
+            distance=550_000.0,
+            type="GroundStationLink",
+            default_capacity_kbps=500,
+        )
+
+        assert link._compute_elevation_angle(sat_node, gnd_node) == pytest.approx(
+            90.0, abs=1e-6
+        )
+
+    def test_low_elevation_is_not_inverted(self, sat_node, gnd_node):
+        # At 20 degrees of central angle and 550 km altitude the true
+        # elevation is about 3.19 degrees; the old code returned ~86.8.
+        sat_node.position = {
+            "latitude": 20.0,
+            "longitude": 0.0,
+            "altitude": 550.0,
+        }
+        gnd_node.position = {
+            "latitude": 0.0,
+            "longitude": 0.0,
+            "altitude": 0.0,
+        }
+        link = Link(
+            source=sat_node,
+            target=gnd_node,
+            distance=550_000.0,
+            type="GroundStationLink",
+            default_capacity_kbps=500,
+        )
+
+        elevation = link._compute_elevation_angle(sat_node, gnd_node)
+        assert elevation == pytest.approx(3.1928435, abs=0.01)
+
+    def test_below_horizon_satellite_stays_negative(self, sat_node, gnd_node):
+        sat_node.position = {
+            "latitude": 0.0,
+            "longitude": 180.0,
+            "altitude": 550.0,
+        }
+        gnd_node.position = {
+            "latitude": 0.0,
+            "longitude": 0.0,
+            "altitude": 0.0,
+        }
+        link = Link(
+            source=sat_node,
+            target=gnd_node,
+            distance=20_000_000.0,
+            type="GroundStationLink",
+            default_capacity_kbps=500,
+        )
+
+        elevation = link._compute_elevation_angle(sat_node, gnd_node)
+        assert elevation < 0.0
+
+
 class TestLinkSyncDistanceAndDelay:
     """Tests for Link.sync_distance_from_satcom_and_delay."""
 
@@ -302,6 +365,16 @@ class TestLinkSyncDistanceAndDelay:
 
         assert link.to_update is True
 
+    def test_update_distance_and_delay_updates_state(self, gsl_link):
+        gsl_link.satcom_object = MagicMock()
+        gsl_link.to_update = False
+
+        gsl_link.update_distance_and_delay(299_792_458.0)
+
+        assert gsl_link.distance == 299_792_458.0
+        assert gsl_link.delay == 1000
+        assert gsl_link.to_update is True
+
     def test_to_update_stays_false_when_delay_unchanged(self, sat_node, gnd_node):
         link = Link(
             source=sat_node,
@@ -318,6 +391,56 @@ class TestLinkSyncDistanceAndDelay:
         link.sync_distance_from_satcom_and_delay()
 
         assert isinstance(link.to_update, bool)
+
+
+class TestLinkCapacityRefresh:
+    """Capacity refreshes must propagate to the emulator when values change."""
+
+    def _make_budget_link(self, sat_node, gnd_node):
+        return Link(
+            source=sat_node,
+            target=gnd_node,
+            distance=550_000.0,
+            type="GroundStationLink",
+            default_capacity_kbps=500,
+            use_budget=True,
+        )
+
+    def test_refresh_marks_to_update_when_capacity_changes(
+        self, sat_node, gnd_node
+    ):
+        link = self._make_budget_link(sat_node, gnd_node)
+        link.to_update = False
+
+        def recompute():
+            link.peer1_capacity = 900
+            link.peer2_capacity = 800
+
+        with patch.object(link, "_compute_budget_capacity", side_effect=recompute):
+            assert link.refresh_link_capacities() is True
+
+        assert link.to_update is True
+
+    def test_refresh_does_not_mark_to_update_when_capacity_is_unchanged(
+        self, sat_node, gnd_node
+    ):
+        link = self._make_budget_link(sat_node, gnd_node)
+        link.to_update = False
+
+        with patch.object(link, "_compute_budget_capacity", return_value=None):
+            assert link.refresh_link_capacities() is False
+
+        assert link.to_update is False
+
+    def test_distance_change_refreshes_budget_capacity(self, sat_node, gnd_node):
+        link = self._make_budget_link(sat_node, gnd_node)
+        link.satcom_object = MagicMock()
+        link.distance = 1.0
+
+        with patch.object(link, "refresh_link_capacities") as mock_refresh:
+            link.sync_distance_from_satcom_and_delay()
+
+        mock_refresh.assert_called_once()
 
 
 class TestLinkUseBudget:
@@ -378,6 +501,55 @@ class TestLinkUseBudget:
             use_budget=True,
         )
         assert link.peer1_capacity == 1000
+
+
+class TestLinkBudgetFallback:
+    """Budget failures must fall back to the configured default capacity."""
+
+    def _make_link(self, sat_node, gnd_node, default_capacity_kbps=777):
+        from satgonetem.link_budget.antenna import Antenna
+
+        sat_node.antenna = Antenna(
+            diameter=1.0, efficiency=0.6, sspa_output_power_db=40.0
+        )
+        gnd_node.antenna = Antenna(diameter=2.0, efficiency=0.6)
+        return Link(
+            source=sat_node,
+            target=gnd_node,
+            distance=550_000.0,
+            type="GroundStationLink",
+            default_capacity_kbps=default_capacity_kbps,
+            use_budget=True,
+        )
+
+    def test_both_directions_falling_back_use_default(self, sat_node, gnd_node):
+        with patch.object(
+            LinkBudgetService, "compute_one_way", side_effect=[0, 0]
+        ):
+            link = self._make_link(sat_node, gnd_node)
+
+        assert link.peer1_capacity == 777
+        assert link.peer2_capacity == 777
+
+    def test_single_failed_direction_falls_back_independently(
+        self, sat_node, gnd_node
+    ):
+        with patch.object(
+            LinkBudgetService, "compute_one_way", side_effect=[0, 4321]
+        ):
+            link = self._make_link(sat_node, gnd_node)
+
+        assert link.peer1_capacity == 777
+        assert link.peer2_capacity == 4321
+
+    def test_successful_capacities_are_preserved(self, sat_node, gnd_node):
+        with patch.object(
+            LinkBudgetService, "compute_one_way", side_effect=[1234, 5678]
+        ):
+            link = self._make_link(sat_node, gnd_node)
+
+        assert link.peer1_capacity == 1234
+        assert link.peer2_capacity == 5678
 
 
 class TestLinkBudgetConfigParam:

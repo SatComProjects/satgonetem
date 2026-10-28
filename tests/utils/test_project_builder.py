@@ -14,6 +14,7 @@ from satgonetem.utils.project_builder import (
     GroundObjectFile,
     GroundStationEntry,
     create_test_project,
+    create_empty_project,
     create_and_load_simulation,
     create_custom_satellite,
     create_custom_ground_station,
@@ -185,6 +186,36 @@ class TestCreateCustomGroundStation:
         assert gs.domain == "private"
 
 
+class TestSimulationDates:
+    """Tests for default start/end date handling in project builders."""
+
+    def test_test_project_end_date_is_start_plus_ten_minutes(self):
+        project = create_test_project(start_date="01/01/2024 00:00:00")
+
+        assert project.start_date == "01/01/2024 00:00:00"
+        assert project.end_date == "01/01/2024 00:10:00"
+
+    def test_test_project_future_start_date_keeps_end_after_start(self):
+        project = create_test_project(start_date="01/01/2030 12:00:00")
+
+        assert project.start_date == "01/01/2030 12:00:00"
+        assert project.end_date == "01/01/2030 12:10:00"
+
+    def test_test_project_explicit_end_date_is_preserved(self):
+        project = create_test_project(
+            start_date="01/01/2024 00:00:00",
+            end_date="01/01/2024 02:00:00",
+        )
+
+        assert project.end_date == "01/01/2024 02:00:00"
+
+    def test_empty_project_end_date_is_start_plus_ten_minutes(self):
+        project = create_empty_project(start_date="02/02/2025 06:30:00")
+
+        assert project.start_date == "02/02/2025 06:30:00"
+        assert project.end_date == "02/02/2025 06:40:00"
+
+
 class TestSimulationManagerHelpers:
     """Tests for helper functions that interact with a SimulationManager."""
 
@@ -212,6 +243,29 @@ class TestSimulationManagerHelpers:
         add_custom_ground_station(gs, sim_manager)
         after = len(sim_manager.get_ground_stations())
         assert after == before + 1
+
+    def test_add_custom_ground_station_attaches_existing_domain(self, sim_manager):
+        gs = create_custom_ground_station(
+            "DomainTest",
+            48.0,
+            2.0,
+            0.0,
+            domain="Ground Stations",
+        )
+        add_custom_ground_station(gs, sim_manager)
+
+        assert gs.ground_object_domain is not None
+        assert gs.ground_object_domain.identifier == "Ground Stations"
+        assert gs.ground_object_domain.type == "ground_station"
+
+    def test_add_custom_ground_station_supports_link_updates(self, sim_manager):
+        gs = create_custom_ground_station("LinkUpdateTest", 48.0, 2.0, 0.0)
+        add_custom_ground_station(gs, sim_manager)
+
+        # The documented flow calls this immediately after adding the station.
+        sim_manager.update_ground_station_links()
+
+        assert gs.ground_object_domain is not None
 
     def test_find_satellite_by_name(self, sim_manager):
         sat = _find_satellite_by_name("LEO 0", sim_manager)

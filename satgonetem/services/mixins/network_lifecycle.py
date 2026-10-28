@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import time
 import warnings
 from satgonetem.utils.constants import MAX_WORKERS
@@ -10,6 +11,10 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     pass
+
+
+# Maximum time to wait for one traffic flow thread during shutdown.
+_FLOW_STOP_TIMEOUT_SEC = 5.0
 
 
 class NetworkLifecycleMixin:
@@ -52,7 +57,10 @@ class NetworkLifecycleMixin:
             hil_links = []
 
         container_time, link_time = launcher.start_containers(
-            launch_nodes, MAX_WORKERS, controller=controller
+            launch_nodes,
+            MAX_WORKERS,
+            controller=controller,
+            links=launch_links,
         )
         launcher.wire_links(launch_links, MAX_WORKERS)
 
@@ -85,18 +93,39 @@ class NetworkLifecycleMixin:
         ):
             self.stop()
 
-        # Wait for active traffic flows to finish
-        if hasattr(self, "_active_flows"):
-            for flow in self._active_flows:
+        # Stop active traffic flows with a bounded wait. A single stuck
+        # command must not prevent container/project teardown.
+        flows = list(getattr(self, "_active_flows", []))
+        try:
+            for flow in flows:
                 status = getattr(flow, "status", lambda: None)()
-                if status is not None and getattr(status, "name", str(status)) in (
+                if status is None or getattr(status, "name", str(status)) not in (
                     "RUNNING",
                     "PENDING",
                 ):
-                    thread = getattr(flow, "_thread", None)
-                    if thread is not None and thread.is_alive():
-                        thread.join()
-            self._active_flows.clear()
+                    continue
+
+                stop = getattr(flow, "stop", None)
+                if callable(stop):
+                    try:
+                        stop()
+                    except Exception as exc:
+                        logging.warning(
+                            "Failed to stop traffic flow during shutdown: %s", exc
+                        )
+
+                thread = getattr(flow, "_thread", None)
+                if thread is not None and thread.is_alive():
+                    thread.join(timeout=_FLOW_STOP_TIMEOUT_SEC)
+                    if thread.is_alive():
+                        logging.warning(
+                            "Traffic flow thread did not stop within %.1fs; "
+                            "continuing shutdown",
+                            _FLOW_STOP_TIMEOUT_SEC,
+                        )
+        finally:
+            if hasattr(self, "_active_flows"):
+                self._active_flows.clear()
 
         self.set_status(False)
 

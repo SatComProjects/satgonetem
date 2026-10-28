@@ -78,6 +78,19 @@ class Link:
             self.peer1_capacity = self.default_capacity_kbps
             self.peer2_capacity = self.default_capacity_kbps
 
+    def refresh_link_capacities(self) -> bool:
+        """Recompute capacities and mark the link for update if they changed.
+
+        Returns:
+            True if either peer capacity changed.
+        """
+        before = (self.peer1_capacity, self.peer2_capacity)
+        self.update_link_capacities()
+        changed = (self.peer1_capacity, self.peer2_capacity) != before
+        if changed:
+            self.to_update = True
+        return changed
+
     # ------------------------------------------------------------------
     # Budget helpers (SOLID: thin wrappers around LinkBudgetService)
     # ------------------------------------------------------------------
@@ -92,7 +105,7 @@ class Link:
     def _compute_elevation_angle(self, sat: Node, gs: Node) -> float:
         """Compute the elevation angle from the ground station to the satellite."""
         try:
-            central_angle = get_elevation_angle(
+            elevation = get_elevation_angle(
                 sat_coordinates=(
                     sat.position["latitude"],
                     sat.position["longitude"],
@@ -104,7 +117,7 @@ class Link:
                     gs.position["altitude"],
                 ),
             )
-            return 90.0 - central_angle
+            return elevation
         except (KeyError, TypeError, ValueError) as exc:
             logger.warning(
                 "Failed to compute elevation angle for %s->%s: %s",
@@ -176,7 +189,17 @@ class Link:
             unavailability_percent=unav,
         )
         dl_service = LinkBudgetService(capacity_strategy=ModCodCapacityStrategy())
-        self.peer1_capacity = dl_service.compute_one_way(dl_inputs)
+        dl_capacity = dl_service.compute_one_way(dl_inputs)
+        if dl_capacity > 0:
+            self.peer1_capacity = dl_capacity
+        else:
+            logger.warning(
+                "Downlink budget failed for %s->%s; using default %d kbps",
+                sat.name,
+                gs.name,
+                self.default_capacity_kbps,
+            )
+            self.peer1_capacity = self.default_capacity_kbps
 
         # Uplink (GS → SAT) – Shannon upper bound
         ul_inputs = LinkBudgetInputs(
@@ -193,9 +216,19 @@ class Link:
             unavailability_percent=unav,
         )
         ul_service = LinkBudgetService(capacity_strategy=ShannonCapacityStrategy())
-        self.peer2_capacity = ul_service.compute_one_way(ul_inputs)
+        ul_capacity = ul_service.compute_one_way(ul_inputs)
+        if ul_capacity > 0:
+            self.peer2_capacity = ul_capacity
+        else:
+            logger.warning(
+                "Uplink budget failed for %s->%s; using default %d kbps",
+                gs.name,
+                sat.name,
+                self.default_capacity_kbps,
+            )
+            self.peer2_capacity = self.default_capacity_kbps
 
-        logger.info(
+        logger.debug(
             "Link budget %s->%s | elev=%.2f deg, DL=%d kbps, UL=%d kbps",
             sat.name,
             gs.name,
@@ -205,6 +238,25 @@ class Link:
         )
 
     # Sync helpers
+
+    def update_distance_and_delay(self, new_distance: float) -> None:
+        """Update distance and delay from an already-computed distance.
+
+        Args:
+            new_distance: New link distance in metres.
+        """
+        new_delay = int((new_distance / 299_792_458) * 1000)  # ms, speed of light
+
+        # Keep the exact distance current even when the rounded delay does not
+        # change; consumers such as routing and diagnostics need the precise
+        # value, not a value quantised to the millisecond delay bucket.
+        distance_changed = new_distance != self.distance
+        self.distance = new_distance
+        if new_delay != self.delay:
+            self.delay = new_delay
+            self.to_update = True
+        if distance_changed and self.use_budget and self.type == "GroundStationLink":
+            self.refresh_link_capacities()
 
     def sync_distance_from_satcom_and_delay(self) -> None:
         """
@@ -225,12 +277,7 @@ class Link:
             * 1000
         )  # Convert to meters
 
-        new_delay = int((new_distance / 299_792_458) * 1000)  # in ms, speed of light
-
-        if new_delay != self.delay:
-            self.delay = new_delay
-            self.distance = new_distance
-            self.to_update = True
+        self.update_distance_and_delay(new_distance)
         return None
 
     # ------------------------------------------------------------------

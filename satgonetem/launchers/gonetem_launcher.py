@@ -10,7 +10,6 @@ since it is the only launcher that needs the GoNetem .gnet format.
 
 import logging
 import os
-import sys
 import tarfile
 import subprocess
 import time
@@ -22,6 +21,25 @@ from google.protobuf import empty_pb2
 from satgonetem.proto import netem_pb2
 import satgonetem.proto.netem_pb2_grpc as netem_grpc
 from satgonetem.launchers.base_launcher import NetworkLauncher
+
+
+def _tbf_qos(rate_kbps: int, delay_ms: int) -> tuple[int, float]:
+    """Return TBF burst bytes and BDP multiplier for a link.
+
+    gonetem computes ``limit = buffer * rate * delay / 8``. Choosing the
+    buffer factor as ``(burst + BDP) / BDP`` makes the resulting limit equal
+    to ``burst + BDP`` without changing the server.
+    """
+    rate_kbps = int(rate_kbps)
+    delay_ms = max(int(delay_ms), 1)
+    if rate_kbps <= 0:
+        return 0, 0.0
+
+    rate_bytes_per_sec = rate_kbps * 125
+    burst = rate_bytes_per_sec // 250 + 1514
+    bdp_bytes = rate_kbps * delay_ms / 8.0
+    buffer_factor = (burst + bdp_bytes) / bdp_bytes
+    return burst, buffer_factor
 
 
 class GoNetEmLauncher(NetworkLauncher):
@@ -54,24 +72,62 @@ class GoNetEmLauncher(NetworkLauncher):
     # Project file generation
 
     def get_gonetem_topology(
-        self, fallback: bool = False, controller: bool = False
+        self,
+        fallback: bool = False,
+        controller: bool = False,
+        nodes: Optional[list] = None,
+        links: Optional[list] = None,
     ) -> str:
-        """Build the GoNetem network.yml content from the current topology."""
+        """Build the GoNetem network.yml content from the current topology.
+
+        Args:
+            fallback: Use host networking instead of the Docker images.
+            controller: Add the controller switch and its links.
+            nodes: Optional filtered node set. When provided, only these
+                satellites/ground stations (and links between them) are
+                serialized. HIL-managed ground stations are excluded by the
+                caller.
+            links: Optional filtered link set. When omitted, all topology
+                links between the selected nodes are used.
+        """
         tm = self._topology_manager
         sat_type = "docker.host" if fallback else "docker.satellite"
-        gs_type = (
-            "docker.host" if fallback else "docker.satellite"
-        )  # Borken if using gndstation TODO fix
+        gs_type = "docker.host" if fallback else "docker.gndstation"
 
-        satellites = self._write_satellites(tm.satellites.values(), sat_type)
+        if nodes is None:
+            satellite_nodes = list(tm.satellites.values())
+            ground_station_nodes = list(tm.ground_stations.values())
+            allowed_names = None
+        else:
+            allowed_names = {node.name for node in nodes}
+            satellite_nodes = [
+                sat for sat in tm.satellites.values() if sat.name in allowed_names
+            ]
+            ground_station_nodes = [
+                gs for gs in tm.ground_stations.values() if gs.name in allowed_names
+            ]
+
+        if links is None:
+            link_nodes = tm.links.values()
+        else:
+            link_nodes = links
+        if allowed_names is not None:
+            link_nodes = [
+                link
+                for link in link_nodes
+                if link.source.name in allowed_names
+                and link.target.name in allowed_names
+            ]
+
+        satellites = self._write_satellites(satellite_nodes, sat_type)
         groundStations = self._write_ground_stations(
-            tm.ground_stations.values(), gs_type
+            ground_station_nodes, gs_type, fallback=fallback
         )
-        controller = self._write_controller_switch() if controller else ""
-        links = self._write_links(tm.links.values())
+        controller_section = self._write_controller_switch() if controller else ""
+        link_section = self._write_links(link_nodes)
         controller_links = (
             self._write_controller_switch_links(
-                tm.satellites.values(), tm.ground_stations.values()
+                satellite_nodes, ground_station_nodes
             )
             if controller
             else ""
@@ -81,9 +137,9 @@ class GoNetEmLauncher(NetworkLauncher):
             "nodes: \n"
             + satellites
             + groundStations
-            + controller
+            + controller_section
             + "links: \n"
-            + links
+            + link_section
             + controller_links
         )
 
@@ -93,17 +149,19 @@ class GoNetEmLauncher(NetworkLauncher):
         result = ""
         for sat in satellites:
             eth_id = 50000 + sat.id
+            burst, buffer = _tbf_qos(1_000_000, 1)
             result += (
                 f" - {{peer1: Controller.{sat.id}, peer2: {sat.name}.{eth_id},"
-                f" peer1qos: {{ rate: 1000000, buffer: 10000, jitter: 0, delay: 1}},"
-                f" peer2qos: {{ rate: 1000000, buffer: 10000, jitter: 0, delay: 1}}}} \n"
+                f" peer1qos: {{ rate: 1000000, buffer: {buffer}, jitter: 0, delay: 1, burst: {burst}}},"
+                f" peer2qos: {{ rate: 1000000, buffer: {buffer}, jitter: 0, delay: 1, burst: {burst}}}}} \n"
             )
         for gs in ground_stations:
             eth_id = 50000 + gs.id
+            burst, buffer = _tbf_qos(1_000_000, 1)
             result += (
                 f" - {{peer1: Controller.{gs.id}, peer2: {gs.name}.{eth_id},"
-                f" peer1qos: {{ rate: 1000000, buffer: 10000, jitter: 0, delay: 1}},"
-                f" peer2qos: {{ rate: 1000000, buffer: 10000, jitter: 0, delay: 1}}}} \n"
+                f" peer1qos: {{ rate: 1000000, buffer: {buffer}, jitter: 0, delay: 1, burst: {burst}}},"
+                f" peer2qos: {{ rate: 1000000, buffer: {buffer}, jitter: 0, delay: 1, burst: {burst}}}}} \n"
             )
         return result
 
@@ -120,34 +178,58 @@ class GoNetEmLauncher(NetworkLauncher):
         return result
 
     @staticmethod
-    def _write_ground_stations(ground_stations, gs_type: str) -> str:
+    def _write_ground_stations(
+        ground_stations, gs_type: str, fallback: bool = False
+    ) -> str:
         result = ""
         for gs in ground_stations:
             prefix = "Gnd" if gs.type == "GroundStation" else "Usr"
-            result += f" {prefix}{gs.id}:\n  type: {gs_type}\n  image: {gs.image}\n  volumes:\n  - /tmp:/tmp\n"
+            image = gs.image
+            if not image and not fallback:
+                image = "jariassuarez/sgnt:ground-station"
+            result += f" {prefix}{gs.id}:\n  type: {gs_type}\n  image: {image}\n  volumes:\n  - /tmp:/tmp\n"
         return result
 
     @staticmethod
     def _write_links(links) -> str:
         result = ""
         for link in links:
+            if not getattr(link, "is_active", True):
+                continue
             delay = max(int(link.delay), 1)
             rate = link.get_capacity()
-            burst = rate * 5
+            burst, buffer = _tbf_qos(rate, delay)
             result += (
                 f" - {{peer1: {link.source.name}.{link.target.id},"
                 f" peer2: {link.target.name}.{link.source.id},"
-                f" peer1qos: {{ rate: {rate}, buffer: 10, jitter: 0, delay: {delay}, burst: {burst}}},"
-                f" peer2qos: {{ rate: {rate}, buffer: 10, jitter: 0, delay: {delay}, burst: {burst}}}}}"
+                f" peer1qos: {{ rate: {rate}, buffer: {buffer}, jitter: 0, delay: {delay}, burst: {burst}}},"
+                f" peer2qos: {{ rate: {rate}, buffer: {buffer}, jitter: 0, delay: {delay}, burst: {burst}}}}}"
                 f" #Latency of {delay}ms \n"
             )
         return result
 
-    def generate_project(self, dest_dir: str, controller: bool = False) -> str:
-        """Write a project.gnet archive to *dest_dir* and return its path."""
+    def generate_project(
+        self,
+        dest_dir: str,
+        controller: bool = False,
+        nodes: Optional[list] = None,
+        links: Optional[list] = None,
+    ) -> str:
+        """Write a project.gnet archive to *dest_dir* and return its path.
+
+        Args:
+            dest_dir: Directory for the generated archive.
+            controller: Add the controller switch and its links.
+            nodes: Optional filtered node set passed to
+                :meth:`get_gonetem_topology`.
+            links: Optional filtered link set passed to
+                :meth:`get_gonetem_topology`.
+        """
         import tempfile
 
-        data = self.get_gonetem_topology(controller=controller)
+        data = self.get_gonetem_topology(
+            controller=controller, nodes=nodes, links=links
+        )
         with tempfile.TemporaryDirectory() as tmp:
             network_yml = os.path.join(tmp, "network.yml")
             with open(network_yml, "w") as fd:
@@ -174,11 +256,23 @@ class GoNetEmLauncher(NetworkLauncher):
         loss = float(getattr(link, "loss", 0) or 0)
         jitter = int(getattr(link, "jitter", 0) or 0)
         p1_kbps, p2_kbps = self._link_capacities_for(link)
+        burst1, buffer1 = _tbf_qos(p1_kbps, delay_ms)
+        burst2, buffer2 = _tbf_qos(p2_kbps, delay_ms)
         qos1 = netem_pb2.LinkConfig.QoSConfig(
-            delay=delay_ms, rate=p1_kbps, loss=loss, jitter=jitter
+            delay=delay_ms,
+            rate=p1_kbps,
+            loss=loss,
+            jitter=jitter,
+            buffer=buffer1,
+            burst=burst1,
         )
         qos2 = netem_pb2.LinkConfig.QoSConfig(
-            delay=delay_ms, rate=p2_kbps, loss=loss, jitter=jitter
+            delay=delay_ms,
+            rate=p2_kbps,
+            loss=loss,
+            jitter=jitter,
+            buffer=buffer2,
+            burst=burst2,
         )
         link_cfg = netem_pb2.LinkConfig(
             peer1=f"{link.source.name}.{link.target.id}",
@@ -209,6 +303,7 @@ class GoNetEmLauncher(NetworkLauncher):
         workers: int = 64,
         progress_cb: Optional[Callable[[str, int, int], None]] = None,
         controller: bool = False,
+        links: Optional[list] = None,
     ) -> tuple[float, float]:
         """Open the project on the GoNetem server and run TopologyRun.
 
@@ -216,87 +311,149 @@ class GoNetEmLauncher(NetworkLauncher):
         so start_containers handles both NODE_START and LINK_SETUP progress.
         wire_links() is therefore a no-op for this launcher.
 
+        Args:
+            nodes: Nodes to launch. HIL-managed nodes must be excluded.
+            workers: Unused; GoNetEm manages its own concurrency.
+            progress_cb: Optional progress callback.
+            controller: Add the controller switch and its links.
+            links: Links to create. HIL-managed links must be excluded.
+
         Returns:
             A tuple of (container_time, link_time) in seconds, where
             container_time is the elapsed time across all NODE_START events
             and link_time is the elapsed time across all LINK_SETUP events.
         """
-        client = self._get_client()
-
+        project_file = None
         try:
-            version = client.ServerGetVersion(empty_pb2.Empty()).version
+            client = self._get_client()
+
+            try:
+                version = client.ServerGetVersion(empty_pb2.Empty()).version
+            except Exception as exc:
+                raise RuntimeError(
+                    f"GoNetEmLauncher: cannot reach server "
+                    f"{self._server_address}: {exc}"
+                ) from exc
+
             logging.info(
                 "GoNetEmLauncher: connected to GoNetem %s at %s",
                 version,
                 self._server_address,
             )
+
+            project_file = self.generate_project(
+                self._temp_path,
+                controller=controller,
+                nodes=nodes,
+                links=links,
+            )
+            with open(project_file, "rb") as fd:
+                open_req = netem_pb2.OpenRequest(
+                    name=self.project_name, data=fd.read()
+                )
+            project_id = getattr(client.ProjectOpen(open_req), "id", "")
+            if not project_id:
+                raise RuntimeError(
+                    "GoNetEmLauncher: ProjectOpen returned an empty project id"
+                )
+            self._request = netem_pb2.ProjectRequest(id=project_id)
+            logging.info("GoNetEmLauncher: project opened with id=%s", project_id)
+
+            node_count = link_count = node_start = link_setup = node_config = 0
+            container_start_t = link_start_t = None
+            container_time = link_time = 0.0
+            try:
+                for msg in client.TopologyRun(self._request):
+                    code = msg.code
+                    if code == netem_pb2.TopologyRunMsg.NODE_COUNT:
+                        node_count = msg.total
+                        if progress_cb:
+                            progress_cb("NODE_COUNT", 0, node_count)
+                    elif code == netem_pb2.TopologyRunMsg.LINK_COUNT:
+                        link_count = msg.total
+                        if progress_cb:
+                            progress_cb("LINK_COUNT", 0, link_count)
+                    elif code == netem_pb2.TopologyRunMsg.NODE_START:
+                        if container_start_t is None:
+                            container_start_t = time.monotonic()
+                        node_start += 1
+                        container_time = time.monotonic() - container_start_t
+                        if progress_cb:
+                            progress_cb("NODE_START", node_start, node_count)
+                    elif code == netem_pb2.TopologyRunMsg.LINK_SETUP:
+                        if link_start_t is None:
+                            link_start_t = time.monotonic()
+                        link_setup += 1
+                        link_time = time.monotonic() - link_start_t
+                        if progress_cb:
+                            progress_cb("LINK_SETUP", link_setup, link_count)
+                    elif code == netem_pb2.TopologyRunMsg.NODE_LOADCONFIG:
+                        node_config += 1
+                        if progress_cb:
+                            progress_cb("NODE_LOADCONFIG", node_config, node_count)
+            except Exception as exc:
+                raise RuntimeError(
+                    f"GoNetEmLauncher: TopologyRun failed: {exc}"
+                ) from exc
+
+            logging.info(
+                "GoNetEmLauncher: topology running (%d nodes, %d links)",
+                node_count,
+                link_count,
+            )
+            if progress_cb:
+                progress_cb("COMPLETED", 0, 0)
+
+            # Expose client/request on topology_manager for callers that need them
+            self._topology_manager.project_id = project_id
+            self._topology_manager.client = client
+            self._topology_manager.request = self._request
+
+            # Attach docker-py container objects and PIDs to each node so that
+            # subsequent operations (exec_run, enable_mpls, FRR init, etc.) work.
+            self._attach_containers(nodes, project_id)
+
+            return (container_time, link_time)
+        except Exception:
+            self._cleanup_failed_start()
+            raise
+        finally:
+            if project_file is not None:
+                try:
+                    os.unlink(project_file)
+                except FileNotFoundError:
+                    pass
+                except OSError as exc:
+                    logging.warning(
+                        "GoNetEmLauncher: could not remove project file %s: %s",
+                        project_file,
+                        exc,
+                    )
+
+    def _close_transport(self) -> None:
+        """Close the gRPC channel and clear client state."""
+        if self._channel is not None:
+            try:
+                self._channel.close()
+            except Exception as exc:
+                logging.warning(
+                    "GoNetEmLauncher: failed to close gRPC channel: %s", exc
+                )
+        self._channel = None
+        self._client = None
+
+    def _cleanup_failed_start(self) -> None:
+        """Best-effort cleanup after a failed start_containers() call."""
+        try:
+            if self._client is not None and self._request is not None:
+                self.force_close_project()
         except Exception as exc:
             logging.error(
-                "GoNetEmLauncher: cannot reach server %s: %s", self._server_address, exc
+                "GoNetEmLauncher: cleanup after failed start failed: %s", exc
             )
-            sys.exit(1)
-
-        project_file = self.generate_project(self._temp_path, controller=controller)
-        with open(project_file, "rb") as fd:
-            open_req = netem_pb2.OpenRequest(name=self.project_name, data=fd.read())
-        project_id = client.ProjectOpen(open_req).id
-        self._request = netem_pb2.ProjectRequest(id=project_id)
-        logging.info("GoNetEmLauncher: project opened with id=%s", project_id)
-
-        node_count = link_count = node_start = link_setup = node_config = 0
-        container_start_t = link_start_t = None
-        container_time = link_time = 0.0
-        try:
-            for msg in client.TopologyRun(self._request):
-                code = msg.code
-                if code == netem_pb2.TopologyRunMsg.NODE_COUNT:
-                    node_count = msg.total
-                    if progress_cb:
-                        progress_cb("NODE_COUNT", 0, node_count)
-                elif code == netem_pb2.TopologyRunMsg.LINK_COUNT:
-                    link_count = msg.total
-                    if progress_cb:
-                        progress_cb("LINK_COUNT", 0, link_count)
-                elif code == netem_pb2.TopologyRunMsg.NODE_START:
-                    if container_start_t is None:
-                        container_start_t = time.monotonic()
-                    node_start += 1
-                    container_time = time.monotonic() - container_start_t
-                    if progress_cb:
-                        progress_cb("NODE_START", node_start, node_count)
-                elif code == netem_pb2.TopologyRunMsg.LINK_SETUP:
-                    if link_start_t is None:
-                        link_start_t = time.monotonic()
-                    link_setup += 1
-                    link_time = time.monotonic() - link_start_t
-                    if progress_cb:
-                        progress_cb("LINK_SETUP", link_setup, link_count)
-                elif code == netem_pb2.TopologyRunMsg.NODE_LOADCONFIG:
-                    node_config += 1
-                    if progress_cb:
-                        progress_cb("NODE_LOADCONFIG", node_config, node_count)
-        except Exception as exc:
-            logging.error("GoNetEmLauncher: TopologyRun failed: %s", exc)
-            sys.exit(1)
-
-        logging.info(
-            "GoNetEmLauncher: topology running (%d nodes, %d links)",
-            node_count,
-            link_count,
-        )
-        if progress_cb:
-            progress_cb("COMPLETED", 0, 0)
-
-        # Expose client/request on topology_manager for callers that need them
-        self._topology_manager.project_id = project_id
-        self._topology_manager.client = client
-        self._topology_manager.request = self._request
-
-        # Attach docker-py container objects and PIDs to each node so that
-        # subsequent operations (exec_run, enable_mpls, FRR init, etc.) work.
-        self._attach_containers(nodes, project_id)
-
-        return (container_time, link_time)
+        finally:
+            self._close_transport()
+            self._request = None
 
     def _attach_containers(self, nodes: list, project_id: str) -> None:
         """Resolve docker-py Container objects and PIDs for each node after TopologyRun."""
@@ -426,36 +583,111 @@ class GoNetEmLauncher(NetworkLauncher):
         self.isl_capacity_kbps = isl_kbps
         self.gnd_capacity_kbps = gnd_kbps
         for link in links:
+            if not getattr(link, "use_budget", False):
+                link_type = getattr(link, "type", "")
+                if link_type == "GroundStationLink":
+                    capacity = gnd_kbps
+                elif link_type == "GroundObjectLink":
+                    capacity = self.ground_object_capacity_kbps
+                else:
+                    capacity = isl_kbps
+
+                link.default_capacity_kbps = capacity
+                link.peer1_capacity = capacity
+                link.peer2_capacity = capacity
+
             self.update_link(link)
 
-    def force_close_project(self) -> None:
-        """Forcefully close the project without waiting for progress messages."""
-        if self._client is None or self._request is None:
-            return
+    @staticmethod
+    def _parse_project_containers(stdout: str, project_id: str) -> list[str]:
+        """Return container IDs belonging to *project_id*.
+
+        GoNetEm names containers ``ntm{project_id}.{node}``. Docker's
+        ``name`` filter is a substring match, so filtering on ``ntm`` alone
+        also matches every other project on the host. Match the exact project
+        prefix instead.
+
+        Args:
+            stdout: Output of ``docker ps --format '{{.ID}}\t{{.Names}}'``.
+            project_id: GoNetEm project identifier.
+
+        Returns:
+            IDs of containers scoped to the project.
+        """
+        prefix = f"ntm{project_id}"
+        container_ids: list[str] = []
+        for line in stdout.splitlines():
+            parts = line.strip().split("\t", 1)
+            if len(parts) != 2:
+                continue
+            container_id, name = parts
+            if name == prefix or name.startswith(prefix + "."):
+                container_ids.append(container_id)
+        return container_ids
+
+    @staticmethod
+    def _run_docker_command(command: list[str]) -> bool:
+        """Run a Docker cleanup command and report whether it succeeded."""
+        try:
+            result = subprocess.run(command, capture_output=True, text=True)
+        except OSError as exc:
+            logging.error(
+                "GoNetEmLauncher: failed to run %s: %s", " ".join(command), exc
+            )
+            return False
+        if result.returncode != 0:
+            logging.error(
+                "GoNetEmLauncher: %s failed (exit %s): %s",
+                " ".join(command),
+                result.returncode,
+                (result.stderr or "").strip(),
+            )
+            return False
+        return True
+
+    def _list_project_containers(self, project_id: str) -> list[str]:
+        """List Docker containers scoped to *project_id*."""
         try:
             result = subprocess.run(
-                ["docker", "ps", "-a", "-q", "--filter", "name=ntm"],
+                ["docker", "ps", "-a", "--format", "{{.ID}}\t{{.Names}}"],
                 capture_output=True,
                 text=True,
             )
-            container_ids = result.stdout.strip().split()
-            for cid in container_ids:
-                subprocess.run(
-                    ["docker", "stop", "-t", "0", cid],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
+        except OSError as exc:
+            logging.error("GoNetEmLauncher: could not list Docker containers: %s", exc)
+            return []
+        if result.returncode != 0:
+            logging.error(
+                "GoNetEmLauncher: docker ps failed (exit %s): %s",
+                result.returncode,
+                (result.stderr or "").strip(),
+            )
+            return []
+        return self._parse_project_containers(result.stdout, project_id)
+
+    def force_close_project(self) -> None:
+        """Forcefully close the project without waiting for progress messages.
+
+        Only containers whose names belong to this project are stopped and
+        removed. If the project id is unavailable, container cleanup is
+        skipped rather than falling back to a host-wide match.
+        """
+        if self._client is None or self._request is None:
+            return
+        project_id = str(getattr(self._request, "id", "") or "")
+        try:
+            if not project_id:
+                logging.warning(
+                    "GoNetEmLauncher: project id is empty; skipping Docker cleanup"
                 )
-            for cid in container_ids:
-                subprocess.run(
-                    ["docker", "rm", cid],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
-            self._client.ProjectClose(self._request)
+            else:
+                container_ids = self._list_project_containers(project_id)
+                for cid in container_ids:
+                    self._run_docker_command(["docker", "stop", "-t", "0", cid])
+                for cid in container_ids:
+                    self._run_docker_command(["docker", "rm", cid])
+                self._client.ProjectClose(self._request)
         except Exception as exc:
             logging.error("GoNetEmLauncher: force_close_project failed: %s", exc)
         finally:
-            if self._channel:
-                self._channel.close()
-                self._channel = None
-                self._client = None
+            self._close_transport()

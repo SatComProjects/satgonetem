@@ -213,6 +213,8 @@ class Iperf3Results:
 
         for it in intervals:
             for s in it.get("streams", []):
+                if s.get("omitted", False):
+                    continue
                 row = dict(s)
                 row["_t"] = s.get("end", s.get("start"))
                 row["_label"] = f"Socket {s.get('socket', '?')}"
@@ -226,6 +228,8 @@ class Iperf3Results:
             ):
                 if sum_key in it:
                     entry = dict(it[sum_key])
+                    if entry.get("omitted", False):
+                        continue
                     entry["_t"] = entry.get("end", entry.get("start"))
                     entry["_label"] = sum_key
                     sum_rows.append(entry)
@@ -325,9 +329,40 @@ class Iperf3Results:
 
     # ---- Shared throughput metrics (TCP + UDP) ----
 
+    def _summary_series(self) -> Optional[pd.DataFrame]:
+        """Return one consistent interval summary series, if available.
+
+        Prefers the aggregate ``sum`` rows, then sender/receiver summaries.
+        Using one label avoids mixing three different rate series per interval.
+
+        Returns:
+            The selected summary DataFrame, or None when no summary is present.
+        """
+        if self._df_summaries.empty or "_label" not in self._df_summaries.columns:
+            return None
+        for label in ("sum", "sum_received", "sum_sent"):
+            series = self._df_summaries[self._df_summaries["_label"] == label]
+            if not series.empty:
+                return series
+        return None
+
     @property
     def avg_throughput_mbps(self) -> float:
-        """Mean throughput across all reporting intervals in Mbps."""
+        """Mean throughput in Mbps, excluding omitted warm-up intervals."""
+        series = self._summary_series()
+        if (
+            series is not None
+            and "bytes" in series.columns
+            and "seconds" in series.columns
+        ):
+            total_seconds = float(series["seconds"].sum())
+            if total_seconds > 0:
+                return (
+                    float(series["bytes"].sum())
+                    * 8.0
+                    / total_seconds
+                    / self._BPS_TO_MBPS
+                )
         return self._col_mean(self._primary_df(), "bits_per_second") / self._BPS_TO_MBPS
 
     @property
@@ -806,6 +841,28 @@ class Iperf3Flow:
                 case _ as unexpected:
                     raise TypeError(f"Unexpected FlowStatus: {unexpected!r}")
 
+    def _json_side(self, client_json: str, server_json: str):
+        """Return the preferred and fallback JSON locations.
+
+        UDP metrics (loss/jitter) live on the receiver; TCP metrics
+        (RTT/CWND/retransmits) live on the sender. Bidirectional runs use the
+        client JSON because it contains both direction streams.
+
+        Returns:
+            Tuple of (preferred_node, preferred_path, fallback_node,
+            fallback_path).
+        """
+        if self.config.bidir:
+            preferred = self.source
+            fallback = self.destination
+            return preferred, client_json, fallback, server_json
+
+        is_udp = self.config.protocol.upper() == "UDP"
+        use_source = self.config.reverse if is_udp else not self.config.reverse
+        if use_source:
+            return self.source, client_json, self.destination, server_json
+        return self.destination, server_json, self.source, client_json
+
     def _run(self) -> None:
         """Execute the iperf3 flow and update status on completion."""
         if self.delay > 0.0:
@@ -834,14 +891,16 @@ class Iperf3Flow:
             self.source.execute_command(client_cmd, detach=False)
             time.sleep(0.3)
 
-            if self.config.protocol.upper() == "UDP":
-                raw = self.destination.execute_command(f"cat {server_json}")
-                if not isinstance(raw, str) or not raw.strip().startswith("{"):
-                    raw = self.source.execute_command(f"cat {client_json}")
-            else:
-                raw = self.source.execute_command(f"cat {client_json}")
-                if not isinstance(raw, str) or not raw.strip().startswith("{"):
-                    raw = self.destination.execute_command(f"cat {server_json}")
+            preferred_node, preferred_path, fallback_node, fallback_path = (
+                self._json_side(client_json, server_json)
+            )
+            raw = preferred_node.execute_command(
+                f"cat {shlex.quote(preferred_path)}"
+            )
+            if not isinstance(raw, str) or not raw.strip().startswith("{"):
+                raw = fallback_node.execute_command(
+                    f"cat {shlex.quote(fallback_path)}"
+                )
 
             self.source.execute_command(f"rm -f {client_json}", detach=True)
             self.destination.execute_command(f"rm -f {server_json}", detach=True)

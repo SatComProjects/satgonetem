@@ -126,6 +126,67 @@ _UDP_JSON = json.dumps(
 )
 
 
+_OMITTED_INTERVAL_JSON = json.dumps(
+    {
+        "start": {
+            "test_start": {
+                "protocol": "TCP",
+                "duration": 2,
+                "num_streams": 1,
+            }
+        },
+        "intervals": [
+            {
+                "streams": [
+                    {
+                        "socket": 5,
+                        "start": 0.0,
+                        "end": 1.0,
+                        "seconds": 1.0,
+                        "bytes": 999_999,
+                        "bits_per_second": 7_999_992.0,
+                        "omitted": True,
+                    }
+                ],
+                "sum": {
+                    "start": 0.0,
+                    "end": 1.0,
+                    "seconds": 1.0,
+                    "bytes": 999_999,
+                    "bits_per_second": 7_999_992.0,
+                    "omitted": True,
+                },
+            },
+            {
+                "streams": [
+                    {
+                        "socket": 5,
+                        "start": 1.0,
+                        "end": 2.0,
+                        "seconds": 1.0,
+                        "bytes": 12_500_000,
+                        "bits_per_second": 100_000_000.0,
+                        "omitted": False,
+                    }
+                ],
+                "sum": {
+                    "start": 1.0,
+                    "end": 2.0,
+                    "seconds": 1.0,
+                    "bytes": 12_500_000,
+                    "bits_per_second": 100_000_000.0,
+                    "omitted": False,
+                },
+            },
+        ],
+        "end": {
+            "sum_sent": {"bytes": 12_500_000},
+            "sum_received": {"bytes": 12_500_000},
+        },
+    }
+)
+
+
 def _make_node(name: str, ipv4: str) -> MagicMock:
     node = MagicMock()
     node.name = name
@@ -332,6 +393,26 @@ class TestIperf3Results:
         df = res.get_summary_dataframe()
         assert not df.empty
 
+    def test_omitted_intervals_are_excluded_from_dataframes(self):
+        res = Iperf3Results(
+            raw_json=_OMITTED_INTERVAL_JSON, config=Iperf3Config()
+        )
+
+        summary = res.get_summary_dataframe()
+        streams = res.get_interval_dataframe()
+
+        assert len(summary) == 1
+        assert summary.iloc[0]["bytes"] == 12_500_000
+        assert len(streams) == 1
+        assert streams.iloc[0]["bytes"] == 12_500_000
+
+    def test_avg_throughput_uses_bytes_over_time_and_skips_warmup(self):
+        res = Iperf3Results(
+            raw_json=_OMITTED_INTERVAL_JSON, config=Iperf3Config()
+        )
+
+        assert res.avg_throughput_mbps == pytest.approx(100.0)
+
     def test_repr_contains_protocol_and_throughput(self):
         res = Iperf3Results(raw_json=_TCP_JSON, config=Iperf3Config())
         r = repr(res)
@@ -365,6 +446,44 @@ class TestIperf3Flow:
         dst.execute_command.return_value = None
         cfg = Iperf3Config(duration=1)
         return Iperf3Flow(src, dst, cfg)
+
+    @pytest.mark.parametrize(
+        "protocol,reverse,bidir,expected_side",
+        [
+            ("TCP", False, False, "source"),
+            ("TCP", True, False, "destination"),
+            ("UDP", False, False, "destination"),
+            ("UDP", True, False, "source"),
+            ("TCP", False, True, "source"),
+            ("UDP", True, True, "source"),
+        ],
+    )
+    def test_json_side_matches_measurement_direction(
+        self, protocol, reverse, bidir, expected_side
+    ):
+        src = _make_node("gs0", "10.0.0.1")
+        dst = _make_node("gs1", "10.0.0.2")
+        cfg = Iperf3Config(
+            protocol=protocol,
+            reverse=reverse,
+            bidir=bidir,
+        )
+        flow = Iperf3Flow(src, dst, cfg)
+
+        preferred, preferred_path, fallback, fallback_path = flow._json_side(
+            "/tmp/client.json", "/tmp/server.json"
+        )
+
+        expected = src if expected_side == "source" else dst
+        other = dst if expected_side == "source" else src
+        assert preferred is expected
+        assert fallback is other
+        assert preferred_path == (
+            "/tmp/client.json" if expected_side == "source" else "/tmp/server.json"
+        )
+        assert fallback_path == (
+            "/tmp/server.json" if expected_side == "source" else "/tmp/client.json"
+        )
 
     def test_initial_status_is_idle(self):
         flow = self._make_flow(_TCP_JSON)
