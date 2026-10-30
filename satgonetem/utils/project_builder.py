@@ -454,7 +454,7 @@ def _get_orbital_elements(
     raan_rad = math.radians(raan)
 
     # Use the movement model's propagated position (NOT manual sgp4)
-    r_teme, _v_teme = mm.get_position_earth_general_inertial()
+    r_teme = mm.get_position_earth_general_inertial()
     x, y, z = r_teme
 
     # Orbital-plane unit vectors
@@ -674,8 +674,8 @@ def add_mesh_links(
 
                 # Skip if the 3D distance is excessive (e.g. planes are far
                 # apart in RAAN because intermediate planes are missing).
-                r_a = sat_a.get_movement_model().get_position_earth_general_inertial()[0]
-                r_b = sat_b.get_movement_model().get_position_earth_general_inertial()[0]
+                r_a = sat_a.get_movement_model().get_position_earth_general_inertial()
+                r_b = sat_b.get_movement_model().get_position_earth_general_inertial()
                 dist = math.sqrt(
                     (r_a[0] - r_b[0]) ** 2
                     + (r_a[1] - r_b[1]) ** 2
