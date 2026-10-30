@@ -41,6 +41,9 @@ service Netem {
     rpc NodeCopyTo(stream CopyMsg) returns (AckResponse) {}
     rpc NodeGetConsoleCmd(ConsoleCmdRequest) returns (ConsoleCmdResponse) {}
     rpc NodeRun(NodeRunRequest) returns (NodeRunResponse) {}
+    // RouteInstall applies a batch of route changes to several nodes in one
+    // call. The server executes the batches with a bounded worker pool.
+    rpc RouteInstall(RouteInstallRequest) returns (RouteInstallResponse) {}
     rpc NodeExec(stream ExecCltMsg) returns (stream ExecSrvMsg) {}
 
     // Link actions
@@ -60,6 +63,12 @@ enum StatusCode {
 enum IfState {
     UP = 0;
     DOWN = 1;
+}
+
+// RouteAction selects the operation applied to one route.
+enum RouteAction {
+    ROUTE_REPLACE = 0;
+    ROUTE_DELETE = 1;
 }
 
 
@@ -281,6 +290,42 @@ message NodeRunResponse {
     bytes stdout = 2;
     bytes stderr = 3;
     int32 exitCode = 4;
+}
+
+// RouteSpec is the typed equivalent of:
+//   ip route replace <destination> via <gateway> dev <device>
+// A gateway may be empty for an on-link route.
+message RouteSpec {
+    RouteAction action = 1;
+    string destination = 2; // CIDR, e.g. 10.0.0.0/15
+    string gateway = 3;
+    string device = 4;      // interface name inside the node netns
+}
+
+message RouteBatch {
+    repeated RouteSpec routes = 1;
+}
+
+message RouteInstallRequest {
+    string prjId = 1;
+    map<string, RouteBatch> nodes = 2;
+    // maxConcurrency is a hint capped by the server configuration.
+    // Zero means use the server default.
+    uint32 maxConcurrency = 3;
+}
+
+message RouteInstallResult {
+    Status status = 1;
+    uint32 applied = 2;
+    bytes stdout = 3; // diagnostic output; empty on the netlink path
+    bytes stderr = 4;
+    int32 exitCode = 5;
+    int64 durationMicros = 6;
+}
+
+message RouteInstallResponse {
+    Status status = 1;
+    map<string, RouteInstallResult> results = 2;
 }
 
 message StatusResponse {
