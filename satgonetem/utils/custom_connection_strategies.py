@@ -95,7 +95,8 @@ class LongestConnectionTimeStrategy(GroundToSpaceConnectionStrategy):
         gs_lat, gs_lon, gs_alt = ground_object.get_coordinates().to_latitude_longitude_altitude()
         
         # Satellite TEME position and velocity from SGP4
-        r_teme_km, v_teme_km_s = satellite.movement_model.get_position_earth_general_inertial()
+        r_teme_km = satellite.movement_model.get_position_earth_general_inertial()
+        v_teme_km_s = satellite.movement_model.get_velocity_earth_general_inertial()
         
         # Convert satellite position to ECEF (meters)
         r_sat_ecef_km = teme_to_ecef(np.array(r_teme_km), t_utc)

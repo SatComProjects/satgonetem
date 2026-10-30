@@ -802,8 +802,10 @@ class Iperf3Flow:
             if self._status != FlowStatus.RUNNING:
                 return
         self._stop_event.set()
-        self.source.execute_command("pkill -x iperf3", detach=True)
-        self.destination.execute_command("pkill -x iperf3", detach=True)
+
+        kill_cmd = f"pkill -f 'iperf3 .*-p {self.config.port} ' 2>/dev/null; true"
+        self.source.execute_command(kill_cmd, detach=True)
+        self.destination.execute_command(kill_cmd, detach=True)
         if self._thread is not None:
             self._thread.join(timeout=5.0)
 
@@ -919,10 +921,35 @@ class Iperf3Flow:
         except Exception as exc:
             if self._stop_event.is_set() and raw:
                 print(raw)
+            try:
+                self.destination.execute_command(
+                    f"pkill -f 'iperf3 .*-p {self.config.port} ' 2>/dev/null; true"
+                )
+            except Exception:
+                pass
+
+            diagnostics = []
+            for label, path, node in (
+                ("client", client_json, self.source),
+                ("server", server_json, self.destination),
+            ):
+                try:
+                    content = node.execute_command(f"cat {path}")
+                except Exception:
+                    content = None
+                if content and content.strip():
+                    diagnostics.append(f"--- {label} output ({path}) ---\n{content.strip()}")
+
             self.source.execute_command(f"rm -f {client_json}", detach=True)
             self.destination.execute_command(f"rm -f {server_json}", detach=True)
+
+            final_error = exc
+            if diagnostics:
+                final_error = RuntimeError(f"{exc}\n" + "\n".join(diagnostics))
+                final_error.__cause__ = exc  # preserve the original traceback link
+
             with self._lock:
-                self._error = exc
+                self._error = final_error
                 self._status = FlowStatus.ERROR
 
 

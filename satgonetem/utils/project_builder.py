@@ -23,7 +23,6 @@ from sat_com_constellation.models import WalkerConstellationProperty
 from sat_com_application.simulation_manager import SimulationManager
 from sat_com_model.exceptions import GroundObjectDomainNotFoundError
 from sat_com_model.models import (
-    create_satellite,
     create_ground_station,
     GroundObject as SatComGroundObject,
     GroundObjectDomain,
@@ -236,7 +235,9 @@ def create_custom_satellite(
         time_manager=simulation_manager.time_manager,
     )
     sat_name: str = satellite_model.satellite_name
-    new_sat = create_satellite(sat_name, object_id, domain)
+    # Built directly rather than with sat_com's create_satellite: sat_com_topology 5 inserted a required `shell`
+    # parameter before `domain`. A TLE-only satellite belongs to no shell (shell stays None in 5, absent in 4).
+    new_sat = SatComSatellite(satellite_name=sat_name, object_id=object_id, domain=domain)
     new_sat.set_movement_model(satellite_model)
     simulation_manager.add_satellite(new_sat)
     simulation_manager.update_ground_station_links()
@@ -454,7 +455,7 @@ def _get_orbital_elements(
     raan_rad = math.radians(raan)
 
     # Use the movement model's propagated position (NOT manual sgp4)
-    r_teme, _v_teme = mm.get_position_earth_general_inertial()
+    r_teme = mm.get_position_earth_general_inertial()
     x, y, z = r_teme
 
     # Orbital-plane unit vectors
@@ -674,8 +675,8 @@ def add_mesh_links(
 
                 # Skip if the 3D distance is excessive (e.g. planes are far
                 # apart in RAAN because intermediate planes are missing).
-                r_a = sat_a.get_movement_model().get_position_earth_general_inertial()[0]
-                r_b = sat_b.get_movement_model().get_position_earth_general_inertial()[0]
+                r_a = sat_a.get_movement_model().get_position_earth_general_inertial()
+                r_b = sat_b.get_movement_model().get_position_earth_general_inertial()
                 dist = math.sqrt(
                     (r_a[0] - r_b[0]) ** 2
                     + (r_a[1] - r_b[1]) ** 2

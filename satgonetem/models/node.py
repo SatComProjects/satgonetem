@@ -276,11 +276,6 @@ class Node:
                 response = self.grpc_client.NodeRun(request)
             except grpc.RpcError as exc:
                 if exc.code() == grpc.StatusCode.UNIMPLEMENTED:
-                    logging.warning(
-                        "NodeRun not implemented by GoNetem server for %s; "
-                        "falling back to docker execution",
-                        self.name,
-                    )
                     return self.execute_command_docker(command, detach)
                 raise
             if response.status.code == netem_pb2.StatusCode.ERROR:
@@ -288,10 +283,14 @@ class Node:
                     f"NodeRun failed for {self.name}: {response.status.error}"
                 )
             decoded = response.stdout.decode("utf-8").strip() if response.stdout else ""
+            decoded_err = response.stderr.decode("utf-8").strip() if response.stderr else ""
             self.command_output = decoded
             if response.exitCode != 0:
+                detail = decoded
+                if decoded_err:
+                    detail = f"{decoded}\nstderr: {decoded_err}" if decoded else decoded_err
                 raise RuntimeError(
-                    f"Command failed in {self.name} (exit {response.exitCode}): {decoded}"
+                    f"Command failed in {self.name} (exit {response.exitCode}): {detail}"
                 )
             return decoded
 
