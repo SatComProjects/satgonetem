@@ -1,5 +1,8 @@
 """Tests for StaticRoutingDaemon."""
 
+import logging
+
+import grpc
 import pytest
 import networkx as nx
 from unittest.mock import MagicMock, patch
@@ -7,8 +10,9 @@ from unittest.mock import MagicMock, patch
 from satgonetem.models.interface import Interface
 from satgonetem.models.node import Node
 from satgonetem.models.routing_entry import RoutingEntry
+from satgonetem.proto import netem_pb2
 from satgonetem.routing import static_daemon
-from satgonetem.routing.static_daemon import StaticRoutingDaemon
+from satgonetem.routing.static_daemon import RouteOperation, StaticRoutingDaemon
 
 
 def make_entry(dst="10.0.0.1", gw="10.1.0.1", iface_name="Sat0.1", prefix=16):
@@ -70,38 +74,28 @@ class TestStaticRoutingDaemonInit:
 
         assert node.ipv4_previous_routing_table == []
 
-    def test_applies_ground_station_routes(self, daemon):
+    def test_applies_all_routes_once(self, daemon):
         with patch.object(daemon, "_populate_routing_tables"), \
-             patch.object(daemon, "_apply_ground_station_routes") as mock_gs, \
-             patch.object(daemon, "_apply_satellite_routes"):
+             patch.object(daemon, "_apply_all_routes") as mock_apply:
             daemon.init()
 
-        mock_gs.assert_called_once()
-
-    def test_applies_satellite_routes(self, daemon):
-        with patch.object(daemon, "_populate_routing_tables"), \
-             patch.object(daemon, "_apply_ground_station_routes"), \
-             patch.object(daemon, "_apply_satellite_routes") as mock_sat:
-            daemon.init()
-
-        mock_sat.assert_called_once()
+        mock_apply.assert_called_once_with(max_workers=128)
 
     def test_returns_false_on_exception(self, daemon):
         with patch.object(daemon, "_populate_routing_tables"), \
-             patch.object(daemon, "_apply_ground_station_routes"), \
-             patch.object(daemon, "_apply_satellite_routes", side_effect=RuntimeError("boom")):
+             patch.object(
+                 daemon, "_apply_all_routes", side_effect=RuntimeError("boom")
+             ):
             result = daemon.init()
 
         assert result is False
 
-    def test_passes_max_workers_to_change_methods(self, daemon):
+    def test_passes_max_workers_to_change_method(self, daemon):
         with patch.object(daemon, "_populate_routing_tables"), \
-             patch.object(daemon, "_apply_ground_station_routes") as mock_gs, \
-             patch.object(daemon, "_apply_satellite_routes") as mock_sat:
+             patch.object(daemon, "_apply_all_routes") as mock_apply:
             daemon.init(max_workers=8)
 
-        mock_gs.assert_called_once_with(max_workers=8)
-        mock_sat.assert_called_once_with(max_workers=8)
+        mock_apply.assert_called_once_with(max_workers=8)
 
 
 class TestStaticRoutingDaemonUpdate:
@@ -117,27 +111,21 @@ class TestStaticRoutingDaemonUpdate:
         topology.status = True
 
         with patch.object(daemon, "_populate_routing_tables"), \
-             patch.object(daemon, "_apply_ground_station_routes") as mock_gs, \
-             patch.object(daemon, "_apply_satellite_routes") as mock_sat:
+             patch.object(daemon, "_apply_all_routes") as mock_apply:
             daemon.update(new_links=[])
 
-        mock_gs.assert_called_once()
-        mock_sat.assert_called_once()
+        mock_apply.assert_called_once()
 
     def test_skips_route_application_when_topology_inactive(self, daemon, topology):
         topology.status = False
 
         with patch.object(daemon, "_populate_routing_tables"), \
-             patch.object(daemon, "_apply_ground_station_routes") as mock_gs, \
-             patch.object(daemon, "_apply_satellite_routes") as mock_sat:
+             patch.object(daemon, "_apply_all_routes") as mock_apply:
             daemon.update(new_links=[])
 
-        mock_gs.assert_not_called()
-        mock_sat.assert_not_called()
+        mock_apply.assert_not_called()
 
     def test_logs_warning_when_topology_inactive(self, daemon, topology, caplog):
-        import logging
-
         topology.status = False
 
         with patch.object(daemon, "_populate_routing_tables"):
@@ -154,16 +142,14 @@ class TestStaticRoutingDaemonUpdate:
 
         mock_pop.assert_called_once()
 
-    def test_passes_max_workers_to_change_methods(self, daemon, topology):
+    def test_passes_max_workers_to_change_method(self, daemon, topology):
         topology.status = True
 
         with patch.object(daemon, "_populate_routing_tables"), \
-             patch.object(daemon, "_apply_ground_station_routes") as mock_gs, \
-             patch.object(daemon, "_apply_satellite_routes") as mock_sat:
+             patch.object(daemon, "_apply_all_routes") as mock_apply:
             daemon.update(new_links=[], max_workers=2)
 
-        mock_gs.assert_called_once_with(max_workers=2)
-        mock_sat.assert_called_once_with(max_workers=2)
+        mock_apply.assert_called_once_with(max_workers=2)
 
 
 class TestStaticRoutingDaemonRemoveSingleNode:
@@ -172,6 +158,7 @@ class TestStaticRoutingDaemonRemoveSingleNode:
     def test_executes_del_command_for_each_route(self, daemon):
         node = Node("Sat0")
         node.ipv4_routing_table = [make_entry(dst="10.0.0.1", gw="10.1.0.1")]
+        node.interfaces.append(node.ipv4_routing_table[0].interface)
 
         with patch.object(daemon, "_exec_batch") as mock_batch:
             daemon.remove(node=node)
@@ -194,6 +181,7 @@ class TestStaticRoutingDaemonRemoveSingleNode:
         )
         node = Node("Sat0")
         node.ipv4_routing_table = [entry]
+        node.interfaces.append(entry.interface)
 
         with patch.object(daemon, "_exec_batch") as mock_batch:
             daemon.remove(node=node)
@@ -255,6 +243,7 @@ class TestStaticRoutingDaemonRemoveSingleNode:
             make_entry(dst="10.0.0.1", gw="10.1.0.1"),
             make_entry(dst="10.2.0.1", gw="10.3.0.1", iface_name="Sat0.2"),
         ]
+        node.interfaces.extend(entry.interface for entry in node.ipv4_routing_table)
 
         with patch.object(daemon, "_exec_batch") as mock_batch:
             daemon.remove(node=node)
@@ -294,8 +283,10 @@ class TestStaticRoutingDaemonRemoveAllNodes:
     def test_exec_batch_called_once_per_node_with_routes(self, daemon, topology):
         sat = Node("Sat0")
         sat.ipv4_routing_table = [make_entry()]
+        sat.interfaces.append(sat.ipv4_routing_table[0].interface)
         gs = Node("Gnd0")
         gs.ipv4_routing_table = [make_entry()]
+        gs.interfaces.append(gs.ipv4_routing_table[0].interface)
         topology.get_satellites.return_value = [sat]
         topology.get_ground_stations.return_value = [gs]
 
@@ -406,8 +397,7 @@ class TestAddressableSatellites:
         topo, gnd0, _gnd1, _sat0, sat1 = _make_line_topology()
         daemon = StaticRoutingDaemon(topo)
 
-        with patch.object(daemon, "_apply_ground_station_routes"), \
-             patch.object(daemon, "_apply_satellite_routes"):
+        with patch.object(daemon, "_apply_all_routes"):
             daemon.init()
 
         # Gnd0 should have a route to Sat1 (via Sat0)
@@ -421,8 +411,7 @@ class TestAddressableSatellites:
         topo, _gnd0, _gnd1, sat0, sat1 = _make_line_topology()
         daemon = StaticRoutingDaemon(topo)
 
-        with patch.object(daemon, "_apply_ground_station_routes"), \
-             patch.object(daemon, "_apply_satellite_routes"):
+        with patch.object(daemon, "_apply_all_routes"):
             daemon.init()
 
         # Sat0 should have a route to Sat1 (direct)
@@ -436,8 +425,7 @@ class TestAddressableSatellites:
         topo, _gnd0, _gnd1, sat0, sat1 = _make_line_topology()
         daemon = StaticRoutingDaemon(topo)
 
-        with patch.object(daemon, "_apply_ground_station_routes"), \
-             patch.object(daemon, "_apply_satellite_routes"):
+        with patch.object(daemon, "_apply_all_routes"):
             daemon.init()
 
         # Nothing to test here because we only have one addressable satellite in
@@ -449,8 +437,7 @@ class TestAddressableSatellites:
         topo, gnd0, _gnd1, _sat0, sat1 = _make_line_topology()
         daemon = StaticRoutingDaemon(topo)
 
-        with patch.object(daemon, "_apply_ground_station_routes"), \
-             patch.object(daemon, "_apply_satellite_routes"):
+        with patch.object(daemon, "_apply_all_routes"):
             daemon.init()
 
         # Sat1 should have a route to Gnd0 (via Sat0)
@@ -464,8 +451,7 @@ class TestAddressableSatellites:
         topo, _gnd0, _gnd1, sat0, _sat1 = _make_line_topology()
         daemon = StaticRoutingDaemon(topo)
 
-        with patch.object(daemon, "_apply_ground_station_routes"), \
-             patch.object(daemon, "_apply_satellite_routes"):
+        with patch.object(daemon, "_apply_all_routes"):
             daemon.init()
 
         # No node should have a route to Sat0's loopback
@@ -505,8 +491,7 @@ class TestAddressableSatellites:
         topo.get_current_graph.return_value = graph
 
         daemon = StaticRoutingDaemon(topo)
-        with patch.object(daemon, "_apply_ground_station_routes"), \
-             patch.object(daemon, "_apply_satellite_routes"):
+        with patch.object(daemon, "_apply_all_routes"):
             daemon.init()
 
         # sat0 should have route to sat1
@@ -550,8 +535,7 @@ class TestAddressableSatellites:
 
         daemon = StaticRoutingDaemon(topo)
         with patch.object(daemon, "_load_routes_from_file", return_value=file_routes), \
-             patch.object(daemon, "_apply_ground_station_routes"), \
-             patch.object(daemon, "_apply_satellite_routes"):
+             patch.object(daemon, "_apply_all_routes"):
             daemon.init()
 
         # gnd0 should have route to sat1 from file
@@ -778,14 +762,12 @@ class TestRouteReuse:
         daemon = StaticRoutingDaemon(topo)
         nodes = [gnd0, gnd1, sat0, sat1]
 
-        with patch.object(daemon, "_apply_ground_station_routes"), \
-             patch.object(daemon, "_apply_satellite_routes"):
+        with patch.object(daemon, "_apply_all_routes"):
             daemon.init()
 
         before = {node.id: list(node.ipv4_routing_table) for node in nodes}
 
-        with patch.object(daemon, "_apply_ground_station_routes"), \
-             patch.object(daemon, "_apply_satellite_routes"):
+        with patch.object(daemon, "_apply_all_routes"):
             daemon.update([])
 
         for node in nodes:
@@ -803,8 +785,7 @@ class TestRouteReuse:
         graph.add_edge(gnd0.id, gnd1.id, weight=100)
 
         daemon = StaticRoutingDaemon(topo)
-        with patch.object(daemon, "_apply_ground_station_routes"), \
-             patch.object(daemon, "_apply_satellite_routes"):
+        with patch.object(daemon, "_apply_all_routes"):
             daemon.init()
 
         old_sat0_to_gnd0 = next(
@@ -820,8 +801,7 @@ class TestRouteReuse:
 
         graph[gnd0.id][gnd1.id]["weight"] = 0.1
 
-        with patch.object(daemon, "_apply_ground_station_routes"), \
-             patch.object(daemon, "_apply_satellite_routes"):
+        with patch.object(daemon, "_apply_all_routes"):
             daemon.update([])
 
         new_sat0_to_gnd0 = next(
@@ -888,3 +868,287 @@ class TestInterfaceMapCache:
 
         assert third is not first
         assert third[0][gs.id] is not first[0][gs.id]
+
+
+# ---------------------------------------------------------------------------
+# RouteInstall batch tests
+# ---------------------------------------------------------------------------
+
+
+class _UnimplementedRpcError(grpc.RpcError):
+    def code(self):
+        return grpc.StatusCode.UNIMPLEMENTED
+
+
+class _InternalRpcError(grpc.RpcError):
+    def code(self):
+        return grpc.StatusCode.INTERNAL
+
+
+def _route_response(request, errors=None, durations=None, missing=()):
+    """Build a successful RouteInstallResponse with optional node failures."""
+    response = netem_pb2.RouteInstallResponse()
+    response.status.code = netem_pb2.StatusCode.OK
+    for name in request.nodes:
+        if name in missing:
+            continue
+        result = response.results[name]
+        if errors and name in errors:
+            result.status.code = netem_pb2.StatusCode.ERROR
+            result.status.error = errors[name]
+            continue
+        result.status.code = netem_pb2.StatusCode.OK
+        result.applied = len(request.nodes[name].routes)
+        result.durationMicros = (durations or {}).get(name, 1000)
+    return response
+
+
+class FakeRouteInstallClient:
+    """Minimal stand-in for the generated NetemStub RouteInstall method."""
+
+    def __init__(self, error=None, response_factory=None):
+        self.requests = []
+        self.error = error
+        self.response_factory = response_factory or _route_response
+
+    def RouteInstall(self, request):
+        self.requests.append(request)
+        if self.error is not None:
+            raise self.error
+        return self.response_factory(request)
+
+
+def _make_batch_node(name, curr, prev=None, client=None, project_id="prj"):
+    """Build a node with live interfaces for its previous and current tables."""
+    node = Node(name)
+    node.grpc_client = client
+    node.project_id = project_id
+    node.ipv4_previous_routing_table = prev if prev is not None else []
+    node.ipv4_routing_table = list(curr)
+    live = {}
+    for entry in list(node.ipv4_previous_routing_table) + list(curr):
+        live[entry.interface.get_iname()] = entry.interface
+    node.interfaces = list(live.values())
+    return node
+
+
+class TestRouteInstallBatch:
+    def test_request_has_structured_operations_and_skips_unchanged_nodes(
+        self, topology
+    ):
+        client = FakeRouteInstallClient()
+        old = make_entry(dst="10.0.0.1", gw="192.0.2.1", iface_name="Sat0.1")
+        new = make_entry(dst="10.1.0.1", gw="192.0.2.2", iface_name="Sat0.3")
+        sat = _make_batch_node("Sat0", [new], prev=[old], client=client)
+        unchanged = make_entry(dst="10.2.0.1", iface_name="Sat1.1")
+        sat1 = _make_batch_node("Sat1", [unchanged], prev=[unchanged], client=client)
+        topology.satellites = {sat.id: sat, sat1.id: sat1}
+        topology.ground_stations = {}
+        daemon = StaticRoutingDaemon(topology)
+
+        outcome = daemon._apply_all_routes(max_workers=1)
+
+        assert len(client.requests) == 1
+        request = client.requests[0]
+        assert request.prjId == "prj"
+        assert request.maxConcurrency == 0
+        assert set(request.nodes.keys()) == {"Sat0"}
+        specs = list(request.nodes["Sat0"].routes)
+        assert [
+            (spec.action, spec.destination, spec.gateway, spec.device)
+            for spec in specs
+        ] == [
+            (netem_pb2.ROUTE_DELETE, "10.0.0.0/16", "192.0.2.1", "eth1"),
+            (netem_pb2.ROUTE_REPLACE, "10.1.0.0/16", "192.0.2.2", "eth3"),
+        ]
+        assert outcome.ok_nodes == {"Sat0"}
+
+    def test_install_route_batches_accepts_node_names(self, topology):
+        client = FakeRouteInstallClient()
+        node = _make_batch_node("Sat0", [make_entry()], client=client)
+        topology.satellites = {node.id: node}
+        daemon = StaticRoutingDaemon(topology)
+        ops = daemon._emit_route_operations([], node.ipv4_routing_table)
+
+        outcome = daemon._install_route_batches({"Sat0": ops}, max_workers=1)
+
+        assert len(client.requests) == 1
+        assert "Sat0" in client.requests[0].nodes
+        assert outcome.ok_nodes == {"Sat0"}
+
+    def test_ground_station_and_satellite_share_one_request(self, topology):
+        client = FakeRouteInstallClient()
+        gs = _make_batch_node(
+            "Gnd0", [make_entry(iface_name="Gnd0.1")], client=client
+        )
+        sat = _make_batch_node(
+            "Sat0", [make_entry(iface_name="Sat0.1")], client=client
+        )
+        topology.ground_stations = {gs.id: gs}
+        topology.satellites = {sat.id: sat}
+        daemon = StaticRoutingDaemon(topology)
+
+        daemon._apply_all_routes(max_workers=1)
+
+        assert len(client.requests) == 1
+        assert set(client.requests[0].nodes.keys()) == {"Gnd0", "Sat0"}
+
+    def test_emit_route_operations_allows_on_link_gateway(self, daemon):
+        entry = make_entry(gw="", iface_name="Sat0.2")
+
+        ops = daemon._emit_route_operations([], [entry])
+
+        assert ops == [RouteOperation("replace", "10.0.0.0/16", "", "eth2")]
+        assert (
+            daemon._format_route_operation(ops[0])
+            == "route replace 10.0.0.0/16 dev eth2"
+        )
+
+    def test_unimplemented_falls_back_and_does_not_retry(
+        self, topology, caplog
+    ):
+        client = FakeRouteInstallClient(error=_UnimplementedRpcError())
+        node = _make_batch_node("Sat0", [make_entry()], client=client)
+        topology.satellites = {node.id: node}
+        daemon = StaticRoutingDaemon(topology)
+
+        with patch.object(daemon, "_exec_batch") as mock_exec:
+            with caplog.at_level(logging.WARNING):
+                first = daemon._apply_all_routes(max_workers=2)
+                second = daemon._apply_all_routes(max_workers=2)
+
+        assert len(client.requests) == 1
+        assert mock_exec.call_count == 2
+        assert first.applied == 1
+        assert second.applied == 1
+        assert daemon._route_install_supported is False
+        assert "legacy per-node NodeRun route path" in caplog.text
+
+    def test_other_rpc_errors_propagate(self, topology):
+        client = FakeRouteInstallClient(error=_InternalRpcError())
+        node = _make_batch_node("Sat0", [make_entry()], client=client)
+        topology.satellites = {node.id: node}
+        daemon = StaticRoutingDaemon(topology)
+
+        with pytest.raises(_InternalRpcError):
+            daemon._apply_all_routes(max_workers=1)
+
+        assert daemon._route_install_supported is True
+
+    def test_per_node_error_does_not_stop_other_nodes(self, topology, caplog):
+        client = FakeRouteInstallClient(
+            response_factory=lambda req: _route_response(
+                req, errors={"Sat1": "boom"}
+            )
+        )
+        sat0 = _make_batch_node("Sat0", [make_entry()], client=client)
+        sat1 = _make_batch_node("Sat1", [make_entry()], client=client)
+        topology.satellites = {sat0.id: sat0, sat1.id: sat1}
+        daemon = StaticRoutingDaemon(topology)
+
+        with caplog.at_level(logging.ERROR):
+            outcome = daemon._apply_all_routes(max_workers=1)
+
+        assert outcome.ok_nodes == {"Sat0"}
+        assert outcome.error_nodes == {"Sat1"}
+        assert outcome.applied == 1
+        assert "Sat1" in caplog.text
+        assert "boom" in caplog.text
+
+    def test_missing_result_is_a_node_error(self, topology, caplog):
+        client = FakeRouteInstallClient(
+            response_factory=lambda req: _route_response(req, missing={"Sat0"})
+        )
+        sat0 = _make_batch_node("Sat0", [make_entry()], client=client)
+        topology.satellites = {sat0.id: sat0}
+        daemon = StaticRoutingDaemon(topology)
+
+        with caplog.at_level(logging.ERROR):
+            outcome = daemon._apply_all_routes(max_workers=1)
+
+        assert outcome.error_nodes == {"Sat0"}
+        assert "no result" in caplog.text
+
+    def test_requests_are_chunked_by_node_count(self, topology, monkeypatch):
+        monkeypatch.setattr(static_daemon, "MAX_ROUTE_NODES_PER_REQUEST", 2)
+        client = FakeRouteInstallClient()
+        nodes = [
+            _make_batch_node(
+                f"Sat{i}",
+                [make_entry(dst=f"10.{i}.0.1", iface_name=f"Sat{i}.1")],
+                client=client,
+            )
+            for i in range(5)
+        ]
+        topology.satellites = {node.id: node for node in nodes}
+        daemon = StaticRoutingDaemon(topology)
+
+        outcome = daemon._apply_all_routes(max_workers=1)
+
+        assert len(client.requests) == 3
+        sent = []
+        for request in client.requests:
+            sent.extend(request.nodes.keys())
+        assert sorted(sent) == sorted(node.name for node in nodes)
+        assert outcome.ok_nodes == {node.name for node in nodes}
+
+    def test_requests_are_chunked_by_serialized_size(self, topology, monkeypatch):
+        monkeypatch.setattr(static_daemon, "MAX_ROUTE_REQUEST_BYTES", 100)
+        client = FakeRouteInstallClient()
+        nodes = []
+        for i in range(3):
+            entries = [
+                make_entry(
+                    dst=f"10.{i}.{j}.1",
+                    iface_name=f"Sat{i}.1",
+                )
+                for j in range(5)
+            ]
+            nodes.append(_make_batch_node(f"Sat{i}", entries, client=client))
+        topology.satellites = {node.id: node for node in nodes}
+        daemon = StaticRoutingDaemon(topology)
+
+        daemon._apply_all_routes(max_workers=1)
+
+        assert len(client.requests) == 3
+
+    def test_remove_all_sends_one_delete_batch(self, topology):
+        client = FakeRouteInstallClient()
+        sat = _make_batch_node(
+            "Sat0", [make_entry(dst="10.0.0.1", iface_name="Sat0.1")], client=client
+        )
+        gs = _make_batch_node(
+            "Gnd0", [make_entry(dst="10.1.0.1", iface_name="Gnd0.1")], client=client
+        )
+        topology.get_satellites.return_value = [sat]
+        topology.get_ground_stations.return_value = [gs]
+        daemon = StaticRoutingDaemon(topology)
+
+        daemon.remove(max_workers=1)
+
+        assert len(client.requests) == 1
+        request = client.requests[0]
+        assert set(request.nodes.keys()) == {"Sat0", "Gnd0"}
+        for name in ("Sat0", "Gnd0"):
+            specs = list(request.nodes[name].routes)
+            assert specs
+            assert all(
+                spec.action == netem_pb2.ROUTE_DELETE for spec in specs
+            )
+        assert sat.ipv4_routing_table == []
+        assert gs.ipv4_routing_table == []
+
+    def test_remove_skips_deletes_for_missing_devices(self, topology):
+        client = FakeRouteInstallClient()
+        node = Node("Sat0")
+        node.grpc_client = client
+        node.project_id = "prj"
+        node.ipv4_routing_table = [make_entry()]
+        topology.get_satellites.return_value = [node]
+        topology.get_ground_stations.return_value = []
+        daemon = StaticRoutingDaemon(topology)
+
+        daemon.remove(max_workers=1)
+
+        assert client.requests == []
+        assert node.ipv4_routing_table == []
