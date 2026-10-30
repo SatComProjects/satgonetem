@@ -23,7 +23,6 @@ from sat_com_constellation.models import WalkerConstellationProperty
 from sat_com_application.simulation_manager import SimulationManager
 from sat_com_model.exceptions import GroundObjectDomainNotFoundError
 from sat_com_model.models import (
-    create_satellite,
     create_ground_station,
     GroundObject as SatComGroundObject,
     GroundObjectDomain,
@@ -236,7 +235,9 @@ def create_custom_satellite(
         time_manager=simulation_manager.time_manager,
     )
     sat_name: str = satellite_model.satellite_name
-    new_sat = create_satellite(sat_name, object_id, domain)
+    # Built directly rather than with sat_com's create_satellite: sat_com_topology 5 inserted a required `shell`
+    # parameter before `domain`. A TLE-only satellite belongs to no shell (shell stays None in 5, absent in 4).
+    new_sat = SatComSatellite(satellite_name=sat_name, object_id=object_id, domain=domain)
     new_sat.set_movement_model(satellite_model)
     simulation_manager.add_satellite(new_sat)
     simulation_manager.update_ground_station_links()
