@@ -180,6 +180,11 @@ class NetemStub(object):
                 request_serializer=satgonetem_dot_proto_dot_netem__pb2.LinkRequest.SerializeToString,
                 response_deserializer=satgonetem_dot_proto_dot_netem__pb2.AckResponse.FromString,
                 _registered_method=True)
+        self.LinkUpdateMany = channel.unary_unary(
+                '/netem.Netem/LinkUpdateMany',
+                request_serializer=satgonetem_dot_proto_dot_netem__pb2.LinkUpdateManyRequest.SerializeToString,
+                response_deserializer=satgonetem_dot_proto_dot_netem__pb2.LinkUpdateManyResponse.FromString,
+                _registered_method=True)
         self.LinkAdd = channel.unary_unary(
                 '/netem.Netem/LinkAdd',
                 request_serializer=satgonetem_dot_proto_dot_netem__pb2.LinkRequest.SerializeToString,
@@ -377,6 +382,15 @@ class NetemServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def LinkUpdateMany(self, request, context):
+        """LinkUpdateMany updates a burst of links in one call. The server takes a
+        single topology write lock, updates every config before touching the
+        kernel, and groups qdisc work by node.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
     def LinkAdd(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
@@ -536,6 +550,11 @@ def add_NetemServicer_to_server(servicer, server):
                     servicer.LinkUpdate,
                     request_deserializer=satgonetem_dot_proto_dot_netem__pb2.LinkRequest.FromString,
                     response_serializer=satgonetem_dot_proto_dot_netem__pb2.AckResponse.SerializeToString,
+            ),
+            'LinkUpdateMany': grpc.unary_unary_rpc_method_handler(
+                    servicer.LinkUpdateMany,
+                    request_deserializer=satgonetem_dot_proto_dot_netem__pb2.LinkUpdateManyRequest.FromString,
+                    response_serializer=satgonetem_dot_proto_dot_netem__pb2.LinkUpdateManyResponse.SerializeToString,
             ),
             'LinkAdd': grpc.unary_unary_rpc_method_handler(
                     servicer.LinkAdd,
@@ -1331,6 +1350,33 @@ class Netem(object):
             '/netem.Netem/LinkUpdate',
             satgonetem_dot_proto_dot_netem__pb2.LinkRequest.SerializeToString,
             satgonetem_dot_proto_dot_netem__pb2.AckResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def LinkUpdateMany(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/netem.Netem/LinkUpdateMany',
+            satgonetem_dot_proto_dot_netem__pb2.LinkUpdateManyRequest.SerializeToString,
+            satgonetem_dot_proto_dot_netem__pb2.LinkUpdateManyResponse.FromString,
             options,
             channel_credentials,
             insecure,

@@ -48,6 +48,10 @@ service Netem {
 
     // Link actions
     rpc LinkUpdate(LinkRequest) returns (AckResponse) {}
+    // LinkUpdateMany updates a burst of links in one call. The server takes a
+    // single topology write lock, updates every config before touching the
+    // kernel, and groups qdisc work by node.
+    rpc LinkUpdateMany(LinkUpdateManyRequest) returns (LinkUpdateManyResponse) {}
     rpc LinkAdd(LinkRequest) returns (AckResponse) {}
     rpc LinkDel(LinkRequest) returns (AckResponse) {}
 
@@ -213,6 +217,25 @@ message LinkRequest {
     string prjId = 1;
     LinkConfig link = 2;
     bool sync = 3;
+}
+
+message LinkUpdateManyRequest {
+    string prjId = 1;
+    repeated LinkConfig links = 2;
+    bool sync = 3;
+}
+
+message LinkUpdateResult {
+    Status status = 1;
+    string peer1 = 2;
+    string peer2 = 3;
+    int64 durationMicros = 4;
+}
+
+message LinkUpdateManyResponse {
+    Status status = 1;
+    repeated LinkUpdateResult results = 2;
+    uint32 updated = 3;
 }
 
 message NodeIfStateRequest {
