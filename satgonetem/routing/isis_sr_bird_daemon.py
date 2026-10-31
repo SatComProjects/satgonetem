@@ -24,6 +24,36 @@ ISIS_HELLO_MULTIPLIER = 3
 SR_GLOBAL_BLOCK_LOW = 16000
 SR_GLOBAL_BLOCK_HIGH = 23999
 
+_ISIS_PROBE_CONFIG = (
+    "protocol device {}\n"
+    "protocol mpls { label range 16000 23999; }\n"
+)
+
+
+def _bird_supports_isis(node: "Node") -> bool:
+    """Return whether *node*'s Bird build accepts IS-IS and MPLS config.
+
+    Stock Bird 2.x ships neither protocol, so only a patched build accepts the
+    generated template.
+
+    Args:
+        node: Node whose container should be probed.
+
+    Returns:
+        True when ``bird -p`` accepts the probe configuration.
+    """
+    payload = base64.b64encode(_ISIS_PROBE_CONFIG.encode("utf-8")).decode("ascii")
+    probe = "/tmp/bird_isis_probe.conf"
+    try:
+        node.execute_command(
+            f"printf %s '{payload}' | base64 -d > {probe} && "
+            f"{{ bird -p -c {probe}; rc=$?; rm -f {probe}; exit $rc; }}"
+        )
+    except Exception as exc:
+        logging.debug("Bird IS-IS capability probe failed: %s", exc)
+        return False
+    return True
+
 
 class ISISBirdSRDaemon(RoutingDaemon):
     """Bird2-based IS-IS SR-MPLS routing daemon.
@@ -45,6 +75,13 @@ class ISISBirdSRDaemon(RoutingDaemon):
         nodes = list(self.topology.get_satellites()) + list(
             self.topology.get_ground_stations()
         )
+        if nodes and not _bird_supports_isis(nodes[0]):
+            logging.error(
+                "IS-IS SR requires a Bird build with IS-IS and MPLS support; "
+                "the selected image does not provide one. Use a patched Bird "
+                "image or the 'dynamic-ospf' routing method."
+            )
+            return False
         errors = 0
         with ThreadPoolExecutor(max_workers=max_workers) as pool:
             futures = {pool.submit(self._init_node, n): n for n in nodes}
