@@ -27,6 +27,36 @@ if TYPE_CHECKING:
     from satgonetem.models.node import Node
 
 
+def _route_delete_command(route_command: str) -> str:
+    """Build the iproute2 delete command for an installed route line.
+
+    Cached route lines always use the ``replace`` form emitted by
+    :meth:`SRNodeSIDEntry.to_iproute2_command`,
+    :meth:`SRForwardEntry.to_iproute2_command`, and
+    :meth:`SRLabelStackEntry.to_iproute2_command`. The delete form only
+    needs the MPLS label or IP prefix; next-hop attributes are omitted.
+
+    Args:
+        route_command: Installed route command ending in ``replace``.
+
+    Returns:
+        Matching ``ip ... route del`` command.
+
+    Raises:
+        ValueError: If *route_command* is not a supported replace command.
+    """
+    parts = route_command.split()
+    if (
+        parts[:4] == ["ip", "-f", "mpls", "route"]
+        and len(parts) >= 6
+        and parts[4] == "replace"
+    ):
+        return f"ip -f mpls route del {parts[5]}"
+    if parts[:3] == ["ip", "route", "replace"] and len(parts) >= 5:
+        return f"ip route del {parts[3]}"
+    raise ValueError(f"Unsupported route command: {route_command!r}")
+
+
 MPLS_LABEL_MIN = 16
 MPLS_LABEL_MAX = 1048575
 MPLS_LABEL_IMPLICIT_NULL = 3
@@ -832,7 +862,8 @@ class SRMPLSDaemon(RoutingDaemon):
         """Install SR-MPLS forwarding entries on all satellites.
 
         On the first call (previous table empty) all entries are installed.
-        On subsequent calls only entries whose attributes changed are sent.
+        On subsequent calls only entries whose attributes changed are sent,
+        and entries no longer present are deleted.
         """
         if self._label_manager is None or self._sr_graph is None:
             return
@@ -910,10 +941,13 @@ class SRMPLSDaemon(RoutingDaemon):
 
             prev = self._prev_sr_node_sid_routes.get(sat.id, [])
             prev_set = set(prev)
+            new_set = set(route_commands)
             changed = [line for line in route_commands if line not in prev_set]
+            stale = [line for line in prev if line not in new_set]
 
-            if changed:
-                batch_cmd = "; ".join(changed)
+            if changed or stale:
+                batch_lines = [_route_delete_command(line) for line in stale] + changed
+                batch_cmd = "; ".join(batch_lines)
                 try:
                     sat.execute_command(["sh", "-lc", batch_cmd])
                     self._prev_sr_node_sid_routes[sat.id] = route_commands
@@ -936,7 +970,8 @@ class SRMPLSDaemon(RoutingDaemon):
         """Install SR-MPLS routes on all ground stations.
 
         On the first call (previous table empty) all routes are installed.
-        On subsequent calls only routes whose attributes changed are sent.
+        On subsequent calls only routes whose attributes changed are sent,
+        and routes no longer present are deleted.
         """
         from satgonetem.models.mpls_entry import SRNodeSIDEntry
 
@@ -965,10 +1000,13 @@ class SRMPLSDaemon(RoutingDaemon):
 
             prev = self._prev_sr_gs_routes.get(gs.id, [])
             prev_set = set(prev)
+            new_set = set(route_commands)
             changed = [line for line in route_commands if line not in prev_set]
+            stale = [line for line in prev if line not in new_set]
 
-            if changed:
-                batch_cmd = "; ".join(changed)
+            if changed or stale:
+                batch_lines = [_route_delete_command(line) for line in stale] + changed
+                batch_cmd = "; ".join(batch_lines)
                 try:
                     gs.execute_command(["sh", "-lc", batch_cmd])
                     self._prev_sr_gs_routes[gs.id] = route_commands
@@ -991,7 +1029,8 @@ class SRMPLSDaemon(RoutingDaemon):
         """Install SR-MPLS routes on all satellites.
 
         On the first call (previous table empty) all routes are installed.
-        On subsequent calls only routes whose attributes changed are sent.
+        On subsequent calls only routes whose attributes changed are sent,
+        and routes no longer present are deleted.
         """
         from satgonetem.models.mpls_entry import SRNodeSIDEntry
 
@@ -1020,10 +1059,13 @@ class SRMPLSDaemon(RoutingDaemon):
 
             prev = self._prev_sr_sat_routes.get(sat.id, [])
             prev_set = set(prev)
+            new_set = set(route_commands)
             changed = [line for line in route_commands if line not in prev_set]
+            stale = [line for line in prev if line not in new_set]
 
-            if changed:
-                batch_cmd = "; ".join(changed)
+            if changed or stale:
+                batch_lines = [_route_delete_command(line) for line in stale] + changed
+                batch_cmd = "; ".join(batch_lines)
                 try:
                     sat.execute_command(["sh", "-lc", batch_cmd])
                     self._prev_sr_sat_routes[sat.id] = route_commands
