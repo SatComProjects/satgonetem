@@ -158,7 +158,9 @@ class TestOSPFDaemonRemove:
     def test_stops_bird_on_single_node(self, daemon):
         node = make_node("Sat0")
         daemon.remove(node=node)
-        node.execute_command.assert_called_once_with("service bird stop")
+        node.execute_command.assert_called_once_with(
+            "birdc -s /run/bird/bird.ctl down 2>/dev/null || true"
+        )
 
     def test_stops_bird_on_all_nodes_when_no_node_given(self, daemon, topology):
         sat = make_node("Sat0")
@@ -168,8 +170,12 @@ class TestOSPFDaemonRemove:
 
         daemon.remove()
 
-        sat.execute_command.assert_called_once_with("service bird stop")
-        gs.execute_command.assert_called_once_with("service bird stop")
+        sat.execute_command.assert_called_once_with(
+            "birdc -s /run/bird/bird.ctl down 2>/dev/null || true"
+        )
+        gs.execute_command.assert_called_once_with(
+            "birdc -s /run/bird/bird.ctl down 2>/dev/null || true"
+        )
 
     def test_logs_error_and_continues_on_failure(self, daemon, topology, caplog):
         import logging
@@ -184,7 +190,9 @@ class TestOSPFDaemonRemove:
             daemon.remove()
 
         assert "boom" in caplog.text
-        ok.execute_command.assert_called_once_with("service bird stop")
+        ok.execute_command.assert_called_once_with(
+            "birdc -s /run/bird/bird.ctl down 2>/dev/null || true"
+        )
 
 
 class TestBuildOspfConfig:
@@ -278,21 +286,28 @@ class TestAssignIps:
 class TestApplyConfig:
     """Tests for the _apply_config module-level helper."""
 
-    def test_writes_config_to_tmpfile(self):
-        node = make_node("Sat0")
-        m = MagicMock()
-        with patch("satgonetem.routing.ospf_daemon.open", m, create=True):
-            _apply_config(node, "config content")
-        m.assert_called_once()
-        handle = m.return_value.__enter__.return_value
-        handle.write.assert_called_once_with("config content")
+    def test_writes_config_inside_container(self):
+        import base64
+        import re
 
-    def test_calls_start_service(self):
         node = make_node("Sat0")
-        with patch("satgonetem.routing.ospf_daemon.open", create=True):
-            _apply_config(node, "config content")
+        _apply_config(node, "config content")
         cmd = node.execute_command.call_args[0][0]
-        assert "/usr/bin/start-service.py --service bird --bird-config" in cmd
+
+        assert "start-service.py" not in cmd
+        assert "/etc/bird/bird.conf" in cmd
+        match = re.search(r"printf %s '([^']+)' \| base64 -d", cmd)
+        assert match is not None
+        assert base64.b64decode(match.group(1)).decode() == "config content"
+
+    def test_reloads_or_starts_and_verifies_bird(self):
+        node = make_node("Sat0")
+        _apply_config(node, "config content")
+        cmd = node.execute_command.call_args[0][0]
+
+        assert "birdc -s /run/bird/bird.ctl configure" in cmd
+        assert "bird -c /etc/bird/bird.conf -s /run/bird/bird.ctl" in cmd
+        assert cmd.count("birdc -s /run/bird/bird.ctl show status") == 2
 
 
 def _decode_b64_cmd(cmd: str) -> str:

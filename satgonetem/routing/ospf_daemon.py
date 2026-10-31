@@ -8,11 +8,11 @@ from __future__ import annotations
 
 import base64
 import logging
-import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import TYPE_CHECKING, List, Optional
 
 from satgonetem.routing.base_daemon import RoutingDaemon
+from satgonetem.routing.bird_service import apply_bird_config, stop_bird
 
 if TYPE_CHECKING:
     from satgonetem.models.link import Link
@@ -119,7 +119,7 @@ class OSPFDaemon(RoutingDaemon):
         Args:
             node: The node on which Bird should be stopped.
         """
-        node.execute_command("service bird stop")
+        stop_bird(node)
 
 
 def _build_ospf_config(node: "Node") -> str:
@@ -173,18 +173,13 @@ def _build_ospf_config(node: "Node") -> str:
 
 
 def _apply_config(node: "Node", config: str) -> None:
-    """Write a Bird config to a temp file and start Bird in the container.
+    """Install a Bird config and start or reload Bird in the container.
 
     Args:
         node: The node that will run Bird.
         config: Complete Bird2 configuration as a string.
     """
-    tmpfile = f"/tmp/bird_ospf_{uuid.uuid4().hex}.conf"
-    with open(tmpfile, "w") as f:
-        f.write(config)
-    node.execute_command(
-        f"/usr/bin/start-service.py --service bird --bird-config {tmpfile}"
-    )
+    apply_bird_config(node, config)
 
 
 def _assign_ips(node: "Node") -> None:
