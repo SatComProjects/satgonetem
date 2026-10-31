@@ -753,12 +753,14 @@ class SRMPLSDaemon(RoutingDaemon):
     ) -> None:
         """Apply SR-MPLS routes to all nodes.
 
-        On init (init_flag=True), MPLS forwarding is enabled on all containers
-        before routes are installed. Satellite Node SID rules are applied on
-        every call (idempotent). Ground-station label-stack routes are replaced.
+        MPLS forwarding is enabled on all containers before routes are
+        installed, so interfaces added after init also get MPLS input enabled
+        (the operation is idempotent). Satellite Node SID rules are applied on
+        every call. Ground-station label-stack routes are replaced.
 
         Args:
-            init_flag: When True, enable MPLS on all nodes first.
+            init_flag: Retained for call-site compatibility; MPLS is enabled
+                on every call regardless of its value.
             max_workers: Maximum number of parallel worker threads.
         """
         if self._label_manager is None:
@@ -766,8 +768,7 @@ class SRMPLSDaemon(RoutingDaemon):
 
         tic = time.perf_counter()
 
-        if init_flag:
-            self._enable_mpls_on_all_nodes(max_workers=max_workers)
+        self._enable_mpls_on_all_nodes(max_workers=max_workers)
 
         self._apply_sr_node_sids_to_satellites()
 
