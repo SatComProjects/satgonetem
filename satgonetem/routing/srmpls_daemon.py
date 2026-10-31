@@ -1173,19 +1173,24 @@ class SRMPLSDaemon(RoutingDaemon):
 
         graph = self.topology.get_current_graph()
         gs_array = list(self.topology.get_ground_stations())
+        sat_array = [
+            sat for sat in list(self.topology.get_satellites()) if sat.is_addressable()
+        ]
         use_php = self.mpls_config.use_php if self.mpls_config else False
         new_entries = []
 
-        for gs_dst in gs_array:
-            if gs_src.id == gs_dst.id:
+        for destination in gs_array + sat_array:
+            if gs_src.id == destination.id:
                 continue
             try:
-                custom_path = self._label_manager.get_custom_path(gs_src.id, gs_dst.id)
+                custom_path = self._label_manager.get_custom_path(
+                    gs_src.id, destination.id
+                )
                 path = (
                     custom_path
                     if custom_path
                     else nx.shortest_path(
-                        graph, source=gs_src.id, target=gs_dst.id, weight="weight"
+                        graph, source=gs_src.id, target=destination.id, weight="weight"
                     )
                 )
 
@@ -1206,7 +1211,7 @@ class SRMPLSDaemon(RoutingDaemon):
                 )
 
                 entry = SRLabelStackEntry(
-                    destination=gs_dst.loopback.ipv4,
+                    destination=destination.loopback.ipv4,
                     label_stack=label_stack,
                     next_hop=next_hop_ip,
                     interface=iface,
@@ -1216,7 +1221,7 @@ class SRMPLSDaemon(RoutingDaemon):
 
             except Exception as e:
                 logging.error(
-                    f"Failed to build SR route {gs_src.id} -> {gs_dst.id}: {e}"
+                    f"Failed to build SR route {gs_src.id} -> {destination.id}: {e}"
                 )
 
         self.sr_lfib[source_id] = new_entries
