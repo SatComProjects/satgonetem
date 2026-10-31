@@ -18,6 +18,9 @@ _TCP_FLAG_MAP: dict[str, str] = {
     "U": "-U",
 }
 
+_VALID_PROTOCOLS: frozenset[str] = frozenset({"tcp", "udp", "icmp"})
+_VALID_RATE_TYPES: frozenset[str] = frozenset({"interval", "fast", "faster"})
+
 _STATS_RE = re.compile(
     r"(\d+) packets transmitted,\s*(\d+) packets received"
     r",\s*([0-9.]+)% packet loss"
@@ -39,7 +42,8 @@ class Hping3Config:
         ttl: IP time-to-live override. None uses the system default. Maps
             to --ttl.
         rate_type: Sending rate mode. One of: 'interval' (use interval field),
-            'fast' (--fast), 'faster' (--faster), 'flood' (--flood).
+            'fast' (--fast), 'faster' (--faster). 'flood' is rejected because
+            --flood ignores -c and never terminates on its own.
         interval: Packet interval string, used when rate_type is 'interval'.
             Prefix 'u' for microseconds (e.g. 'u10000' for 10 ms), plain
             integer for seconds (e.g. '1'). Maps to -i.
@@ -48,6 +52,11 @@ class Hping3Config:
         spoof_src: Source IP address to spoof. Maps to -a. When set, takes
             precedence over the bind_ip argument in build_command. When None,
             build_command falls back to its bind_ip parameter.
+
+    Raises:
+        ValueError: If count is not a positive integer, proto is not one of
+            'tcp', 'udp', or 'icmp', rate_type is not one of 'interval',
+            'fast', or 'faster', or flags contains an unsupported TCP flag.
     """
 
     proto: str = "tcp"
@@ -60,6 +69,61 @@ class Hping3Config:
     interval: str = ""
     flags: List[str] = field(default_factory=list)
     spoof_src: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        """Reject configurations that cannot produce a finite hping3 run.
+
+        Raises:
+            ValueError: If any configuration field is invalid.
+        """
+        self._validate()
+
+    def _validate(self) -> None:
+        """Validate this configuration before a command is built.
+
+        Called from __post_init__ and again from build_command so that
+        mutations after construction cannot smuggle an invalid or
+        non-terminating hping3 command through.
+
+        Raises:
+            ValueError: If any configuration field is invalid.
+        """
+        proto = self.proto.lower() if isinstance(self.proto, str) else self.proto
+        if proto not in _VALID_PROTOCOLS:
+            raise ValueError(
+                f"proto must be one of {sorted(_VALID_PROTOCOLS)}, "
+                f"got {self.proto!r}"
+            )
+
+        if isinstance(self.count, bool) or not isinstance(self.count, int):
+            raise ValueError(
+                f"count must be an integer >= 1, got {self.count!r}"
+            )
+        if self.count < 1:
+            raise ValueError(
+                f"count must be >= 1 for a finite hping3 run, got {self.count}; "
+                "a non-positive count makes hping3 send indefinitely"
+            )
+
+        if self.rate_type == "flood":
+            raise ValueError(
+                "rate_type='flood' is not supported for finite hping3 runs: "
+                "--flood ignores -c and never terminates; use 'fast' or "
+                "'faster' instead"
+            )
+        if self.rate_type not in _VALID_RATE_TYPES:
+            raise ValueError(
+                f"rate_type must be one of {sorted(_VALID_RATE_TYPES)}, "
+                f"got {self.rate_type!r}; 'flood' is intentionally unsupported "
+                "because --flood ignores -c"
+            )
+
+        invalid_flags = [f for f in self.flags if f not in _TCP_FLAG_MAP]
+        if invalid_flags:
+            raise ValueError(
+                f"flags contains unsupported TCP flag(s) {invalid_flags}; "
+                f"valid values are {sorted(_TCP_FLAG_MAP)}"
+            )
 
     def build_command(self, dst_ip: str, bind_ip: str) -> str:
         """Build the hping3 shell command string.
@@ -76,7 +140,13 @@ class Hping3Config:
 
         Returns:
             A complete hping3 command string ready for Node.execute_command.
+
+        Raises:
+            ValueError: If the configuration is invalid. In particular,
+                non-positive counts and rate_type='flood' are rejected so a
+                finite flow can never turn into an unbounded flood.
         """
+        self._validate()
         parts = ["hping3", dst_ip, f"-c {self.count}"]
 
         proto = self.proto.lower()
@@ -105,8 +175,6 @@ class Hping3Config:
             parts.append("--fast")
         elif self.rate_type == "faster":
             parts.append("--faster")
-        elif self.rate_type == "flood":
-            parts.append("--flood")
 
         src = self.spoof_src or bind_ip
         if src:

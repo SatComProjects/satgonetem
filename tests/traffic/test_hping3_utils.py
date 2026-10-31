@@ -125,10 +125,9 @@ class TestHping3Config:
         cmd = cfg.build_command("10.0.0.2", "10.0.0.1")
         assert "--faster" in cmd
 
-    def test_rate_type_flood(self):
-        cfg = Hping3Config(rate_type="flood")
-        cmd = cfg.build_command("10.0.0.2", "10.0.0.1")
-        assert "--flood" in cmd
+    def test_rate_type_flood_rejected(self):
+        with pytest.raises(ValueError, match="flood"):
+            Hping3Config(rate_type="flood")
 
     def test_interval_not_added_when_rate_type_is_not_interval(self):
         cfg = Hping3Config(rate_type="fast", interval="u10000")
