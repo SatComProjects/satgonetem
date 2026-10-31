@@ -70,6 +70,7 @@ def _make_daemon(*, satellites=None, ground_stations=None, sids=None, sr_lfib=No
     daemon.topology = SimpleNamespace(
         satellites=satellites or {},
         ground_stations=ground_stations or {},
+        get_satellites=lambda: list((satellites or {}).values()),
     )
     daemon._prev_sr_node_sid_routes = {}
     daemon._prev_sr_gs_routes = {}

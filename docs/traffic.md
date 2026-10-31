@@ -201,7 +201,7 @@ config = Hping3Config(
     count=100,             # packet count (-c)
     size=0,                # extra payload bytes (-d)
     ttl=None,              # IP TTL (--ttl)
-    rate_type="interval",  # "interval", "fast", "faster", or "flood"
+    rate_type="interval",  # "interval", "fast", or "faster" ("flood" is rejected: it ignores count)
     interval="u10000",     # used when rate_type="interval" (-i); u prefix = microseconds
     flags=["S"],           # TCP flags: "S" SYN, "A" ACK, "F" FIN, "R" RST, "P" PUSH, "U" URG
     spoof_src=None,        # explicit spoof IP (-a); falls back to node loopback when None
