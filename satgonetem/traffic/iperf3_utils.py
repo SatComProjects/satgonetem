@@ -439,8 +439,13 @@ class Iperf3Results:
 
     @property
     def total_bytes(self) -> int:
-        """Total bytes transmitted (UDP). Derived from end.sum."""
-        return int(self._end().get("sum", {}).get("bytes", 0))
+        """Total UDP payload bytes, preferring the receiver summary."""
+        end = self._end()
+        for key in ("sum_received", "sum_sent", "sum"):
+            value = end.get(key, {}).get("bytes")
+            if value:
+                return int(value)
+        return 0
 
     @property
     def total_packets(self) -> int:
@@ -464,8 +469,15 @@ class Iperf3Results:
 
     @property
     def total_out_of_order(self) -> int:
-        """Total out-of-order UDP packets. Derived from end.sum."""
-        return int(self._end().get("sum", {}).get("out_of_order", 0))
+        """Total out-of-order UDP packets, aggregated across end streams."""
+        end = self._end()
+        total = sum(
+            int(stream.get("udp", {}).get("out_of_order", 0) or 0)
+            for stream in end.get("streams", [])
+        )
+        if total:
+            return total
+        return int(end.get("sum", {}).get("out_of_order", 0) or 0)
 
     # ---- DataFrame accessors ----
 

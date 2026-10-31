@@ -605,3 +605,72 @@ def test_negative_bandwidth_is_rejected():
     cfg = Iperf3Config(protocol="UDP", bandwidth_mbps=-1.0)
     with pytest.raises(ValueError, match="bandwidth_mbps"):
         cfg.build_client_command("10.0.0.2", "10.0.0.1", "/tmp/out.json")
+
+
+_UDP_RECEIVER_JSON = json.dumps(
+    {
+        "start": {
+            "test_start": {"protocol": "UDP", "duration": 5, "num_streams": 1}
+        },
+        "intervals": [
+            {
+                "streams": [
+                    {
+                        "socket": 5,
+                        "start": 0.0,
+                        "end": 1.0,
+                        "bits_per_second": 10_000_000.0,
+                    }
+                ],
+                "sum": {"start": 0.0, "end": 1.0, "bytes": 0},
+            }
+        ],
+        "end": {
+            "sum": {
+                "bytes": 0,
+                "packets": 4465,
+                "jitter_ms": 0.48,
+                "lost_packets": 10,
+                "lost_percent": 0.22,
+                "out_of_order": 0,
+            },
+            "sum_received": {
+                "bytes": 6_250_000,
+                "packets": 4465,
+                "jitter_ms": 0.48,
+                "lost_packets": 10,
+                "lost_percent": 0.22,
+            },
+            "streams": [
+                {
+                    "udp": {
+                        "packets": 4465,
+                        "jitter_ms": 0.48,
+                        "lost_packets": 10,
+                        "lost_percent": 0.22,
+                        "out_of_order": 3,
+                    }
+                }
+            ],
+        },
+    }
+)
+
+
+def test_udp_total_bytes_prefers_receiver_summary():
+    res = Iperf3Results(
+        raw_json=_UDP_RECEIVER_JSON, config=Iperf3Config(protocol="UDP")
+    )
+    assert res.total_bytes == 6_250_000
+
+
+def test_udp_total_bytes_falls_back_to_sender_summary():
+    res = Iperf3Results(raw_json=_UDP_JSON, config=Iperf3Config(protocol="UDP"))
+    assert res.total_bytes == 6_250_000
+
+
+def test_udp_total_out_of_order_aggregates_streams():
+    res = Iperf3Results(
+        raw_json=_UDP_RECEIVER_JSON, config=Iperf3Config(protocol="UDP")
+    )
+    assert res.total_out_of_order == 3
