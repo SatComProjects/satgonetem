@@ -333,12 +333,18 @@ class GoNetEmLauncher(NetworkLauncher):
             client = self._get_client()
 
             try:
-                version = client.ServerGetVersion(empty_pb2.Empty()).version
+                version_resp = client.ServerGetVersion(empty_pb2.Empty())
             except Exception as exc:
                 raise RuntimeError(
                     f"GoNetEmLauncher: cannot reach server "
                     f"{self._server_address}: {exc}"
                 ) from exc
+            if version_resp.status.code == netem_pb2.StatusCode.ERROR:
+                raise RuntimeError(
+                    f"GoNetEmLauncher: ServerGetVersion failed: "
+                    f"{version_resp.status.error}"
+                )
+            version = version_resp.version
 
             logging.info(
                 "GoNetEmLauncher: connected to GoNetem %s at %s",
@@ -356,7 +362,13 @@ class GoNetEmLauncher(NetworkLauncher):
                 open_req = netem_pb2.OpenRequest(
                     name=self.project_name, data=fd.read()
                 )
-            project_id = getattr(client.ProjectOpen(open_req), "id", "")
+            open_resp = client.ProjectOpen(open_req)
+            if open_resp.status.code == netem_pb2.StatusCode.ERROR:
+                raise RuntimeError(
+                    f"GoNetEmLauncher: ProjectOpen failed: "
+                    f"{open_resp.status.error}"
+                )
+            project_id = getattr(open_resp, "id", "")
             if not project_id:
                 raise RuntimeError(
                     "GoNetEmLauncher: ProjectOpen returned an empty project id"
