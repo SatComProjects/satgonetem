@@ -76,7 +76,10 @@ class TestStaticRoutingDaemonInit:
 
     def test_applies_all_routes_once(self, daemon):
         with patch.object(daemon, "_populate_routing_tables"), \
-             patch.object(daemon, "_apply_all_routes") as mock_apply:
+             patch.object(
+                 daemon, "_apply_all_routes",
+                 return_value=static_daemon._BatchOutcome(),
+             ) as mock_apply:
             daemon.init()
 
         mock_apply.assert_called_once_with(max_workers=128)
@@ -92,10 +95,19 @@ class TestStaticRoutingDaemonInit:
 
     def test_passes_max_workers_to_change_method(self, daemon):
         with patch.object(daemon, "_populate_routing_tables"), \
-             patch.object(daemon, "_apply_all_routes") as mock_apply:
+             patch.object(
+                 daemon, "_apply_all_routes",
+                 return_value=static_daemon._BatchOutcome(),
+             ) as mock_apply:
             daemon.init(max_workers=8)
 
         mock_apply.assert_called_once_with(max_workers=8)
+
+    def test_returns_false_when_any_node_fails(self, daemon):
+        outcome = static_daemon._BatchOutcome(error_nodes={"Sat0"})
+        with patch.object(daemon, "_populate_routing_tables"), \
+             patch.object(daemon, "_apply_all_routes", return_value=outcome):
+            assert daemon.init() is False
 
 
 class TestStaticRoutingDaemonUpdate:
@@ -1151,4 +1163,41 @@ class TestRouteInstallBatch:
         daemon.remove(max_workers=1)
 
         assert client.requests == []
+        assert node.ipv4_routing_table == []
+
+
+class TestStaticRoutingDaemonFailureTracking:
+    """Failed batches must be retried instead of treated as installed."""
+
+    def test_failed_node_is_tracked(self, daemon):
+        node = Node("Sat0")
+        node.ipv4_routing_table = [make_entry()]
+        outcome = static_daemon._BatchOutcome(error_nodes={"Sat0"})
+
+        with patch.object(daemon, "_install_route_batches", return_value=outcome):
+            daemon._apply_route_changes([node])
+
+        assert "Sat0" in daemon._failed_nodes
+
+    def test_successful_node_clears_failure(self, daemon):
+        node = Node("Sat0")
+        node.ipv4_routing_table = [make_entry()]
+        daemon._failed_nodes.add("Sat0")
+        outcome = static_daemon._BatchOutcome(ok_nodes={"Sat0"})
+
+        with patch.object(daemon, "_install_route_batches", return_value=outcome):
+            daemon._apply_route_changes([node])
+
+        assert "Sat0" not in daemon._failed_nodes
+
+    def test_equalize_forces_retry_for_failed_node(self, daemon, topology):
+        node = Node("Sat0")
+        node.ipv4_routing_table = [make_entry()]
+        daemon._failed_nodes.add("Sat0")
+        topology.get_satellites.return_value = [node]
+        topology.get_ground_stations.return_value = []
+
+        daemon._equalize_routing_tables()
+
+        assert node.ipv4_previous_routing_table == []
         assert node.ipv4_routing_table == []
