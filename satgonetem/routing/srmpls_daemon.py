@@ -1149,17 +1149,50 @@ class SRMPLSDaemon(RoutingDaemon):
                 logging.error(f"Failed to update SR routes on {gs_src.name}: {e}")
 
     def _flush_node(self, node: "Node") -> None:
-        """Flush the MPLS forwarding table on a single node container.
+        """Flush SR-MPLS and IPv4 routes on a single node container.
+
+        Removes the IPv4 prefixes installed by this daemon (including those
+        using ``encap mpls``) and flushes the kernel MPLS forwarding table.
+        Routes are recovered from the per-node caches before the node's cache
+        entries are dropped.
 
         Args:
-            node: The node whose MPLS table should be flushed.
+            node: The node whose routes should be flushed.
         """
         if node.container is None:
             return
+
+        cached_commands: List[str] = []
+        for cache in (
+            self._prev_sr_gs_routes,
+            self._prev_sr_sat_routes,
+            self._prev_sr_node_sid_routes,
+        ):
+            cached_commands.extend(cache.pop(node.id, []))
+
+        prefixes: List[str] = []
+        for command in cached_commands:
+            for line in command.splitlines():
+                line = line.strip()
+                if not line.startswith("ip route replace "):
+                    continue
+                parts = line.split()
+                if len(parts) < 4:
+                    continue
+                prefix = parts[3]
+                if prefix not in prefixes:
+                    prefixes.append(prefix)
+
+        for prefix in prefixes:
+            try:
+                node.execute_command(["sh", "-lc", f"ip route del {prefix}"])
+            except Exception as e:
+                logging.error(
+                    f"Failed to delete SR route {prefix} on {node.name}: {e}"
+                )
+
         try:
-            node.execute_command(
-                ["sh", "-lc", "ip -f mpls route flush 2>/dev/null; true"]
-            )
+            node.execute_command(["sh", "-lc", "ip -f mpls route flush table all"])
         except Exception as e:
             logging.error(f"Failed to flush MPLS routes on {node.name}: {e}")
 
