@@ -882,23 +882,93 @@ class Iperf3Flow:
             return self.source, client_json, self.destination, server_json
         return self.destination, server_json, self.source, client_json
 
+    def _remove_temp_file(self, node: "Node", path: Optional[str]) -> None:
+        """Best-effort removal of a temporary JSON file inside a node.
+
+        Cleanup failures must never change the flow outcome, so every error
+        is suppressed.
+        """
+        if not path:
+            return
+        try:
+            node.execute_command(f"rm -f {shlex.quote(path)}", detach=True)
+        except Exception:
+            pass
+
+    def _kill_server(self, dst_ip: Optional[str]) -> None:
+        """Best-effort kill of this flow's detached one-shot iperf3 server.
+
+        The pattern is scoped to the flow's bind address and port so that
+        servers belonging to other flows are left alone. When the bind
+        address could not even be resolved, fall back to matching only the
+        one-shot server on this flow's port. Errors are suppressed.
+        """
+        if dst_ip:
+            pattern = f"iperf3 -s -1 -B {dst_ip} -p {self.config.port}"
+        else:
+            pattern = f"iperf3 -s -1 .* -p {self.config.port}"
+        try:
+            self.destination.execute_command(
+                f"pkill -f {shlex.quote(pattern)} 2>/dev/null; true"
+            )
+        except Exception:
+            pass
+
+    def _collect_diagnostics(
+        self,
+        client_json: Optional[str],
+        server_json: Optional[str],
+    ) -> list[str]:
+        """Best-effort capture of client/server output for error reporting."""
+        diagnostics: list[str] = []
+        for label, path, node in (
+            ("client", client_json, self.source),
+            ("server", server_json, self.destination),
+        ):
+            if not path:
+                continue
+            try:
+                content = node.execute_command(f"cat {shlex.quote(path)}")
+            except Exception:
+                continue
+            if isinstance(content, str) and content.strip():
+                diagnostics.append(
+                    f"--- {label} output ({path}) ---\n{content.strip()}"
+                )
+        return diagnostics
+
     def _run(self) -> None:
-        """Execute the iperf3 flow and update status on completion."""
-        if self.delay > 0.0:
-            time.sleep(self.delay)
+        """Execute the iperf3 flow and update status on completion.
 
-        run_id = uuid.uuid4().hex[:8]
-        client_json = (
-            f"/tmp/iperf3_cli_{self.source.name}_{self.destination.name}_{run_id}.json"
-        )
-        server_json = (
-            f"/tmp/iperf3_srv_{self.source.name}_{self.destination.name}_{run_id}.json"
-        )
-        dst_ip = self.destination.loopback.ipv4
-        src_ip = self.source.loopback.ipv4
-
+        The entire body is guarded so that every exit path lands in a
+        terminal status (``DONE`` or ``ERROR``), including failures while
+        resolving node addresses or building temp paths. The result/status
+        are recorded before best-effort cleanup, and cleanup errors can
+        never discard a valid measurement.
+        """
+        client_json: Optional[str] = None
+        server_json: Optional[str] = None
+        dst_ip: Optional[str] = None
         raw: Optional[str] = None
         try:
+            if self.delay > 0.0 and self._stop_event.wait(self.delay):
+                with self._lock:
+                    self._error = RuntimeError(
+                        "Flow stopped before it could start"
+                    )
+                    self._status = FlowStatus.ERROR
+                return
+
+            run_id = uuid.uuid4().hex[:8]
+            client_json = (
+                f"/tmp/iperf3_cli_{self.source.name}_{self.destination.name}_{run_id}.json"
+            )
+            server_json = (
+                f"/tmp/iperf3_srv_{self.source.name}_{self.destination.name}_{run_id}.json"
+            )
+            dst_ip = self.destination.loopback.ipv4
+            src_ip = self.source.loopback.ipv4
+
             server_cmd = (
                 f"iperf3 -s -1 -B {shlex.quote(dst_ip)} -p {self.config.port} "
                 f"--json > {shlex.quote(server_json)} 2>&1"
@@ -921,9 +991,6 @@ class Iperf3Flow:
                     f"cat {shlex.quote(fallback_path)}"
                 )
 
-            self.source.execute_command(f"rm -f {client_json}", detach=True)
-            self.destination.execute_command(f"rm -f {server_json}", detach=True)
-
             if not isinstance(raw, str) or not raw.strip().startswith("{"):
                 raise RuntimeError(
                     f"Could not retrieve iperf3 JSON output for flow "
@@ -938,27 +1005,8 @@ class Iperf3Flow:
         except Exception as exc:
             if self._stop_event.is_set() and raw:
                 print(raw)
-            try:
-                self.destination.execute_command(
-                    f"pkill -f 'iperf3 .*-p {self.config.port} ' 2>/dev/null; true"
-                )
-            except Exception:
-                pass
-
-            diagnostics = []
-            for label, path, node in (
-                ("client", client_json, self.source),
-                ("server", server_json, self.destination),
-            ):
-                try:
-                    content = node.execute_command(f"cat {path}")
-                except Exception:
-                    content = None
-                if content and content.strip():
-                    diagnostics.append(f"--- {label} output ({path}) ---\n{content.strip()}")
-
-            self.source.execute_command(f"rm -f {client_json}", detach=True)
-            self.destination.execute_command(f"rm -f {server_json}", detach=True)
+            self._kill_server(dst_ip)
+            diagnostics = self._collect_diagnostics(client_json, server_json)
 
             final_error = exc
             if diagnostics:
@@ -968,6 +1016,18 @@ class Iperf3Flow:
             with self._lock:
                 self._error = final_error
                 self._status = FlowStatus.ERROR
+        finally:
+            # Success has already stored its result/status above, so cleanup
+            # failures here cannot discard a valid measurement. The terminal
+            # status check is a last-resort guard for unexpected exit paths.
+            self._remove_temp_file(self.source, client_json)
+            self._remove_temp_file(self.destination, server_json)
+            with self._lock:
+                if self._status == FlowStatus.RUNNING:
+                    self._error = self._error or RuntimeError(
+                        "iperf3 flow terminated without recording a result"
+                    )
+                    self._status = FlowStatus.ERROR
 
 
 def run_iperf3_flow(
