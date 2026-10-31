@@ -144,7 +144,7 @@ def test_client_setup_failure_sets_error_and_kills_detached_server():
 
     kills = _kill_calls(dst)
     assert kills, "detached server kill was not attempted"
-    # The kill must be scoped to this flow's bind address and port.
+    # The kill must be scoped to this flow's bind address and allocated port.
     assert any(
-        "iperf3 -s -1 -B 10.0.0.2 -p 5201" in str(call) for call in kills
+        f"iperf3 -s -1 -B 10.0.0.2 -p {flow._port}" in str(call) for call in kills
     ), f"kill was not scoped to this flow: {kills!r}"

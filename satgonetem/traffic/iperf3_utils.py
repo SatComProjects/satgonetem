@@ -6,7 +6,7 @@ import subprocess
 import threading
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Optional
 
@@ -18,6 +18,143 @@ import matplotlib.pyplot as plt
 
 if TYPE_CHECKING:
     from satgonetem.models.node import Node
+
+
+_IPERF3_PORT_RANGE_START = 5201
+_IPERF3_PORT_RANGE_END = 5300
+_IPERF3_SERVER_READY_TIMEOUT = 2.0
+_IPERF3_SERVER_READY_POLL_INTERVAL = 0.1
+_IPERF3_SERVER_START_FALLBACK = 0.5
+
+
+class _Iperf3PortAllocator:
+    """Thread-safe allocator of unique iperf3 server ports.
+
+    A single allocator instance is shared process-wide so concurrent flows
+    never bind the same destination port. Ports are handed out from a
+    bounded range and released by each flow when it finishes.
+    """
+
+    def __init__(
+        self,
+        base_port: int = _IPERF3_PORT_RANGE_START,
+        max_port: int = _IPERF3_PORT_RANGE_END,
+    ) -> None:
+        if not 1 <= base_port <= max_port <= 65535:
+            raise ValueError(
+                f"Invalid iperf3 port range {base_port}-{max_port}; "
+                "expected 1 <= base_port <= max_port <= 65535"
+            )
+        self._base_port = base_port
+        self._max_port = max_port
+        self._next_port = base_port
+        self._in_use: set[int] = set()
+        self._lock = threading.Lock()
+
+    def allocate(self) -> int:
+        """Reserve and return a free port from the configured range.
+
+        Scans forward from the last handed-out port and wraps around once.
+
+        Raises:
+            RuntimeError: If every port in the range is already in use.
+        """
+        with self._lock:
+            span = self._max_port - self._base_port + 1
+            for _ in range(span):
+                port = self._next_port
+                self._next_port = (
+                    self._base_port
+                    if port >= self._max_port
+                    else port + 1
+                )
+                if port not in self._in_use:
+                    self._in_use.add(port)
+                    return port
+        raise RuntimeError(
+            f"no free iperf3 port in range "
+            f"{self._base_port}-{self._max_port}"
+        )
+
+    def release(self, port: int) -> None:
+        """Return *port* to the pool. Idempotent for unknown ports."""
+        with self._lock:
+            self._in_use.discard(port)
+
+    @property
+    def in_use_ports(self) -> set[int]:
+        """Return a snapshot of the currently reserved ports."""
+        with self._lock:
+            return set(self._in_use)
+
+
+_IPERF3_PORT_ALLOCATOR = _Iperf3PortAllocator()
+
+
+def _is_iperf3_server_listening(
+    destination: "Node", listen_ip: str, port: int
+) -> Optional[bool]:
+    """Check whether an iperf3 server is listening on *listen_ip*:*port*.
+
+    Uses the kernel listener table when available and falls back to a
+    process check for containers without ``ss``.
+
+    Returns:
+        True when the listener/process was observed, False when it was not,
+        or None when the probe could not be executed (e.g. a mocked node).
+    """
+    port_token = f"{listen_ip}:{port}"
+    process_pattern = f"iperf3 -s -1 -B {listen_ip} -p {port}"
+    check_cmd = (
+        f"ss -ltn 2>/dev/null | grep -F {shlex.quote(port_token)} "
+        f"|| pgrep -f {shlex.quote(process_pattern)} 2>/dev/null"
+    )
+    try:
+        output = destination.execute_command(
+            check_cmd, ok_exit_codes=(0, 1)
+        )
+    except TypeError:
+        # Nodes with a reduced execute_command signature.
+        try:
+            output = destination.execute_command(check_cmd)
+        except Exception:
+            return None
+    except Exception:
+        return None
+    if output is None:
+        return None
+    return bool(str(output).strip())
+
+
+def _wait_for_iperf3_server(
+    destination: "Node",
+    listen_ip: str,
+    port: int,
+    timeout: float = _IPERF3_SERVER_READY_TIMEOUT,
+    poll_interval: float = _IPERF3_SERVER_READY_POLL_INTERVAL,
+    fallback: float = _IPERF3_SERVER_START_FALLBACK,
+) -> bool:
+    """Wait for the destination iperf3 server to accept connections.
+
+    Polls for at most *timeout* seconds. When the listener probe is not
+    available at all, keeps the legacy fixed startup grace period instead.
+
+    Returns:
+        True when the server was observed listening, False otherwise.
+    """
+    deadline = time.monotonic() + timeout
+    while True:
+        listening = _is_iperf3_server_listening(
+            destination, listen_ip, port
+        )
+        if listening is True:
+            return True
+        if listening is None:
+            time.sleep(fallback)
+            return False
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(poll_interval)
 
 
 @dataclass
@@ -758,6 +895,10 @@ class Iperf3Flow:
             time.sleep(0.5)
         results = flow.results()
 
+    Each flow reserves its own server port, so flows sharing one
+    Iperf3Config (and one destination) cannot collide on port 5201. The
+    caller-supplied config is never mutated.
+
     Attributes:
         source: Node that runs the iperf3 client.
         destination: Node that runs the iperf3 server.
@@ -784,6 +925,10 @@ class Iperf3Flow:
         self.destination = destination
         self.config = config
         self.delay = delay
+        # Reserved on start so flows constructed up-front (for a scheduler
+        # with hundreds of entries) do not exhaust the port pool. config.port
+        # is left untouched so shared configs remain safe to reuse.
+        self._port: Optional[int] = None
 
         self._status = FlowStatus.IDLE
         self._result: Optional[Iperf3Results] = None
@@ -791,6 +936,12 @@ class Iperf3Flow:
         self._thread: Optional[threading.Thread] = None
         self._lock = threading.Lock()
         self._stop_event = threading.Event()
+
+    def _reserve_port(self) -> int:
+        """Reserve this flow's exclusive server port on first use."""
+        if self._port is None:
+            self._port = _IPERF3_PORT_ALLOCATOR.allocate()
+        return self._port
 
     def start(self) -> None:
         """Start the iperf3 flow in a background daemon thread.
@@ -805,6 +956,7 @@ class Iperf3Flow:
                 raise RuntimeError(
                     f"Flow has already been started (status={self._status.value})"
                 )
+            self._reserve_port()
             self._status = FlowStatus.RUNNING
             self._thread = threading.Thread(target=self._run, daemon=True)
             self._thread.start()
@@ -820,7 +972,8 @@ class Iperf3Flow:
                 return
         self._stop_event.set()
 
-        kill_cmd = f"pkill -f 'iperf3 .*-p {self.config.port} ' 2>/dev/null; true"
+        port = self._port if self._port is not None else self.config.port
+        kill_cmd = f"pkill -f 'iperf3 .*-p {port} ' 2>/dev/null; true"
         self.source.execute_command(kill_cmd, detach=True)
         self.destination.execute_command(kill_cmd, detach=True)
         if self._thread is not None:
@@ -903,10 +1056,11 @@ class Iperf3Flow:
         address could not even be resolved, fall back to matching only the
         one-shot server on this flow's port. Errors are suppressed.
         """
+        port = self._port if self._port is not None else self.config.port
         if dst_ip:
-            pattern = f"iperf3 -s -1 -B {dst_ip} -p {self.config.port}"
+            pattern = f"iperf3 -s -1 -B {dst_ip} -p {port}"
         else:
-            pattern = f"iperf3 -s -1 .* -p {self.config.port}"
+            pattern = f"iperf3 -s -1 .* -p {port}"
         try:
             self.destination.execute_command(
                 f"pkill -f {shlex.quote(pattern)} 2>/dev/null; true"
@@ -968,15 +1122,16 @@ class Iperf3Flow:
             )
             dst_ip = self.destination.loopback.ipv4
             src_ip = self.source.loopback.ipv4
+            run_config = replace(self.config, port=self._reserve_port())
 
             server_cmd = (
-                f"iperf3 -s -1 -B {shlex.quote(dst_ip)} -p {self.config.port} "
+                f"iperf3 -s -1 -B {shlex.quote(dst_ip)} -p {run_config.port} "
                 f"--json > {shlex.quote(server_json)} 2>&1"
             )
             self.destination.execute_command(server_cmd, detach=True)
-            time.sleep(0.5)
+            _wait_for_iperf3_server(self.destination, dst_ip, run_config.port)
 
-            client_cmd = self.config.build_client_command(dst_ip, src_ip, client_json)
+            client_cmd = run_config.build_client_command(dst_ip, src_ip, client_json)
             self.source.execute_command(client_cmd, detach=False)
             time.sleep(0.3)
 
@@ -998,7 +1153,7 @@ class Iperf3Flow:
                     "Verify iperf3 is installed in both containers and a route exists."
                 )
 
-            result = Iperf3Results(raw_json=raw, config=self.config)
+            result = Iperf3Results(raw_json=raw, config=run_config)
             with self._lock:
                 self._result = result
                 self._status = FlowStatus.DONE
@@ -1022,6 +1177,8 @@ class Iperf3Flow:
             # status check is a last-resort guard for unexpected exit paths.
             self._remove_temp_file(self.source, client_json)
             self._remove_temp_file(self.destination, server_json)
+            if self._port is not None:
+                _IPERF3_PORT_ALLOCATOR.release(self._port)
             with self._lock:
                 if self._status == FlowStatus.RUNNING:
                     self._error = self._error or RuntimeError(
@@ -1043,8 +1200,10 @@ def run_iperf3_flow(
     function blocks until it completes.
 
     The server exits automatically after the first client connection (-1).
-    Temporary JSON files written inside the containers are cleaned up after
-    the results are retrieved.
+    An unused server port is reserved for the run, so concurrent runs cannot
+    collide; the supplied config.port is not modified. Temporary JSON files
+    written inside the containers are cleaned up after the results are
+    retrieved.
 
     Args:
         source: Node that runs the iperf3 client.
@@ -1069,37 +1228,45 @@ def run_iperf3_flow(
     dst_ip = destination.loopback.ipv4
     src_ip = source.loopback.ipv4
 
-    server_cmd = (
-        f'sh -c "iperf3 -s -1 -B {dst_ip} -p {config.port} '
-        f'--json > {server_json} 2>&1"'
-    )
-    destination.execute_command(server_cmd, detach=True)
-    time.sleep(0.5)
-
-    client_cmd = config.build_client_command(dst_ip, src_ip, client_json)
-    source.execute_command(client_cmd, detach=False)
-    time.sleep(0.3)
-
-    if config.protocol.upper() == "UDP":
-        raw: Any = destination.execute_command(f"cat {server_json}")
-        if not isinstance(raw, str) or not raw.strip().startswith("{"):
-            raw = source.execute_command(f"cat {client_json}")
-    else:
-        raw = source.execute_command(f"cat {client_json}")
-        if not isinstance(raw, str) or not raw.strip().startswith("{"):
-            raw = destination.execute_command(f"cat {server_json}")
-
-    source.execute_command(f"rm -f {client_json}", detach=True)
-    destination.execute_command(f"rm -f {server_json}", detach=True)
-
-    if not isinstance(raw, str) or not raw.strip().startswith("{"):
-        raise RuntimeError(
-            f"Could not retrieve iperf3 JSON output for flow "
-            f"{source.name} -> {destination.name}. "
-            "Verify iperf3 is installed in both containers and a route exists."
+    # Reserve an exclusive port for this run; config.port is not modified.
+    port = _IPERF3_PORT_ALLOCATOR.allocate()
+    run_config = replace(config, port=port)
+    try:
+        server_cmd = (
+            f'sh -c "iperf3 -s -1 -B {dst_ip} -p {port} '
+            f'--json > {server_json} 2>&1"'
         )
+        destination.execute_command(server_cmd, detach=True)
+        _wait_for_iperf3_server(destination, dst_ip, port)
 
-    return Iperf3Results(raw_json=raw, config=config)
+        client_cmd = run_config.build_client_command(
+            dst_ip, src_ip, client_json
+        )
+        source.execute_command(client_cmd, detach=False)
+        time.sleep(0.3)
+
+        if run_config.protocol.upper() == "UDP":
+            raw: Any = destination.execute_command(f"cat {server_json}")
+            if not isinstance(raw, str) or not raw.strip().startswith("{"):
+                raw = source.execute_command(f"cat {client_json}")
+        else:
+            raw = source.execute_command(f"cat {client_json}")
+            if not isinstance(raw, str) or not raw.strip().startswith("{"):
+                raw = destination.execute_command(f"cat {server_json}")
+
+        source.execute_command(f"rm -f {client_json}", detach=True)
+        destination.execute_command(f"rm -f {server_json}", detach=True)
+
+        if not isinstance(raw, str) or not raw.strip().startswith("{"):
+            raise RuntimeError(
+                f"Could not retrieve iperf3 JSON output for flow "
+                f"{source.name} -> {destination.name}. "
+                "Verify iperf3 is installed in both containers and a route exists."
+            )
+
+        return Iperf3Results(raw_json=raw, config=run_config)
+    finally:
+        _IPERF3_PORT_ALLOCATOR.release(port)
 
 
 def generate_iperf3_plots(
