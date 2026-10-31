@@ -64,48 +64,74 @@ class RoutingManagerMixin:
 
         Args:
             max_workers: Maximum number of worker threads to use for parallel operations.
-            routing_method: Optional routing method to initialize (overrides self.routing if provided).
+            routing_method: Optional routing method to initialize for this call
+                only. It does not change self.routing.
         Returns:
-            bool: True if initialization is successful, False otherwise.
+            float: Elapsed initialization time, or -1.0 if initialization failed.
         """
         tic = time.perf_counter()
-        if routing_method:
-            self.routing = routing_method
+        effective_method = routing_method or self.routing
 
-        if self.routing == "static":
-            self.routing_daemon = StaticRoutingDaemon(self)
-            if not self.routing_daemon.init(max_workers=max_workers):
-                logging.warning("Static IP routing initialization failed")
+        self.set_routing_initiated(False)
 
-                return -1.0
-        elif self.routing == "dynamic-ospf":
-            self.routing_daemon = OSPFDaemon(self)
-            if not self.routing_daemon.init(max_workers=max_workers):
-                logging.warning("Dynamic OSPF routing initialization failed")
-                return -1.0
-        elif self.routing == "dynamic-isis":
-            self.routing_daemon = ISISBirdSRDaemon(self)
-            if not self.routing_daemon.init(max_workers=max_workers):
-                logging.warning("Dynamic IS-IS SR (Bird) routing initialization failed")
-                return -1.0
-        elif self.routing == "sr-mpls":
-            self.routing_daemon = SRMPLSDaemon(self)
-            if not self.routing_daemon.init(max_workers=max_workers):
-                logging.warning("SR-MPLS routing initialization failed")
-                return -1.0
-        elif self.routing in self._daemon_registry:
-            self.routing_daemon = self._daemon_registry[self.routing](self)
-            if not self.routing_daemon.init(max_workers=max_workers):
-                logging.warning(
-                    f"Custom routing daemon '{self.routing}' initialization failed"
+        # Tear down any previously installed daemon before replacing it. A
+        # teardown failure must not prevent the new daemon from being set up.
+        existing_daemon = getattr(self, "routing_daemon", None)
+        if existing_daemon is not None:
+            try:
+                existing_daemon.remove(max_workers=max_workers)
+            except Exception:
+                logging.exception(
+                    "Failed to tear down existing routing daemon during re-initialization"
                 )
-                return -1.0
+            finally:
+                self.routing_daemon = None
+
+        if effective_method == "static":
+            daemon = StaticRoutingDaemon(self)
+            failure_message = "Static IP routing initialization failed"
+        elif effective_method == "dynamic-ospf":
+            daemon = OSPFDaemon(self)
+            failure_message = "Dynamic OSPF routing initialization failed"
+        elif effective_method == "dynamic-isis":
+            daemon = ISISBirdSRDaemon(self)
+            failure_message = "Dynamic IS-IS SR (Bird) routing initialization failed"
+        elif effective_method == "sr-mpls":
+            daemon = SRMPLSDaemon(self)
+            failure_message = "SR-MPLS routing initialization failed"
+        elif effective_method in self._daemon_registry:
+            daemon = self._daemon_registry[effective_method](self)
+            failure_message = (
+                f"Custom routing daemon '{effective_method}' initialization failed"
+            )
         else:
             logging.warning(
-                f"Unknown routing method '{self.routing}', cannot initialize routing"
+                f"Unknown routing method '{effective_method}', cannot initialize routing"
             )
             return -1.0
 
+        try:
+            initialized = daemon.init(max_workers=max_workers)
+        except Exception:
+            logging.exception(failure_message)
+            initialized = False
+        else:
+            if not initialized:
+                logging.warning(failure_message)
+
+        if not initialized:
+            # Do not leave a half-initialized daemon installed.
+            try:
+                daemon.remove(max_workers=max_workers)
+            except Exception:
+                logging.exception(
+                    "Failed to clean up routing daemon after initialization failure"
+                )
+            self.routing_daemon = None
+            self.set_routing_initiated(False)
+            return -1.0
+
+        self.routing_daemon = daemon
         self.set_routing_initiated(True)
         return time.perf_counter() - tic
 
