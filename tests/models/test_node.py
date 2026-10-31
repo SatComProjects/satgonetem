@@ -146,3 +146,33 @@ class TestNodeHashNode:
         n2 = Node("Sat0")
         n2.position = {"latitude": 10.0, "longitude": 20.0, "altitude": 550.0}
         assert n1.hash_node() == n2.hash_node()
+
+
+class TestNodeExecuteCommand:
+    """Tests for Node.execute_command exit-code handling."""
+
+    def _node_with_exit_code(self, exit_code: int) -> Node:
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+
+        node = Node("Sat0")
+        node.project_id = "prj"
+        node.grpc_client = MagicMock()
+        node.grpc_client.NodeRun.return_value = SimpleNamespace(
+            status=SimpleNamespace(code=0),
+            stdout=b"output",
+            stderr=b"",
+            exitCode=exit_code,
+        )
+        return node
+
+    def test_rejects_unexpected_exit_code_by_default(self):
+        import pytest
+
+        node = self._node_with_exit_code(1)
+        with pytest.raises(RuntimeError, match="exit 1"):
+            node.execute_command("false")
+
+    def test_accepts_explicit_exit_code(self):
+        node = self._node_with_exit_code(1)
+        assert node.execute_command("ping", ok_exit_codes=(0, 1)) == "output"
