@@ -99,6 +99,11 @@ class Iperf3Config:
         Returns:
             A shell command string ready for Node.execute_command.
         """
+        if self.bandwidth_mbps < 0:
+            raise ValueError(
+                f"bandwidth_mbps must be >= 0, got {self.bandwidth_mbps}"
+            )
+
         parts = [
             "iperf3",
             f"-c {server_ip}",
@@ -117,8 +122,8 @@ class Iperf3Config:
 
         if self.protocol.upper() == "UDP":
             parts.append("-u")
-            if self.bandwidth_mbps > 0:
-                parts.append(f"-b {self.bandwidth_mbps}M")
+            # iperf3 defaults UDP to 1 Mbps; -b 0 keeps it unlimited.
+            parts.append(f"-b {self.bandwidth_mbps}M")
             if self.pacing_timer is not None:
                 parts.append(f"--pacing-timer {self.pacing_timer}")
         else:

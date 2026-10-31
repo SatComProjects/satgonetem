@@ -586,3 +586,22 @@ class TestRunIperf3Flow:
             cfg = Iperf3Config(duration=1)
             with pytest.raises(RuntimeError, match="Could not retrieve"):
                 run_iperf3_flow(src, dst, cfg)
+
+
+def test_udp_default_bandwidth_is_unlimited():
+    cfg = Iperf3Config(protocol="UDP")
+    cmd = cfg.build_client_command("10.0.0.2", "10.0.0.1", "/tmp/out.json")
+    # iperf3's UDP default is 1 Mbps; -b 0 is unlimited.
+    assert "-b 0.0M" in cmd
+
+
+def test_tcp_default_has_no_bandwidth_flag():
+    cfg = Iperf3Config(protocol="TCP")
+    cmd = cfg.build_client_command("10.0.0.2", "10.0.0.1", "/tmp/out.json")
+    assert "-b " not in cmd
+
+
+def test_negative_bandwidth_is_rejected():
+    cfg = Iperf3Config(protocol="UDP", bandwidth_mbps=-1.0)
+    with pytest.raises(ValueError, match="bandwidth_mbps"):
+        cfg.build_client_command("10.0.0.2", "10.0.0.1", "/tmp/out.json")
