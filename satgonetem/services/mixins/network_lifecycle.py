@@ -42,6 +42,8 @@ class NetworkLifecycleMixin:
                 self, "ground_object_link_capacity", self.gnd_link_capacity
             ),
         )
+        # Assign before startup so a failed launch can still be torn down.
+        self.launcher = launcher
 
         all_nodes = list(self.satellites.values()) + list(self.ground_stations.values())
         active_links = [lnk for lnk in self.links.values() if lnk.is_active]
@@ -56,18 +58,34 @@ class NetworkLifecycleMixin:
             launch_links = active_links
             hil_links = []
 
-        container_time, link_time = launcher.start_containers(
-            launch_nodes,
-            MAX_WORKERS,
-            controller=controller,
-            links=launch_links,
-        )
-        launcher.wire_links(launch_links, MAX_WORKERS)
+        try:
+            container_time, link_time = launcher.start_containers(
+                launch_nodes,
+                MAX_WORKERS,
+                controller=controller,
+                links=launch_links,
+            )
+            launcher.wire_links(launch_links, MAX_WORKERS)
 
-        if hil is not None:
-            hil.wire_links(hil_links)
+            if hil is not None:
+                hil.wire_links(hil_links)
+        except Exception:
+            # Startup failed after the project may have been opened. Close it
+            # best-effort and reset state so a retry does not leak a project.
+            try:
+                launcher.force_close_project()
+            except Exception as cleanup_exc:
+                logging.error(
+                    "Failed to force-close GoNetEm project after startup "
+                    "failure: %s",
+                    cleanup_exc,
+                )
+            self.launcher = None
+            self.set_status(False)
+            self.set_gonetem_status(False)
+            self.set_routing_initiated(False)
+            raise
 
-        self.launcher = launcher
         self.set_status(True)
         self.set_gonetem_status(True)
         self.start_time_ = time.time()
