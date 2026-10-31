@@ -127,6 +127,9 @@ class StaticRoutingDaemon(RoutingDaemon):
         # True until the server replies UNIMPLEMENTED.  Set to False once so
         # an old server is not probed on every simulation step.
         self._route_install_supported = True
+        # Nodes whose last batch failed: their previous table must not be
+        # treated as installed, so the next update re-emits every route.
+        self._failed_nodes: set[str] = set()
 
     def init(self, max_workers: int = 128) -> bool:
         """Initialize static IP routing.
@@ -143,6 +146,7 @@ class StaticRoutingDaemon(RoutingDaemon):
         """
         self._source_signatures.clear()
         self._entry_cache.clear()
+        self._failed_nodes.clear()
         self._populate_routing_tables()
         try:
             for node in list(self.topology.get_satellites()) + list(
@@ -150,7 +154,14 @@ class StaticRoutingDaemon(RoutingDaemon):
             ):
                 node.ipv4_previous_routing_table.clear()
 
-            self._apply_all_routes(max_workers=max_workers)
+            outcome = self._apply_all_routes(max_workers=max_workers)
+            if outcome.error_nodes:
+                logging.error(
+                    "Static routing failed on %d node(s): %s",
+                    len(outcome.error_nodes),
+                    ", ".join(sorted(outcome.error_nodes)),
+                )
+                return False
             return True
         except Exception as e:
             logging.error(f"Error initializing static IP routing: {e}")
@@ -170,7 +181,13 @@ class StaticRoutingDaemon(RoutingDaemon):
         """
         self._populate_routing_tables()
         if self.topology.status:
-            self._apply_all_routes(max_workers=max_workers)
+            outcome = self._apply_all_routes(max_workers=max_workers)
+            if outcome.error_nodes:
+                logging.warning(
+                    "Static routing update failed on %d node(s): %s",
+                    len(outcome.error_nodes),
+                    ", ".join(sorted(outcome.error_nodes)),
+                )
         else:
             logging.warning("Static routing update skipped: topology not yet active")
 
@@ -309,7 +326,13 @@ class StaticRoutingDaemon(RoutingDaemon):
             logging.info(f"No {label} route changes needed.")
             return _BatchOutcome()
 
-        return self._install_route_batches(batches, max_workers=max_workers)
+        outcome = self._install_route_batches(batches, max_workers=max_workers)
+        for node in batches:
+            if node.name in outcome.error_nodes:
+                self._failed_nodes.add(node.name)
+            elif node.name in outcome.ok_nodes:
+                self._failed_nodes.discard(node.name)
+        return outcome
 
     def _resolve_route_batch_node(self, key):
         """Resolve a node name key to a node object when possible."""
@@ -611,7 +634,11 @@ class StaticRoutingDaemon(RoutingDaemon):
         for node in list(self.topology.get_satellites()) + list(
             self.topology.get_ground_stations()
         ):
-            node.ipv4_previous_routing_table = node.ipv4_routing_table
+            if node.name in self._failed_nodes:
+                # The last install failed; retry every desired route.
+                node.ipv4_previous_routing_table = []
+            else:
+                node.ipv4_previous_routing_table = node.ipv4_routing_table
             node.ipv4_routing_table = []
 
     def _populate_from_file(self, gs_array, sat_array, gs_ifaces, sat_ifaces) -> None:
