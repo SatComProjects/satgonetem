@@ -41,3 +41,33 @@ def test_stop_node_uses_birdc_down():
     node.execute_command.assert_called_once_with(
         "birdc -s /run/bird/bird.ctl down 2>/dev/null || true"
     )
+
+
+def test_init_fails_fast_when_bird_lacks_isis(caplog):
+    import logging
+
+    node = make_node()
+    node.execute_command.side_effect = RuntimeError("syntax error, unexpected MPLS")
+    topology = MagicMock()
+    topology.get_satellites.return_value = [node]
+    topology.get_ground_stations.return_value = []
+    daemon = ISISBirdSRDaemon(topology)
+
+    with caplog.at_level(logging.ERROR):
+        assert daemon.init(max_workers=1) is False
+
+    assert "Bird build with IS-IS and MPLS support" in caplog.text
+    # Only the capability probe ran; no MPLS/IP/config work was attempted.
+    assert node.execute_command.call_count == 1
+
+
+def test_init_proceeds_when_probe_passes():
+    node = make_node()
+    topology = MagicMock()
+    topology.get_satellites.return_value = [node]
+    topology.get_ground_stations.return_value = []
+    daemon = ISISBirdSRDaemon(topology)
+    daemon._init_node = MagicMock()
+
+    assert daemon.init(max_workers=1) is True
+    daemon._init_node.assert_called_once_with(node)
