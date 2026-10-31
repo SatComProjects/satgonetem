@@ -195,10 +195,11 @@ class TestBuildOspfConfig:
         config = _build_ospf_config(node)
         assert "router id 10.0.0.3;" in config
 
-    def test_contains_hostname(self):
+    def test_does_not_contain_hostname(self):
+        # Bird 2.0.7 (the satellite image) rejects the directive.
         node = make_node("Sat3", loopback_ip="10.0.0.3")
         config = _build_ospf_config(node)
-        assert 'hostname "Sat3";' in config
+        assert "hostname" not in config
 
     def test_loopback_is_stub(self):
         node = make_node("Sat0")
