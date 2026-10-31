@@ -118,7 +118,8 @@ class LongestConnectionTimeStrategy(GroundToSpaceConnectionStrategy):
         # Local "up" unit vector at ground station
         R_gs_norm = np.linalg.norm(R_gs_ecef)
         if R_gs_norm < 1e-6:
-            return None
+            # Invalid ground-station position: no connection can be established.
+            return 0.0
         up = R_gs_ecef / R_gs_norm
         
         # Quadratic coefficients for elevation-angle constraint
@@ -138,13 +139,14 @@ class LongestConnectionTimeStrategy(GroundToSpaceConnectionStrategy):
         
         # Check if currently visible
         if C <= 0:
-            return None  # Already at or below minimum elevation
-        
+            return 0.0  # Already at or below minimum elevation
+
         # Solve for roots
         if abs(A) < 1e-12:
             # Degenerate linear case: B*t + C = 0
             if abs(B) < 1e-12:
-                return None
+                # No future crossing: elevation stays above the minimum.
+                return max_time
             dt = -C / B
             return dt if 0 < dt <= max_time else max_time
         
@@ -160,8 +162,9 @@ class LongestConnectionTimeStrategy(GroundToSpaceConnectionStrategy):
         # Pick the smallest positive root as the exit time
         candidates = [dt for dt in [dt1, dt2] if dt > 0]
         if not candidates:
-            return None
-        
+            # No future crossing within the straight-line model.
+            return max_time
+
         dt_exit = min(candidates)
         return dt_exit if dt_exit <= max_time else max_time
 
@@ -314,6 +317,11 @@ class LongestConnectionTimeStrategy(GroundToSpaceConnectionStrategy):
             print(time_until_disconnection, time_until_disconnection_2)
             toc = _t.perf_counter()
             print(f"First method took {tac - tic:.4f} seconds, second method took {toc - tac:.4f} seconds for satellite {visible_satellite.satellite.satellite_name}")
+            if time_until_disconnection is None:
+                # Defensive guard: older/overridden estimators may still return None,
+                # which cannot be compared while sorting. Treat it as the longest
+                # possible connection time.
+                time_until_disconnection = 3600.0
             list_of_satellites.append((visible_satellite, time_until_disconnection))
 
         # Sort the visible satellites by time until disconnection
