@@ -9,6 +9,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from satgonetem.models.ground_station import GroundStation
 from satgonetem.models.satellite import Satellite
 from satgonetem.models.link import Link
+from satgonetem.services.mixins.simulation_loop import ensure_simulation_lock
 from satgonetem.utils.utils import distance_3d_km, distance_3d_km_many
 from sat_com_model.models import InterSatelliteLinkDirection
 from sat_com_model.models import Link as SatComLink
@@ -550,114 +551,120 @@ class TopologySyncMixin:
         3. Delete stale links, then execute add/update link operations.
         4. Sync emulator interface state to reflect updated link topology.
 
+        The whole pass holds the per-instance simulation lock. Every caller is
+        serialized, so concurrent loop ticks or API mutations cannot interleave
+        link-sync/delete/add passes or corrupt ``current_time_step`` and routing
+        state. Calls block until the in-flight pass finishes.
+
         Returns:
             None
 
         Raises:
             ValueError: If simulation_manager has not been initialised.
         """
-        start_t = time.perf_counter()
-        logging.info(
-            "Simulation update started for time step %d, %.3fs",
-            self.current_time_step,
-            start_t,
-        )
+        with ensure_simulation_lock(self):
+            start_t = time.perf_counter()
+            logging.info(
+                "Simulation update started for time step %d, %.3fs",
+                self.current_time_step,
+                start_t,
+            )
 
-        if self.simulation_manager is None:
-            raise ValueError("Simulation manager is not set")
+            if self.simulation_manager is None:
+                raise ValueError("Simulation manager is not set")
 
-        if advance_timestep:
-            self.current_time_step += 1
-            self._update_simulation_manager_time()
+            if advance_timestep:
+                self.current_time_step += 1
+                self._update_simulation_manager_time()
             
-        self._sync_node_positions()
-        link_changes = self._sync_links()
-        links_to_add = link_changes["links_to_add"]
-        links_to_update = link_changes["links_to_update"]
-        links_to_remove = link_changes["links_to_remove"]
-        pending_delete_count = len(links_to_remove)
+            self._sync_node_positions()
+            link_changes = self._sync_links()
+            links_to_add = link_changes["links_to_add"]
+            links_to_update = link_changes["links_to_update"]
+            links_to_remove = link_changes["links_to_remove"]
+            pending_delete_count = len(links_to_remove)
 
-        # Delete first: HIL handovers reuse bridge/interface names, so the old
-        # link must be gone before the new one is created.
-        delete_stats = self.bulk_link_operations(
-            to_add=False,
-            to_update=False,
-            links_to_add=[],
-            links_to_update=[],
-            links_to_remove=links_to_remove,
-        )
-        self._perform_local_link_operations(
-            to_add=False,
-            to_update=False,
-            links_to_add=[],
-            links_to_update=[],
-            links_to_remove=links_to_remove,
-        )
+            # Delete first: HIL handovers reuse bridge/interface names, so the old
+            # link must be gone before the new one is created.
+            delete_stats = self.bulk_link_operations(
+                to_add=False,
+                to_update=False,
+                links_to_add=[],
+                links_to_update=[],
+                links_to_remove=links_to_remove,
+            )
+            self._perform_local_link_operations(
+                to_add=False,
+                to_update=False,
+                links_to_add=[],
+                links_to_update=[],
+                links_to_remove=links_to_remove,
+            )
 
-        link_stats = self.bulk_link_operations(
-            to_del=False,
-            links_to_add=links_to_add,
-            links_to_update=links_to_update,
-            links_to_remove=[],
-        )
-        self._perform_local_link_operations(
-            to_del=False,
-            links_to_add=links_to_add,
-            links_to_update=links_to_update,
-            links_to_remove=[],
-        )
+            link_stats = self.bulk_link_operations(
+                to_del=False,
+                links_to_add=links_to_add,
+                links_to_update=links_to_update,
+                links_to_remove=[],
+            )
+            self._perform_local_link_operations(
+                to_del=False,
+                links_to_add=links_to_add,
+                links_to_update=links_to_update,
+                links_to_remove=[],
+            )
 
-        link_stats["deleted_count"] = delete_stats["deleted_count"]
-        link_stats["delete_time_total"] = delete_stats["delete_time_total"]
-        link_stats["delete_time_wall"] = delete_stats.get("delete_time_wall", 0.0)
-        link_stats["delete_time_per_link"] = delete_stats["delete_time_per_link"]
+            link_stats["deleted_count"] = delete_stats["deleted_count"]
+            link_stats["delete_time_total"] = delete_stats["delete_time_total"]
+            link_stats["delete_time_wall"] = delete_stats.get("delete_time_wall", 0.0)
+            link_stats["delete_time_per_link"] = delete_stats["delete_time_per_link"]
 
-        if (
-            link_stats["added_count"]
-            or link_stats["updated_count"]
-            or pending_delete_count
-        ):
-            self._update_routing_after_link_changes(link_stats["links_to_add"])
+            if (
+                link_stats["added_count"]
+                or link_stats["updated_count"]
+                or pending_delete_count
+            ):
+                self._update_routing_after_link_changes(link_stats["links_to_add"])
 
-        if (
-            link_stats["added_count"] > 0
-            or link_stats["updated_count"] > 0
-            or link_stats["deleted_count"] > 0
-        ):
-            parts = [
-                f"Link operations ({self.routing} routing) -",
-                f"Added: {link_stats['added_count']}",
-            ]
-            if link_stats["added_count"] > 0:
-                parts.append(
-                    f"(sum: {link_stats['add_time_total'] * 1000:.2f}ms, "
-                    f"wall: {link_stats['add_time_wall'] * 1000:.2f}ms, "
-                    f"per-link: {link_stats['add_time_per_link'] * 1000:.4f}ms)"
-                )
-            parts.append(f"Updated: {link_stats['updated_count']}")
-            if link_stats["updated_count"] > 0:
-                parts.append(
-                    f"(sum: {link_stats['update_time_total'] * 1000:.2f}ms, "
-                    f"wall: {link_stats['update_time_wall'] * 1000:.2f}ms, "
-                    f"per-link: {link_stats['update_time_per_link'] * 1000:.4f}ms)"
-                )
-            parts.append(f"Deleted: {link_stats['deleted_count']}")
-            if link_stats["deleted_count"] > 0:
-                parts.append(
-                    f"(sum: {link_stats['delete_time_total'] * 1000:.2f}ms, "
-                    f"wall: {link_stats['delete_time_wall'] * 1000:.2f}ms, "
-                    f"per-link: {link_stats['delete_time_per_link'] * 1000:.4f}ms)"
-                )
-            logging.info(" ".join(parts))
+            if (
+                link_stats["added_count"] > 0
+                or link_stats["updated_count"] > 0
+                or link_stats["deleted_count"] > 0
+            ):
+                parts = [
+                    f"Link operations ({self.routing} routing) -",
+                    f"Added: {link_stats['added_count']}",
+                ]
+                if link_stats["added_count"] > 0:
+                    parts.append(
+                        f"(sum: {link_stats['add_time_total'] * 1000:.2f}ms, "
+                        f"wall: {link_stats['add_time_wall'] * 1000:.2f}ms, "
+                        f"per-link: {link_stats['add_time_per_link'] * 1000:.4f}ms)"
+                    )
+                parts.append(f"Updated: {link_stats['updated_count']}")
+                if link_stats["updated_count"] > 0:
+                    parts.append(
+                        f"(sum: {link_stats['update_time_total'] * 1000:.2f}ms, "
+                        f"wall: {link_stats['update_time_wall'] * 1000:.2f}ms, "
+                        f"per-link: {link_stats['update_time_per_link'] * 1000:.4f}ms)"
+                    )
+                parts.append(f"Deleted: {link_stats['deleted_count']}")
+                if link_stats["deleted_count"] > 0:
+                    parts.append(
+                        f"(sum: {link_stats['delete_time_total'] * 1000:.2f}ms, "
+                        f"wall: {link_stats['delete_time_wall'] * 1000:.2f}ms, "
+                        f"per-link: {link_stats['delete_time_per_link'] * 1000:.4f}ms)"
+                    )
+                logging.info(" ".join(parts))
 
-        self._sync_interfaces_and_links()
+            self._sync_interfaces_and_links()
 
-        elapsed_ms = (time.perf_counter() - start_t) * 1000
-        logging.info(
-            "Simulation update completed for time step %d, total time: %.2fms",
-            self.current_time_step,
-            elapsed_ms,
-        )
+            elapsed_ms = (time.perf_counter() - start_t) * 1000
+            logging.info(
+                "Simulation update completed for time step %d, total time: %.2fms",
+                self.current_time_step,
+                elapsed_ms,
+            )
 
     def _sync_interfaces_and_links(self) -> None:
         """
