@@ -21,7 +21,7 @@ import time
 from satgonetem.utils.constants import MAX_WORKERS
 from satgonetem.utils.utils import time_
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
     from datetime import datetime
@@ -132,14 +132,25 @@ class SimulationLoopMixin:
         so stop() is noticed promptly. Each tick holds the simulation lock, so
         an API mutation blocks until the tick finishes (and vice versa).
 
+        A failing tick is logged with its traceback and recorded in
+        ``last_simulation_error`` (readable via
+        :meth:`get_last_simulation_error`); the loop keeps running so
+        transient failures are retried on the next tick.
+
         Args:
             stop_evt: Event owned by this run; set by :meth:`stop`.
         """
         try:
             while not stop_evt.is_set():
                 tic = time.perf_counter()
-                with self._get_simulation_lock():
-                    self.update_simulation()
+                try:
+                    with self._get_simulation_lock():
+                        self.update_simulation()
+                except Exception as exc:
+                    self.last_simulation_error = exc
+                    logging.exception(
+                        "Simulation loop tick failed; retrying on next tick"
+                    )
                 toc = time.perf_counter()
                 elapsed = toc - tic
                 delay = max(0.01, self.update_time * self.update_factor)
@@ -147,6 +158,17 @@ class SimulationLoopMixin:
                 stop_evt.wait(timeout=to_wait)
         finally:
             self.set_running(False)
+
+    def get_last_simulation_error(self) -> Optional[BaseException]:
+        """Return the most recent exception raised by a loop tick.
+
+        Returns ``None`` until a tick fails. The error is retained after later
+        successful ticks so the cause of a transient failure stays diagnosable
+        until the next failure replaces it. Lightweight harnesses that compose
+        this mixin without ``TopologyManager.__init__`` get the attribute
+        lazily here.
+        """
+        return self.__dict__.setdefault("last_simulation_error", None)
 
     def get_running(self) -> bool:
         """Return whether the simulation loop has been started via start()."""
