@@ -636,6 +636,7 @@ class TopologyManager(
         self.update_factor: float = 1.0
         self._stop_evt: threading.Event = threading.Event()
         self._sim_thread: Optional[threading.Thread] = None
+        self._lifecycle_lock: threading.Lock = threading.Lock()
 
         # Active routing daemon - set during init_routing() based on routing method
         self.routing_daemon: Optional[RoutingDaemon] = None

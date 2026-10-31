@@ -20,24 +20,38 @@ class SimulationLoopMixin:
     def start(self) -> None:
         """Start the simulation loop in a background thread.
 
+        Serialized with :meth:`stop` so a concurrent stop cannot clear the
+        event of a freshly started loop. Each run gets its own event.
+
         Raises:
             RuntimeError: If no project is loaded.
         """
-        if self.get_running():
-            return
-        if not self.project_name:
-            raise RuntimeError("Open or create a project first.")
-        self._stop_evt.clear()
-        self.set_running(True)
-        self._sim_thread = threading.Thread(target=self._loop, daemon=True)
-        self._sim_thread.start()
+        with self._lifecycle_lock:
+            if self.get_running():
+                return
+            if not self.project_name:
+                raise RuntimeError("Open or create a project first.")
+
+            previous = self._sim_thread
+            if previous is not None and previous.is_alive():
+                self._stop_evt.set()
+                previous.join()
+
+            self._stop_evt = threading.Event()
+            self.set_running(True)
+            self._sim_thread = threading.Thread(
+                target=self._loop, args=(self._stop_evt,), daemon=True
+            )
+            self._sim_thread.start()
 
     def stop(self) -> None:
         """Stop the simulation loop and join the background thread."""
-        self._stop_evt.set()
-        self.set_running(False)
-        if self._sim_thread and self._sim_thread.is_alive():
-            self._sim_thread.join()
+        with self._lifecycle_lock:
+            self._stop_evt.set()
+            self.set_running(False)
+            thread = self._sim_thread
+            if thread is not None and thread.is_alive():
+                thread.join()
 
     @time_
     def next_step(self) -> float:
@@ -73,22 +87,25 @@ class SimulationLoopMixin:
         """
         self.update_time = max(1, int(seconds))
 
-    def _loop(self) -> None:
+    def _loop(self, stop_evt: threading.Event) -> None:
         """Simulation loop body (runs in a background thread).
 
         Calls update_simulation once per tick. The tick period is
         update_time * update_factor seconds, polled in 0.2-second slices
         so stop() is noticed promptly.
+
+        Args:
+            stop_evt: Event owned by this run; set by :meth:`stop`.
         """
         try:
-            while not self._stop_evt.is_set():
+            while not stop_evt.is_set():
                 tic = time.perf_counter()
                 self.update_simulation()
                 toc = time.perf_counter()
                 elapsed = toc - tic
                 delay = max(0.01, self.update_time * self.update_factor)
                 to_wait = max(0.01, delay - elapsed)
-                self._stop_evt.wait(timeout=to_wait)
+                stop_evt.wait(timeout=to_wait)
         finally:
             self.set_running(False)
 
