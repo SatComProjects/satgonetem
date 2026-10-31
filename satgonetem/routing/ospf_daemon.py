@@ -134,7 +134,6 @@ def _build_ospf_config(node: "Node") -> str:
     lines = [
         "log syslog all;",
         f"router id {node.loopback.ipv4};",
-        f'hostname "{node.name}";',
         "",
         "protocol device {}",
         "",

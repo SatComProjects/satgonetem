@@ -165,7 +165,7 @@ def _build_isis_sr_config(node: "Node") -> str:
     """Build a complete Bird2 IS-IS + SR-MPLS configuration string for one node.
 
     The configuration includes:
-    - Global settings (router id, hostname, log)
+    - Global settings (router id, log)
     - Base protocols (device, direct, kernel)
     - MPLS label manager protocol
     - IS-IS protocol with SR-MPLS, SRGB, node prefix-SID, and per-interface blocks
@@ -180,7 +180,6 @@ def _build_isis_sr_config(node: "Node") -> str:
     lines = [
         "log syslog all;",
         f"router id {node.loopback.ipv4};",
-        f'hostname "{node.name}";',
         "",
         "protocol device {}",
         "",
