@@ -975,7 +975,7 @@ class SRMPLSDaemon(RoutingDaemon):
 
             if changed or stale:
                 batch_lines = [_route_delete_command(line) for line in stale] + changed
-                batch_cmd = "; ".join(batch_lines)
+                batch_cmd = "set -e; " + "; ".join(batch_lines)
                 try:
                     sat.execute_command(["sh", "-lc", batch_cmd])
                     self._prev_sr_node_sid_routes[sat.id] = route_commands
@@ -1043,7 +1043,7 @@ class SRMPLSDaemon(RoutingDaemon):
 
             if changed or stale:
                 batch_lines = [_route_delete_command(line) for line in stale] + changed
-                batch_cmd = "; ".join(batch_lines)
+                batch_cmd = "set -e; " + "; ".join(batch_lines)
                 try:
                     gs.execute_command(["sh", "-lc", batch_cmd])
                     self._prev_sr_gs_routes[gs.id] = route_commands
@@ -1111,7 +1111,7 @@ class SRMPLSDaemon(RoutingDaemon):
 
             if changed or stale:
                 batch_lines = [_route_delete_command(line) for line in stale] + changed
-                batch_cmd = "; ".join(batch_lines)
+                batch_cmd = "set -e; " + "; ".join(batch_lines)
                 try:
                     sat.execute_command(["sh", "-lc", batch_cmd])
                     self._prev_sr_sat_routes[sat.id] = route_commands
@@ -1233,7 +1233,7 @@ class SRMPLSDaemon(RoutingDaemon):
             route_commands.append(entry.to_iproute2_command())
 
         if route_commands:
-            batch_cmd = "; ".join(route_commands)
+            batch_cmd = "set -e; " + "; ".join(route_commands)
             try:
                 gs_src.execute_command(["sh", "-lc", batch_cmd])
                 self._prev_sr_gs_routes[source_id] = route_commands

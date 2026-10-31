@@ -74,7 +74,7 @@ def test_node_sid_removed_entry_emits_mpls_delete():
     daemon._apply_sr_node_sids_to_satellites()
 
     # Delete keeps only the label; next-hop attributes are dropped.
-    assert sat.commands == [["sh", "-lc", "ip -f mpls route del 16009"]]
+    assert sat.commands == [["sh", "-lc", "set -e; ip -f mpls route del 16009"]]
     assert daemon._prev_sr_node_sid_routes[1] == [own]
 
 
@@ -95,7 +95,7 @@ def test_ground_station_empty_route_list_deletes_and_clears_cache():
         [
             "sh",
             "-lc",
-            "ip -f mpls route del 16001; ip route del 10.20.0.1/32",
+            "set -e; ip -f mpls route del 16001; ip route del 10.20.0.1/32",
         ]
     ]
     # An empty route set must be committed, not leave the old cache behind.
@@ -114,19 +114,23 @@ def test_returning_route_is_reemitted_after_removal():
 
     sr_lfib[30] = [_FakeLFIBEntry(route)]
     daemon._apply_sr_routes_to_satellites()
-    assert sat.commands == [["sh", "-lc", route]]
+    assert sat.commands == [["sh", "-lc", f"set -e; {route}"]]
     assert daemon._prev_sr_sat_routes[30] == [route]
 
     # Neighbour disappears: delete route and commit the empty cache.
     sr_lfib[30] = []
     daemon._apply_sr_routes_to_satellites()
-    assert sat.commands[-1] == ["sh", "-lc", "ip route del 10.30.0.1/32"]
+    assert sat.commands[-1] == [
+        "sh",
+        "-lc",
+        "set -e; ip route del 10.30.0.1/32",
+    ]
     assert daemon._prev_sr_sat_routes[30] == []
 
     # Neighbour returns: no stale cache entry may suppress the re-install.
     sr_lfib[30] = [_FakeLFIBEntry(route)]
     daemon._apply_sr_routes_to_satellites()
-    assert sat.commands[-1] == ["sh", "-lc", route]
+    assert sat.commands[-1] == ["sh", "-lc", f"set -e; {route}"]
     assert daemon._prev_sr_sat_routes[30] == [route]
 
 
