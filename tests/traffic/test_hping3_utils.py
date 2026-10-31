@@ -151,6 +151,11 @@ class TestHping3Config:
         cmd = cfg.build_command("10.0.0.2", "10.0.0.1")
         assert "-a 10.0.0.1" in cmd
 
+    def test_merges_stderr_for_statistics(self):
+        cfg = Hping3Config()
+        cmd = cfg.build_command("10.0.0.2", "10.0.0.1")
+        assert cmd.endswith("2>&1")
+
 
 class TestHping3Results:
     """Tests for Hping3Results parsing."""
@@ -340,3 +345,38 @@ class TestRunHping3:
         cfg = Hping3Config(count=3)
         with pytest.raises(RuntimeError, match="returned no output"):
             run_hping3(src, dst, cfg)
+
+
+_FULL_LOSS_OUTPUT = (
+    "HPING gs2 (eth0 10.1.0.2): S set, 40 headers + 0 data bytes\n"
+    "\n"
+    "--- gs2 hping statistic ---\n"
+    "3 packets transmitted, 0 packets received, 100% packet loss\n"
+)
+
+
+def test_run_hping3_accepts_full_loss():
+    src = _make_node("gs0", "10.0.0.1")
+    dst = _make_node("gs1", "10.0.0.2")
+    src.execute_command.return_value = _FULL_LOSS_OUTPUT
+
+    res = run_hping3(src, dst, Hping3Config(count=3))
+
+    assert res.packet_loss_percent == 100.0
+    assert src.execute_command.call_args.kwargs["ok_exit_codes"] == (0, 1)
+
+
+def test_flow_accepts_exit_code_one_and_reports_full_loss():
+    src = _make_node("gs0", "10.0.0.1")
+    dst = _make_node("gs1", "10.0.0.2")
+    src.execute_command.return_value = _FULL_LOSS_OUTPUT
+    flow = Hping3Flow(src, dst, Hping3Config(count=3))
+
+    flow.start()
+    deadline = time.time() + 2.0
+    while flow.status() == Hping3Status.RUNNING and time.time() < deadline:
+        time.sleep(0.05)
+
+    assert flow.status() == Hping3Status.DONE
+    assert flow.results().packet_loss_percent == 100.0
+    assert src.execute_command.call_args.kwargs["ok_exit_codes"] == (0, 1)

@@ -112,7 +112,8 @@ class Hping3Config:
         if src:
             parts.append(f"-a {src}")
 
-        return " ".join(parts)
+        # hping3 writes its final statistics to stderr; keep them in stdout.
+        return " ".join(parts) + " 2>&1"
 
 
 class Hping3Results:
@@ -443,7 +444,8 @@ class Hping3Flow:
             dst_ip = self.destination.loopback.ipv4
             bind_ip = self.source.loopback.ipv4
             command = self.config.build_command(dst_ip, bind_ip)
-            raw = self.source.execute_command(command)
+            # hping3 exits 1 when no replies arrive; the summary is still valid.
+            raw = self.source.execute_command(command, ok_exit_codes=(0, 1))
             if not isinstance(raw, str):
                 raise RuntimeError(
                     f"hping3 from {self.source.name} to {self.destination.name} "
@@ -490,7 +492,8 @@ def run_hping3(
     bind_ip = source.loopback.ipv4
     command = config.build_command(dst_ip, bind_ip)
 
-    raw = source.execute_command(command)
+    # hping3 exits 1 when no replies arrive; the summary is still valid.
+    raw = source.execute_command(command, ok_exit_codes=(0, 1))
     if not isinstance(raw, str):
         raise RuntimeError(
             f"hping3 from {source.name} to {destination.name} returned no output; "
