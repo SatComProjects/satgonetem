@@ -262,6 +262,10 @@ class LongestConnectionTimeStrategy(GroundToSpaceConnectionStrategy):
 
         ############## First check: Keep existing connections if they are still valid ##############
 
+        # Track satellites appended as retained connections so the second pass
+        # does not append them a second time.
+        retained_satellite_ids = set()
+
         for visible_satellite in visible_satellites:
 
             if (
@@ -290,6 +294,7 @@ class LongestConnectionTimeStrategy(GroundToSpaceConnectionStrategy):
                 computed_ground_object_connections_result.new_ground_object_connections.append(
                     new_link
                 )
+                retained_satellite_ids.add(id(visible_satellite.satellite))
 
         if (
             len(computed_ground_object_connections_result.new_ground_object_connections)
@@ -302,6 +307,9 @@ class LongestConnectionTimeStrategy(GroundToSpaceConnectionStrategy):
         list_of_satellites = []
         import time as _t
         for visible_satellite in visible_satellites:
+            if id(visible_satellite.satellite) in retained_satellite_ids:
+                # Already kept above; do not create a duplicate connection.
+                continue
             tic = _t.perf_counter()
             time_until_disconnection = self.estimate_time_until_disconnection_2(
                 ground_object=ground_object,
@@ -395,6 +403,10 @@ class WeightedConnection(GroundToSpaceConnectionStrategy):
 
         ############## First check: Keep existing connections if they are still valid ##############
 
+        # Track satellites appended as retained connections so the second pass
+        # does not append them a second time.
+        retained_satellite_ids = set()
+
         for visible_satellite in visible_satellites:
 
             if (
@@ -423,6 +435,7 @@ class WeightedConnection(GroundToSpaceConnectionStrategy):
                 computed_ground_object_connections_result.new_ground_object_connections.append(
                     new_link
                 )
+                retained_satellite_ids.add(id(visible_satellite.satellite))
 
         if (
             len(computed_ground_object_connections_result.new_ground_object_connections)
@@ -434,6 +447,9 @@ class WeightedConnection(GroundToSpaceConnectionStrategy):
         # Create a list to store the weighted visible satellites
         weighted_visible_satellites = []
         for visible_satellite in visible_satellites:
+            if id(visible_satellite.satellite) in retained_satellite_ids:
+                # Already kept above; do not create a duplicate connection.
+                continue
             # Get the number of already connected ground stations to the satellite
             connected_stations = len(
                 [
