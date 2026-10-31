@@ -129,17 +129,29 @@ class NetworkLifecycleMixin:
 
         self.set_status(False)
 
-        if self.hil_manager is not None:
-            self.hil_manager.teardown_all()
-
         launcher = getattr(self, "launcher", None)
+        teardown_error: Exception | None = None
 
-        if launcher is not None:
-            launcher.close_project()
+        try:
+            if self.hil_manager is not None:
+                self.hil_manager.teardown_all()
+        except Exception as exc:
+            teardown_error = exc
+            logging.error("HIL teardown failed during stop: %s", exc)
 
-        self.set_gonetem_status(False)
-        self.set_routing_initiated(False)
-        self.routing_method = None
+        try:
+            if launcher is not None:
+                launcher.close_project()
+        finally:
+            # A failed stop must not leave the manager in a state where
+            # start_gonetem() silently refuses to run (CORE-07).
+            self.launcher = None
+            self.set_gonetem_status(False)
+            self.set_routing_initiated(False)
+            self.routing_method = None
+
+        if teardown_error is not None:
+            raise teardown_error
 
         return time.perf_counter() - tic
 
