@@ -92,18 +92,8 @@ class NetworkLifecycleMixin:
 
         return (container_time, link_time)
 
-    def stop_gonetem(self) -> float:
-        """Stop GoNetEm and clean up resources.
-
-        Gracefully stops any active background activity (simulation loop,
-        routing, tcpdump, traffic flows) before tearing down the network.
-
-        Returns:
-            float: Time taken to stop GoNetEm
-        """
-        tic = time.perf_counter()
-
-        # Stop simulation loop if running
+    def _stop_simulation_loop(self) -> None:
+        """Stop the background simulation loop if it is running."""
         if self.get_running() or (
             hasattr(self, "_sim_thread")
             and self._sim_thread is not None
@@ -111,8 +101,11 @@ class NetworkLifecycleMixin:
         ):
             self.stop()
 
-        # Stop active traffic flows with a bounded wait. A single stuck
-        # command must not prevent container/project teardown.
+    def _stop_active_flows(self) -> None:
+        """Stop active traffic flows with a bounded wait.
+
+        A single stuck command must not prevent container/project teardown.
+        """
         flows = list(getattr(self, "_active_flows", []))
         try:
             for flow in flows:
@@ -144,6 +137,20 @@ class NetworkLifecycleMixin:
         finally:
             if hasattr(self, "_active_flows"):
                 self._active_flows.clear()
+
+    def stop_gonetem(self) -> float:
+        """Stop GoNetEm and clean up resources.
+
+        Gracefully stops any active background activity (simulation loop,
+        routing, tcpdump, traffic flows) before tearing down the network.
+
+        Returns:
+            float: Time taken to stop GoNetEm
+        """
+        tic = time.perf_counter()
+
+        self._stop_simulation_loop()
+        self._stop_active_flows()
 
         self.set_status(False)
 
@@ -190,19 +197,53 @@ class NetworkLifecycleMixin:
             stacklevel=2,
         )
         tic = time.perf_counter()
-        self.set_status(False)
 
-        if self.hil_manager is not None:
-            self.hil_manager.teardown_all()
+        teardown_error: Exception | None = None
+        try:
+            # Stop the simulation loop and traffic flows before closing the
+            # project so no background thread mutates a closed topology.
+            try:
+                self._stop_simulation_loop()
+            except Exception as exc:
+                logging.error(
+                    "Failed to stop simulation loop during force stop: %s", exc
+                )
 
-        launcher = getattr(self, "launcher", None)
+            self.set_status(False)
 
-        if launcher is not None:
-            launcher.close_project()
+            try:
+                self._stop_active_flows()
+            except Exception as exc:
+                logging.error(
+                    "Failed to stop traffic flows during force stop: %s", exc
+                )
 
-        self.set_gonetem_status(False)
-        self.set_routing_initiated(False)
-        self.routing_method = None
+            if self.hil_manager is not None:
+                try:
+                    self.hil_manager.teardown_all()
+                except Exception as exc:
+                    teardown_error = exc
+                    logging.error("HIL teardown failed during force stop: %s", exc)
+
+            launcher = getattr(self, "launcher", None)
+            if launcher is not None:
+                try:
+                    launcher.force_close_project()
+                except Exception as exc:
+                    logging.error(
+                        "Failed to force-close GoNetEm project during force stop: %s",
+                        exc,
+                    )
+        finally:
+            # A failed force stop must not leave stale state behind.
+            self.launcher = None
+            self.set_status(False)
+            self.set_gonetem_status(False)
+            self.set_routing_initiated(False)
+            self.routing_method = None
+
+        if teardown_error is not None:
+            raise teardown_error
 
         return time.perf_counter() - tic
 
