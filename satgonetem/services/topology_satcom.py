@@ -688,29 +688,28 @@ class TopologyManager(
         """No-op: configuration is supplied at construction time via from_satcom()."""
 
     def _setup_update_actions(self) -> None:
-        """Register the standard per-tick update callbacks on the simulation manager.
+        """Keep sat_com_topology's default per-tick update.
 
-        Clears any existing tick actions and registers the three core updates:
-        configuration propagation, ground station link refresh, and user
-        terminal link refresh.
+        When the simulation is loaded, SimulationManager.set_time_manager() registers
+        the simulation's own update as the time manager's tick action. It runs the
+        update protocol: by default satellites, ground stations, user terminals and
+        every link type, inter-satellite links included (see
+        SimulationManager.get_default_update_protocol). Nothing is registered here;
+        this only checks that a tick action exists.
 
         Raises:
-            ValueError: If self.simulation_manager is None.
+            ValueError: If self.simulation_manager is None, or if its time manager
+                has no tick action (the simulation would never update).
         """
         if not hasattr(self, "simulation_manager") or self.simulation_manager is None:
             raise ValueError("Simulation manager is not set")
 
-        self.simulation_manager.time_manager.on_tick_actions.clear()
-
-        self.simulation_manager.time_manager.register_action(
-            self.simulation_manager.configuration.update
-        )
-        self.simulation_manager.time_manager.register_action(
-            self.simulation_manager.update_ground_station_links
-        )
-        self.simulation_manager.time_manager.register_action(
-            self.simulation_manager.update_user_terminal_links
-        )
+        if not self.simulation_manager.time_manager.on_tick_actions:
+            raise ValueError(
+                "The time manager has no tick action: load the simulation through "
+                "sat_com_topology (SimulationManager.set_time_manager) so its "
+                "default update runs on each tick"
+            )
 
     def get_gonetem_status(self) -> bool:
         """Return whether GoNetEm has been started."""
