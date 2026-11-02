@@ -9,6 +9,7 @@ stock pyorbital model instead of the patched SGP4/GMST model.
 from __future__ import annotations
 
 import datetime
+import inspect
 import subprocess
 import sys
 from pathlib import Path
@@ -95,9 +96,20 @@ def test_walker_constellation_uses_patched_orbital_model():
         datetime.datetime(2026, 1, 2),
     )
 
-    satellites = generate_satellite.generate_satellites_from_walker_constellation(
-        constellation, time_manager
-    )
+    generate = generate_satellite.generate_satellites_from_walker_constellation
+    kwargs = {}
+    if "shell" in inspect.signature(generate).parameters:
+        # sat_com_topology 5: the satellites are given the shell they belong to
+        from sat_com_model.models import WalkerShell
+
+        kwargs["shell"] = WalkerShell(
+            identifier="import-order-regression",
+            amount_of_orbit_plane=2,
+            amount_of_satellite_per_orbit_plane=2,
+            inclination=53.0,
+            mean_revolution_per_day=15.06,
+        )
+    satellites = generate(constellation, time_manager, **kwargs)
 
     assert len(satellites) == 4
     for satellite in satellites:
