@@ -25,6 +25,10 @@ _IPERF3_PORT_RANGE_END = 5300
 _IPERF3_SERVER_READY_TIMEOUT = 2.0
 _IPERF3_SERVER_READY_POLL_INTERVAL = 0.1
 _IPERF3_SERVER_START_FALLBACK = 0.5
+# The server writes its JSON when its side of the test ends, which can be
+# after the client returned: the receiver-side report is waited for.
+_IPERF3_RESULT_WAIT_TIMEOUT = 3.0
+_IPERF3_RESULT_POLL_INTERVAL = 0.25
 
 
 class _Iperf3PortAllocator:
@@ -155,6 +159,30 @@ def _wait_for_iperf3_server(
         if time.monotonic() >= deadline:
             return False
         time.sleep(poll_interval)
+
+
+def _extract_iperf3_json(text: Any) -> Optional[str]:
+    """Return the JSON object in an iperf3 output file, or None.
+
+    iperf3 writes everything to the redirected stream: warnings before the
+    JSON object (e.g. "warning: UDP block size ... exceeds TCP MSS") and
+    some errors after it. The object runs from the first "{" to the last "}".
+    """
+    if not isinstance(text, str):
+        return None
+    start, end = text.find("{"), text.rfind("}")
+    return text[start : end + 1] if 0 <= start < end else None
+
+
+def _text_outside_iperf3_json(text: Any) -> Optional[str]:
+    """Return what iperf3 printed around its JSON object, or None."""
+    if not isinstance(text, str):
+        return None
+    start, end = text.find("{"), text.rfind("}")
+    if not 0 <= start < end:
+        return text.strip() or None
+    outside = (text[:start] + " " + text[end + 1 :]).strip()
+    return outside or None
 
 
 @dataclass
@@ -338,6 +366,11 @@ class Iperf3Results:
             .get("protocol", config.protocol)
         ).upper()
         self._df_streams, self._df_summaries = self._flatten_intervals()
+
+        # Set by Iperf3Flow: which side's JSON this is ("client" or "server")
+        # and what iperf3 printed around the client's JSON (its warnings).
+        self.json_side: Optional[str] = None
+        self.client_notes: Optional[str] = None
 
     def _flatten_intervals(self) -> tuple[pd.DataFrame, pd.DataFrame]:
         """Flatten iperf3 intervals into per-stream and per-summary DataFrames.
@@ -1035,6 +1068,54 @@ class Iperf3Flow:
             return self.source, client_json, self.destination, server_json
         return self.destination, server_json, self.source, client_json
 
+    @staticmethod
+    def _read_temp_file(node: "Node", path: str) -> Optional[str]:
+        """Best-effort read of a temporary JSON file inside a node."""
+        try:
+            return node.execute_command(f"cat {shlex.quote(path)}")
+        except Exception:
+            return None
+
+    def _read_json_output(
+        self, client_json: str, server_json: str
+    ) -> tuple[Optional[str], Optional[str]]:
+        """Read the flow's iperf3 JSON, from the preferred side first.
+
+        The server file is written when the server's side of the test ends,
+        which can be after the client returned: when it is the preferred side
+        it is waited for (bounded), so the metrics come from the side
+        _json_side() chose instead of silently from the other one (for UDP,
+        the sender's loss figures instead of the receiver's). Text around the
+        JSON object (iperf3 warnings) is skipped.
+
+        Returns:
+            Tuple of (raw JSON or None, "client" / "server" or None).
+        """
+        preferred_node, preferred_path, fallback_node, fallback_path = (
+            self._json_side(client_json, server_json)
+        )
+
+        def side(path: str) -> str:
+            return "client" if path == client_json else "server"
+
+        raw = _extract_iperf3_json(
+            self._read_temp_file(preferred_node, preferred_path)
+        )
+        if raw is None and preferred_path == server_json:
+            deadline = time.monotonic() + _IPERF3_RESULT_WAIT_TIMEOUT
+            while raw is None and time.monotonic() < deadline:
+                time.sleep(_IPERF3_RESULT_POLL_INTERVAL)
+                raw = _extract_iperf3_json(
+                    self._read_temp_file(preferred_node, preferred_path)
+                )
+        if raw is not None:
+            return raw, side(preferred_path)
+
+        raw = _extract_iperf3_json(
+            self._read_temp_file(fallback_node, fallback_path)
+        )
+        return raw, (side(fallback_path) if raw is not None else None)
+
     def _remove_temp_file(self, node: "Node", path: Optional[str]) -> None:
         """Best-effort removal of a temporary JSON file inside a node.
 
@@ -1132,28 +1213,26 @@ class Iperf3Flow:
             _wait_for_iperf3_server(self.destination, dst_ip, run_config.port)
 
             client_cmd = run_config.build_client_command(dst_ip, src_ip, client_json)
+            client_started = time.monotonic()
             self.source.execute_command(client_cmd, detach=False)
+            client_seconds = time.monotonic() - client_started
             time.sleep(0.3)
 
-            preferred_node, preferred_path, fallback_node, fallback_path = (
-                self._json_side(client_json, server_json)
-            )
-            raw = preferred_node.execute_command(
-                f"cat {shlex.quote(preferred_path)}"
-            )
-            if not isinstance(raw, str) or not raw.strip().startswith("{"):
-                raw = fallback_node.execute_command(
-                    f"cat {shlex.quote(fallback_path)}"
-                )
-
-            if not isinstance(raw, str) or not raw.strip().startswith("{"):
+            client_text = self._read_temp_file(self.source, client_json)
+            raw, json_side = self._read_json_output(client_json, server_json)
+            if raw is None:
                 raise RuntimeError(
                     f"Could not retrieve iperf3 JSON output for flow "
                     f"{self.source.name} -> {self.destination.name}. "
-                    "Verify iperf3 is installed in both containers and a route exists."
+                    "Verify iperf3 is installed in both containers and a route exists. "
+                    f"(client returned after {client_seconds:.1f} s, configured "
+                    f"duration {run_config.duration} s; waited up to "
+                    f"{_IPERF3_RESULT_WAIT_TIMEOUT:.0f} s for the server file)"
                 )
 
             result = Iperf3Results(raw_json=raw, config=run_config)
+            result.json_side = json_side
+            result.client_notes = _text_outside_iperf3_json(client_text)
             with self._lock:
                 self._result = result
                 self._status = FlowStatus.DONE

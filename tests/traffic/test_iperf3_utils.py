@@ -11,6 +11,8 @@ from satgonetem.traffic.iperf3_utils import (
     Iperf3Config,
     Iperf3Flow,
     Iperf3Results,
+    _extract_iperf3_json,
+    _text_outside_iperf3_json,
     run_iperf3_flow,
 )
 
@@ -532,6 +534,129 @@ class TestIperf3Flow:
             while flow.status() == FlowStatus.RUNNING and time.time() < deadline:
                 time.sleep(0.05)
             assert flow.status() == FlowStatus.ERROR
+
+
+_WARNING = "warning: UDP block size 1432 exceeds TCP MSS 1392, may result in fragmentation / drops\n"
+
+
+def _udp_json_with_loss(lost_packets: int) -> str:
+    data = json.loads(_UDP_JSON)
+    data["end"]["sum"]["lost_packets"] = lost_packets
+    return json.dumps(data)
+
+
+def _scripted_node(name: str, ipv4: str, cat_outputs: dict) -> MagicMock:
+    """A node whose `cat <file>` answers come, in order, from cat_outputs.
+
+    cat_outputs maps "client"/"server" to a list of successive outputs (the
+    last one repeats); every other command (server start, client, readiness
+    probe, cleanup) succeeds.
+    """
+    node = _make_node(name, ipv4)
+    calls = {"client": 0, "server": 0}
+
+    def execute(cmd, detach=False, ok_exit_codes=(0,)):
+        if cmd.startswith("cat "):
+            kind = "client" if "iperf3_cli_" in cmd else "server"
+            outputs = cat_outputs.get(kind, [None])
+            out = outputs[min(calls[kind], len(outputs) - 1)]
+            calls[kind] += 1
+            return out
+        if cmd.startswith("ss "):
+            return "LISTEN"
+        return ""
+
+    node.execute_command.side_effect = execute
+    node.cat_calls = calls
+    return node
+
+
+def _run_flow(src, dst, cfg) -> Iperf3Flow:
+    flow = Iperf3Flow(src, dst, cfg)
+    flow.start()
+    deadline = time.time() + 10.0
+    while flow.status() == FlowStatus.RUNNING and time.time() < deadline:
+        time.sleep(0.05)
+    return flow
+
+
+class TestIperf3JsonExtraction:
+    """Tests for the JSON extraction helpers."""
+
+    def test_plain_json_is_returned_unchanged(self):
+        assert _extract_iperf3_json(_TCP_JSON) == _TCP_JSON
+
+    def test_text_before_and_after_the_json_is_skipped(self):
+        text = _WARNING + _TCP_JSON + "\niperf3: interrupt - the client has terminated\n"
+        assert json.loads(_extract_iperf3_json(text)) == json.loads(_TCP_JSON)
+        outside = _text_outside_iperf3_json(text)
+        assert "exceeds TCP MSS" in outside and "client has terminated" in outside
+
+    @pytest.mark.parametrize("text", [None, "", "no json here", "} {"])
+    def test_no_json_gives_none(self, text):
+        assert _extract_iperf3_json(text) is None
+
+    def test_nothing_outside_plain_json(self):
+        assert _text_outside_iperf3_json(_TCP_JSON) is None
+
+
+class TestIperf3FlowJsonReading:
+    """Iperf3Flow reads its result from the side _json_side() chose."""
+
+    def test_late_udp_server_json_is_waited_for(self):
+        # The receiver writes its report after the client returned: the
+        # first reads find nothing. The sender's file has other loss figures.
+        with patch("satgonetem.traffic.iperf3_utils.time.sleep"):
+            src = _scripted_node("gs0", "10.0.0.1", {"client": [_udp_json_with_loss(0)]})
+            dst = _scripted_node(
+                "gs1", "10.0.0.2", {"server": ["", "", _udp_json_with_loss(10)]}
+            )
+            flow = _run_flow(src, dst, Iperf3Config(protocol="UDP", duration=1))
+
+        assert flow.status() == FlowStatus.DONE
+        res = flow.results()
+        assert res.json_side == "server"
+        assert res.total_lost_packets == 10
+        assert dst.cat_calls["server"] == 3
+
+    def test_udp_falls_back_to_client_when_server_never_writes(self):
+        with patch("satgonetem.traffic.iperf3_utils.time.sleep"), patch(
+            "satgonetem.traffic.iperf3_utils._IPERF3_RESULT_WAIT_TIMEOUT", 0.2
+        ):
+            src = _scripted_node("gs0", "10.0.0.1", {"client": [_UDP_JSON]})
+            dst = _scripted_node("gs1", "10.0.0.2", {"server": [""]})
+            flow = _run_flow(src, dst, Iperf3Config(protocol="UDP", duration=1))
+
+        assert flow.status() == FlowStatus.DONE
+        assert flow.results().json_side == "client"
+
+    def test_warning_before_tcp_json_is_kept_as_client_notes(self):
+        with patch("satgonetem.traffic.iperf3_utils.time.sleep"):
+            src = _scripted_node("gs0", "10.0.0.1", {"client": [_WARNING + _TCP_JSON]})
+            dst = _scripted_node("gs1", "10.0.0.2", {"server": [_TCP_JSON]})
+            flow = _run_flow(src, dst, Iperf3Config(protocol="TCP", duration=1))
+
+        assert flow.status() == FlowStatus.DONE
+        res = flow.results()
+        assert res.json_side == "client"
+        assert "exceeds TCP MSS" in res.client_notes
+
+    def test_no_json_anywhere_reports_both_outputs(self):
+        with patch("satgonetem.traffic.iperf3_utils.time.sleep"), patch(
+            "satgonetem.traffic.iperf3_utils._IPERF3_RESULT_WAIT_TIMEOUT", 0.2
+        ):
+            src = _scripted_node(
+                "gs0", "10.0.0.1", {"client": ["iperf3: error - unable to connect"]}
+            )
+            dst = _scripted_node(
+                "gs1", "10.0.0.2", {"server": ["iperf3: error - unable to start listener"]}
+            )
+            flow = _run_flow(src, dst, Iperf3Config(protocol="UDP", duration=1))
+
+        assert flow.status() == FlowStatus.ERROR
+        message = str(flow._error)
+        assert "Could not retrieve iperf3 JSON" in message
+        assert "unable to connect" in message
 
 
 class TestRunIperf3Flow:
