@@ -46,8 +46,9 @@ class LongestConnectionTimeStrategy(GroundToSpaceConnectionStrategy):
     ) -> float:
         '''
         Analytically compute the time until the satellite drops below minimum elevation.
-        Uses TEME position/velocity from get_position_earth_general_inertial and
-        transforms to ECEF for a closed-form quadratic solution.
+        Uses the movement model's TEME position and velocity
+        (get_position_earth_general_inertial / get_velocity_earth_general_inertial)
+        and transforms them to ECEF for a closed-form quadratic solution.
         '''
 
         # Helpers

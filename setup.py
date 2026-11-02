@@ -31,7 +31,7 @@ setup(
         "psutil>=7.0.0",
         "pandas>=2.3.0",
         "astropy>=6.1.7",
-        "sat_com_topology @ git+https://github.com/SatComProjects/satComTopology.git",
+        "sat_com_topology @ git+https://github.com/SatComProjects/satComTopology.git@v5.0.3",
     ],
     classifiers=[
         "Development Status :: 3 - Alpha",

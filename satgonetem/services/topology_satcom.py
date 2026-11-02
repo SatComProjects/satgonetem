@@ -892,7 +892,6 @@ class TopologyManager(
 
         nx_adapter = self.nx_adapter
         graph = nx_adapter.create_full_networkx_graph(
-            export_link_length=True,
             export_object_position=True,
             enable_export_flows_data=False,
         )
@@ -914,7 +913,13 @@ class TopologyManager(
             if data.get("disabled", False):
                 return False
             link = wrapper_link(u, v)
-            return link is None or link.is_active
+            if link is None:
+                return True
+            # sat_com_topology 5 keeps the disabled flag on the link object;
+            # the exported edge data only carries the model dump on request.
+            return link.is_active and not getattr(
+                link.satcom_object, "disabled", False
+            )
 
         graph.remove_edges_from(
             [
@@ -933,7 +938,7 @@ class TopologyManager(
                 ):
                     graph[u][v]["weight"] = 0.5
             elif self.preference in ["latency_prefer_ISLs", "latency_no_preference"]:
-                graph[u][v]["weight"] = graph[u][v].get("distance", 1)
+                graph[u][v]["weight"] = graph[u][v].get("distance_km", 1)
                 if (
                     self.preference == "latency_prefer_ISLs"
                     and graph[u][v].get("type") == "InterSatelliteLink"

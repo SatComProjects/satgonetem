@@ -42,7 +42,7 @@ dependencies = [
     "astropy>=6.1.7",
     "pyroute2>=0.7.0",
     "yaspin>=3.0.0",
-    "sat_com_topology @ git+https://github.com/SatComProjects/satComTopology.git",
+    "sat_com_topology @ git+https://github.com/SatComProjects/satComTopology.git@v5.0.3",
     "pytest>=9.0.3",
     "igraph>=1.0.0",
     "itur>=0.4.0",
