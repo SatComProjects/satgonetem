@@ -40,7 +40,7 @@ pip install git+https://github.com/satcomprojects/satgonetem
 The primary external dependency is `sat_com_topology`:
 
 ```
-git+https://github.com/SatComProjects/satComTopology.git
+git+https://github.com/SatComProjects/satComTopology.git@v5.0.3
 ```
 
 Access to that repository is required at install time.

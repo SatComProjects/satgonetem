@@ -72,7 +72,10 @@ class _Sgp4Model:
         )
 
     def get_position_earth_general_inertial(self):
-        return (7000.0, 0.0, 0.0), (0.0, 7.5, 0.0)
+        return (7000.0, 0.0, 0.0)
+
+    def get_velocity_earth_general_inertial(self):
+        return (0.0, 7.5, 0.0)
 
     def get_longitude_latitude_altitude(self):
         return SimpleNamespace(altitude=550_000.0)
@@ -95,7 +98,10 @@ class _PyOrbitalModel:
         )
 
     def get_position_earth_general_inertial(self):
-        return self._state
+        return self._state[0]
+
+    def get_velocity_earth_general_inertial(self):
+        return self._state[1]
 
     def get_longitude_latitude_altitude(self):
         return SimpleNamespace(altitude=550_000.0)

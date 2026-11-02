@@ -460,15 +460,19 @@ def _get_orbital_elements(
         # Satrec stores both angles in radians; keep RAAN in [0, 360).
         raan = math.degrees(orb.nodeo) % 360.0
         inc = float(orb.inclo)
-        r_teme = mm.get_position_earth_general_inertial()[0]
+        r_teme = mm.get_position_earth_general_inertial()
     else:
         # pyorbital's Orbital has no TLE element attributes.  Derive the
         # orbital-plane orientation from the propagated state vector.
-        get_state = getattr(mm, "get_position_earth_general_inertial", None)
-        if get_state is None:
+        get_position = getattr(mm, "get_position_earth_general_inertial", None)
+        if get_position is None:
             return None
 
-        r_teme, v_teme = get_state()
+        r_teme = get_position()
+        get_velocity = getattr(mm, "get_velocity_earth_general_inertial", None)
+        if get_velocity is None:
+            return None
+        v_teme = get_velocity()
         x, y, z = r_teme
         vx, vy, vz = v_teme
         h_x = y * vz - z * vy
@@ -484,7 +488,6 @@ def _get_orbital_elements(
     raan_rad = math.radians(raan)
 
     # Use the movement model's propagated position (NOT manual sgp4)
-    r_teme = mm.get_position_earth_general_inertial()
     x, y, z = r_teme
 
     # Orbital-plane unit vectors

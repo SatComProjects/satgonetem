@@ -116,10 +116,8 @@ def _make_satellite_with_ecef_state(
 
     movement_model = MagicMock()
     movement_model.clock.get_current_time.return_value = when
-    movement_model.get_position_earth_general_inertial.return_value = (
-        r_teme_km,
-        v_teme_km_s,
-    )
+    movement_model.get_position_earth_general_inertial.return_value = r_teme_km
+    movement_model.get_velocity_earth_general_inertial.return_value = v_teme_km_s
 
     satellite = MagicMock()
     satellite.satellite_name = "TestSat"
