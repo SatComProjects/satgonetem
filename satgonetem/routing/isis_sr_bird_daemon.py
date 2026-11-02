@@ -9,11 +9,11 @@ from __future__ import annotations
 
 import base64
 import logging
-import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import TYPE_CHECKING, List, Optional
 
 from satgonetem.routing.base_daemon import RoutingDaemon
+from satgonetem.routing.bird_service import apply_bird_config, stop_bird
 
 if TYPE_CHECKING:
     from satgonetem.models.link import Link
@@ -23,6 +23,36 @@ ISIS_HELLO_INTERVAL = 1
 ISIS_HELLO_MULTIPLIER = 3
 SR_GLOBAL_BLOCK_LOW = 16000
 SR_GLOBAL_BLOCK_HIGH = 23999
+
+_ISIS_PROBE_CONFIG = (
+    "protocol device {}\n"
+    "protocol mpls { label range 16000 23999; }\n"
+)
+
+
+def _bird_supports_isis(node: "Node") -> bool:
+    """Return whether *node*'s Bird build accepts IS-IS and MPLS config.
+
+    Stock Bird 2.x ships neither protocol, so only a patched build accepts the
+    generated template.
+
+    Args:
+        node: Node whose container should be probed.
+
+    Returns:
+        True when ``bird -p`` accepts the probe configuration.
+    """
+    payload = base64.b64encode(_ISIS_PROBE_CONFIG.encode("utf-8")).decode("ascii")
+    probe = "/tmp/bird_isis_probe.conf"
+    try:
+        node.execute_command(
+            f"printf %s '{payload}' | base64 -d > {probe} && "
+            f"{{ bird -p -c {probe}; rc=$?; rm -f {probe}; exit $rc; }}"
+        )
+    except Exception as exc:
+        logging.debug("Bird IS-IS capability probe failed: %s", exc)
+        return False
+    return True
 
 
 class ISISBirdSRDaemon(RoutingDaemon):
@@ -45,6 +75,13 @@ class ISISBirdSRDaemon(RoutingDaemon):
         nodes = list(self.topology.get_satellites()) + list(
             self.topology.get_ground_stations()
         )
+        if nodes and not _bird_supports_isis(nodes[0]):
+            logging.error(
+                "IS-IS SR requires a Bird build with IS-IS and MPLS support; "
+                "the selected image does not provide one. Use a patched Bird "
+                "image or the 'dynamic-ospf' routing method."
+            )
+            return False
         errors = 0
         with ThreadPoolExecutor(max_workers=max_workers) as pool:
             futures = {pool.submit(self._init_node, n): n for n in nodes}
@@ -121,7 +158,7 @@ class ISISBirdSRDaemon(RoutingDaemon):
         Args:
             node: The node on which Bird should be stopped.
         """
-        node.execute_command("service bird stop")
+        stop_bird(node)
 
 
 def _format_net_address(loopback_ip: str) -> str:
@@ -165,7 +202,7 @@ def _build_isis_sr_config(node: "Node") -> str:
     """Build a complete Bird2 IS-IS + SR-MPLS configuration string for one node.
 
     The configuration includes:
-    - Global settings (router id, hostname, log)
+    - Global settings (router id, log)
     - Base protocols (device, direct, kernel)
     - MPLS label manager protocol
     - IS-IS protocol with SR-MPLS, SRGB, node prefix-SID, and per-interface blocks
@@ -180,7 +217,6 @@ def _build_isis_sr_config(node: "Node") -> str:
     lines = [
         "log syslog all;",
         f"router id {node.loopback.ipv4};",
-        f'hostname "{node.name}";',
         "",
         "protocol device {}",
         "",
@@ -250,18 +286,13 @@ def _build_isis_sr_config(node: "Node") -> str:
 
 
 def _apply_config(node: "Node", config: str) -> None:
-    """Write a Bird IS-IS SR config to a temp file and start Bird in the container.
+    """Install a Bird IS-IS SR config and start or reload Bird in the container.
 
     Args:
         node: The node that will run Bird.
         config: Complete Bird2 configuration as a string.
     """
-    tmpfile = f"/tmp/bird_isis_sr_{uuid.uuid4().hex}.conf"
-    with open(tmpfile, "w") as f:
-        f.write(config)
-    node.execute_command(
-        f"/usr/bin/start-service.py --service bird --bird-config {tmpfile}"
-    )
+    apply_bird_config(node, config)
 
 
 def _assign_ips(node: "Node") -> None:

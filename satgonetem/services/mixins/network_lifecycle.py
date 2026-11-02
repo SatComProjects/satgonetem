@@ -42,6 +42,8 @@ class NetworkLifecycleMixin:
                 self, "ground_object_link_capacity", self.gnd_link_capacity
             ),
         )
+        # Assign before startup so a failed launch can still be torn down.
+        self.launcher = launcher
 
         all_nodes = list(self.satellites.values()) + list(self.ground_stations.values())
         active_links = [lnk for lnk in self.links.values() if lnk.is_active]
@@ -56,36 +58,42 @@ class NetworkLifecycleMixin:
             launch_links = active_links
             hil_links = []
 
-        container_time, link_time = launcher.start_containers(
-            launch_nodes,
-            MAX_WORKERS,
-            controller=controller,
-            links=launch_links,
-        )
-        launcher.wire_links(launch_links, MAX_WORKERS)
+        try:
+            container_time, link_time = launcher.start_containers(
+                launch_nodes,
+                MAX_WORKERS,
+                controller=controller,
+                links=launch_links,
+            )
+            launcher.wire_links(launch_links, MAX_WORKERS)
 
-        if hil is not None:
-            hil.wire_links(hil_links)
+            if hil is not None:
+                hil.wire_links(hil_links)
+        except Exception:
+            # Startup failed after the project may have been opened. Close it
+            # best-effort and reset state so a retry does not leak a project.
+            try:
+                launcher.force_close_project()
+            except Exception as cleanup_exc:
+                logging.error(
+                    "Failed to force-close GoNetEm project after startup "
+                    "failure: %s",
+                    cleanup_exc,
+                )
+            self.launcher = None
+            self.set_status(False)
+            self.set_gonetem_status(False)
+            self.set_routing_initiated(False)
+            raise
 
-        self.launcher = launcher
         self.set_status(True)
         self.set_gonetem_status(True)
         self.start_time_ = time.time()
 
         return (container_time, link_time)
 
-    def stop_gonetem(self) -> float:
-        """Stop GoNetEm and clean up resources.
-
-        Gracefully stops any active background activity (simulation loop,
-        routing, tcpdump, traffic flows) before tearing down the network.
-
-        Returns:
-            float: Time taken to stop GoNetEm
-        """
-        tic = time.perf_counter()
-
-        # Stop simulation loop if running
+    def _stop_simulation_loop(self) -> None:
+        """Stop the background simulation loop if it is running."""
         if self.get_running() or (
             hasattr(self, "_sim_thread")
             and self._sim_thread is not None
@@ -93,8 +101,11 @@ class NetworkLifecycleMixin:
         ):
             self.stop()
 
-        # Stop active traffic flows with a bounded wait. A single stuck
-        # command must not prevent container/project teardown.
+    def _stop_active_flows(self) -> None:
+        """Stop active traffic flows with a bounded wait.
+
+        A single stuck command must not prevent container/project teardown.
+        """
         flows = list(getattr(self, "_active_flows", []))
         try:
             for flow in flows:
@@ -127,19 +138,45 @@ class NetworkLifecycleMixin:
             if hasattr(self, "_active_flows"):
                 self._active_flows.clear()
 
+    def stop_gonetem(self) -> float:
+        """Stop GoNetEm and clean up resources.
+
+        Gracefully stops any active background activity (simulation loop,
+        routing, tcpdump, traffic flows) before tearing down the network.
+
+        Returns:
+            float: Time taken to stop GoNetEm
+        """
+        tic = time.perf_counter()
+
+        self._stop_simulation_loop()
+        self._stop_active_flows()
+
         self.set_status(False)
 
-        if self.hil_manager is not None:
-            self.hil_manager.teardown_all()
-
         launcher = getattr(self, "launcher", None)
+        teardown_error: Exception | None = None
 
-        if launcher is not None:
-            launcher.close_project()
+        try:
+            if self.hil_manager is not None:
+                self.hil_manager.teardown_all()
+        except Exception as exc:
+            teardown_error = exc
+            logging.error("HIL teardown failed during stop: %s", exc)
 
-        self.set_gonetem_status(False)
-        self.set_routing_initiated(False)
-        self.routing_method = None
+        try:
+            if launcher is not None:
+                launcher.close_project()
+        finally:
+            # A failed stop must not leave the manager in a state where
+            # start_gonetem() silently refuses to run (CORE-07).
+            self.launcher = None
+            self.set_gonetem_status(False)
+            self.set_routing_initiated(False)
+            self.routing_method = None
+
+        if teardown_error is not None:
+            raise teardown_error
 
         return time.perf_counter() - tic
 
@@ -160,19 +197,53 @@ class NetworkLifecycleMixin:
             stacklevel=2,
         )
         tic = time.perf_counter()
-        self.set_status(False)
 
-        if self.hil_manager is not None:
-            self.hil_manager.teardown_all()
+        teardown_error: Exception | None = None
+        try:
+            # Stop the simulation loop and traffic flows before closing the
+            # project so no background thread mutates a closed topology.
+            try:
+                self._stop_simulation_loop()
+            except Exception as exc:
+                logging.error(
+                    "Failed to stop simulation loop during force stop: %s", exc
+                )
 
-        launcher = getattr(self, "launcher", None)
+            self.set_status(False)
 
-        if launcher is not None:
-            launcher.close_project()
+            try:
+                self._stop_active_flows()
+            except Exception as exc:
+                logging.error(
+                    "Failed to stop traffic flows during force stop: %s", exc
+                )
 
-        self.set_gonetem_status(False)
-        self.set_routing_initiated(False)
-        self.routing_method = None
+            if self.hil_manager is not None:
+                try:
+                    self.hil_manager.teardown_all()
+                except Exception as exc:
+                    teardown_error = exc
+                    logging.error("HIL teardown failed during force stop: %s", exc)
+
+            launcher = getattr(self, "launcher", None)
+            if launcher is not None:
+                try:
+                    launcher.force_close_project()
+                except Exception as exc:
+                    logging.error(
+                        "Failed to force-close GoNetEm project during force stop: %s",
+                        exc,
+                    )
+        finally:
+            # A failed force stop must not leave stale state behind.
+            self.launcher = None
+            self.set_status(False)
+            self.set_gonetem_status(False)
+            self.set_routing_initiated(False)
+            self.routing_method = None
+
+        if teardown_error is not None:
+            raise teardown_error
 
         return time.perf_counter() - tic
 

@@ -83,7 +83,10 @@ class Node:
         return list(command)
 
     def execute_command_docker(
-        self, command: str | list[str], detach: bool = False
+        self,
+        command: str | list[str],
+        detach: bool = False,
+        ok_exit_codes: tuple[int, ...] = (0,),
     ) -> str:
         """
         Backup of the original docker-based command execution.
@@ -101,7 +104,7 @@ class Node:
 
         Raises:
             RuntimeError: If the container is not initialized, the command
-                string is malformed, or the command exits with a non-zero
+                string is malformed, or the command exits with an unexpected
                 status.
         """
         if not self.container:
@@ -117,7 +120,7 @@ class Node:
             return ""
         decoded = output.decode("utf-8").strip() if output else ""
         self.command_output = decoded
-        if exit_code != 0:
+        if exit_code not in ok_exit_codes:
             raise RuntimeError(
                 f"Command failed in {self.name} (exit {exit_code}): {decoded}"
             )
@@ -239,7 +242,13 @@ class Node:
 
 
 
-    def execute_command(self, command: str | list[str], detach: bool = False, use_docker_cli: bool = False) -> str:
+    def execute_command(
+        self,
+        command: str | list[str],
+        detach: bool = False,
+        use_docker_cli: bool = False,
+        ok_exit_codes: tuple[int, ...] = (0,),
+    ) -> str:
         """
         Execute a command on the node.
 
@@ -251,6 +260,9 @@ class Node:
             command: The shell command to execute.
             detach: If True, run the command in the background and return
                 immediately.  Detached execution always uses docker.
+            use_docker_cli: Skip gRPC and run the command through Docker.
+            ok_exit_codes: Exit codes that are not errors. Tools such as ping
+                and hping3 return 1 for a normal run with no replies.
 
         Returns:
             The command's stdout as a stripped string. Returns an empty string
@@ -258,10 +270,10 @@ class Node:
 
         Raises:
             RuntimeError: If the node is not ready, the command string is
-                malformed, or the command exits with a non-zero status.
+                malformed, or the command exits with an unexpected status.
         """
         if use_docker_cli: #Skip directly to docker
-            return self.execute_command_docker(command, detach)
+            return self.execute_command_docker(command, detach, ok_exit_codes)
         if self.grpc_client and not detach:
             import grpc
             from satgonetem.proto import netem_pb2
@@ -276,7 +288,9 @@ class Node:
                 response = self.grpc_client.NodeRun(request)
             except grpc.RpcError as exc:
                 if exc.code() == grpc.StatusCode.UNIMPLEMENTED:
-                    return self.execute_command_docker(command, detach)
+                    return self.execute_command_docker(
+                        command, detach, ok_exit_codes
+                    )
                 raise
             if response.status.code == netem_pb2.StatusCode.ERROR:
                 raise RuntimeError(
@@ -285,7 +299,7 @@ class Node:
             decoded = response.stdout.decode("utf-8").strip() if response.stdout else ""
             decoded_err = response.stderr.decode("utf-8").strip() if response.stderr else ""
             self.command_output = decoded
-            if response.exitCode != 0:
+            if response.exitCode not in ok_exit_codes:
                 detail = decoded
                 if decoded_err:
                     detail = f"{decoded}\nstderr: {decoded_err}" if decoded else decoded_err
@@ -294,7 +308,7 @@ class Node:
                 )
             return decoded
 
-        return self.execute_command_docker(command, detach)
+        return self.execute_command_docker(command, detach, ok_exit_codes)
 
     def set_ipv4_to_containers(
         self,

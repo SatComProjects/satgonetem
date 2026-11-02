@@ -18,7 +18,7 @@ SatGoNetem bridges orbital mechanics and Linux network emulation. It computes sa
 - Real-time satellite constellation simulation (LEO/MEO/GEO, walker and TLE-based)
 - Docker container-per-node with kernel-level netem delay and rate shaping
 - Hardware-in-the-loop (HIL) support for bridging physical ground station equipment
-- Pluggable routing backends: static (Dijkstra), OSPF (Bird2), IS-IS SR (FRR), SR-MPLS
+- Pluggable routing backends: static (Dijkstra), OSPF (Bird2), IS-IS SR (patched Bird2), SR-MPLS
 - Built-in traffic tools: ping, iperf3, hping3 with structured result parsing
 - Batch traffic scheduling via `FlowScheduler`
 - Python API for constellation design and programmatic control
@@ -247,8 +247,13 @@ satgonetem/
 |--------|-------|-------------|
 | `static` | StaticRoutingDaemon | Dijkstra over NetworkX graph, `ip route` applied per node |
 | `dynamic-ospf` | OSPFDaemon | Bird2 daemon, per-node config templated via Jinja2 |
-| `dynamic-isis` | ISISBirdSRDaemon | Bird2 IS-IS with SR-MPLS |
+| `dynamic-isis` | ISISBirdSRDaemon | Bird2 IS-IS with SR-MPLS; needs a Bird build with IS-IS/MPLS |
 | `sr-mpls` | SRMPLSDaemon | Segment Routing with MPLS labels |
+
+`dynamic-isis` requires a Bird build with the IS-IS and MPLS protocols. The
+shipped `jariassuarez/sgnt:satellite` and `:ground-station` images ship stock
+Bird 2.x, which has neither; the daemon now fails fast with an actionable
+error instead of writing an unusable configuration.
 
 Custom routing daemons can be registered before initialization:
 

@@ -246,3 +246,24 @@ class TestRunPing:
         src.execute_command.return_value = None
         with pytest.raises(RuntimeError, match="returned no output"):
             run_ping(src, dst, PingConfig(count=2))
+
+
+_FULL_LOSS_OUTPUT = (
+    "2 packets transmitted, 0 received, 100% packet loss, time 1001ms\n"
+)
+
+
+def test_flow_accepts_exit_code_one_and_reports_full_loss():
+    src = _make_node("gs0", "10.0.0.1")
+    dst = _make_node("gs1", "10.0.0.2")
+    src.execute_command.return_value = _FULL_LOSS_OUTPUT
+    flow = PingFlow(src, dst, PingConfig(count=2))
+
+    flow.start()
+    deadline = time.time() + 2.0
+    while flow.status() == PingStatus.RUNNING and time.time() < deadline:
+        time.sleep(0.05)
+
+    assert flow.status() == PingStatus.DONE
+    assert flow.results().packet_loss_percent == 100.0
+    assert src.execute_command.call_args.kwargs["ok_exit_codes"] == (0, 1)

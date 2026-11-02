@@ -5,6 +5,10 @@ from __future__ import annotations
 import logging
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
+import grpc
+
+from satgonetem.proto import netem_pb2
 from satgonetem.utils.constants import MAX_WORKERS, ROUTE_APPLY_WORKERS
 
 from typing import TYPE_CHECKING
@@ -77,9 +81,10 @@ class LinkOpsMixin:
                 - 'add_time_total': Sum of actual add-operation durations
                 - 'add_time_wall': First add submission to last add completion
                 - 'add_time_per_link': Average actual add-operation duration
-                - 'update_time_total': Sum of actual update-operation durations
-                - 'update_time_wall': First update submission to last completion
-                - 'update_time_per_link': Average actual update-operation duration
+                - 'update_time_total': Batch wall time for LinkUpdateMany
+                - 'update_time_wall': Same batch wall time
+                - 'update_time_per_link': Batch wall time divided by updated_count
+                - 'update_error_count': Per-link failures reported by the batch
                 - 'delete_time_total': Sum of actual delete durations
                 - 'delete_time_wall': First delete submission to last completion
                 - 'delete_time_per_link': Average actual delete-operation duration
@@ -100,9 +105,10 @@ class LinkOpsMixin:
         processed_update = links_to_update if to_update else []
         processed_remove = links_to_remove if to_del else []
 
-        # Initialize timing information.  *_time_total is the sum of the actual
-        # per-operation durations; *_time_wall is the first-submit-to-last-
-        # completion span for that category.
+        # Initialize timing information. Add/delete use the sum of actual
+        # per-operation durations; their *_time_wall is the first-submit-to-
+        # last-completion span. Updates are one batch call, so all three update
+        # figures derive from that call's wall time.
         operation_stats = {
             "added_count": len(processed_add),
             "updated_count": len(processed_update),
@@ -114,6 +120,7 @@ class LinkOpsMixin:
             "update_time_total": 0.0,
             "update_time_wall": 0.0,
             "update_time_per_link": 0.0,
+            "update_error_count": 0,
             "delete_time_total": 0.0,
             "delete_time_wall": 0.0,
             "delete_time_per_link": 0.0,
@@ -125,6 +132,29 @@ class LinkOpsMixin:
         ):
             return operation_stats
 
+        # HIL links keep the per-link path (they are driven by the HIL
+        # manager, not the emulator). Everything else goes through the batch
+        # RPC so the server takes one topology lock for the whole burst.
+        hil_updates = []
+        batch_updates = []
+        hil_manager = getattr(self, "hil_manager", None)
+        for link in processed_update:
+            if hil_manager is not None and hil_manager.is_hil_link(link):
+                hil_updates.append(link)
+            else:
+                batch_updates.append(link)
+
+        update_batch_wall = 0.0
+        if batch_updates:
+            batch_start = time.perf_counter()
+            try:
+                _, batch_errors = LinkOpsMixin._apply_link_update_batch(
+                    self, batch_updates
+                )
+            finally:
+                update_batch_wall = time.perf_counter() - batch_start
+            operation_stats["update_error_count"] = batch_errors
+
         durations: dict[str, list[float]] = {
             "add": [],
             "update": [],
@@ -135,45 +165,61 @@ class LinkOpsMixin:
         submit_times: dict = {}
         future_categories: dict = {}
 
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = []
+        # Only create a pool when work remains after the batch call. A pure
+        # update burst must not wrap LinkUpdateMany in a thread pool.
+        if processed_remove or hil_updates or processed_add:
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = []
 
-            def submit(category: str, operation, link) -> None:
-                submitted_at = time.perf_counter()
-                future = executor.submit(operation, link)
-                submit_times[future] = submitted_at
-                future_categories[future] = category
-                started.setdefault(category, submitted_at)
-                futures.append(future)
+                def submit(category: str, operation, link) -> None:
+                    submitted_at = time.perf_counter()
+                    future = executor.submit(operation, link)
+                    submit_times[future] = submitted_at
+                    future_categories[future] = category
+                    started.setdefault(category, submitted_at)
+                    futures.append(future)
 
-            if to_del:
-                for link in processed_remove:
-                    submit("delete", self._execute_link_delete, link)
+                if to_del:
+                    for link in processed_remove:
+                        submit("delete", self._execute_link_delete, link)
 
-            if to_update:
-                for link in processed_update:
-                    submit("update", self._execute_link_update, link)
+                if to_update:
+                    for link in hil_updates:
+                        submit("update", self._execute_link_update, link)
 
-            if to_add:
-                for link in processed_add:
-                    submit("add", self._execute_link_add, link)
+                if to_add:
+                    for link in processed_add:
+                        submit("add", self._execute_link_add, link)
 
-            for future in as_completed(futures):
-                category = future_categories[future]
-                try:
-                    duration = future.result()
-                except Exception as e:
-                    logging.error(f"Link operation failed: {e}")
-                    duration = time.perf_counter() - submit_times[future]
-                else:
+                for future in as_completed(futures):
+                    category = future_categories[future]
                     try:
-                        duration = float(duration)
-                    except (TypeError, ValueError):
-                        # Mocks and non-timed callers do not return a duration.
+                        duration = future.result()
+                    except Exception as e:
+                        logging.error(f"Link operation failed: {e}")
                         duration = time.perf_counter() - submit_times[future]
+                    else:
+                        try:
+                            duration = float(duration)
+                        except (TypeError, ValueError):
+                            # Mocks and non-timed callers do not return a
+                            # duration.
+                            duration = time.perf_counter() - submit_times[future]
 
-                durations[category].append(duration)
-                finished[category] = time.perf_counter()
+                    durations[category].append(duration)
+                    finished[category] = time.perf_counter()
+
+        # Clear update flags once the batch and any HIL updates are done.
+        # _perform_local_link_operations clears them again as a safety net.
+        for link in processed_update:
+            try:
+                link.to_update = False
+            except (AttributeError, TypeError):
+                logging.error(
+                    "Failed to clear update flag for link %s--%s",
+                    getattr(getattr(link, "source", None), "name", "?"),
+                    getattr(getattr(link, "target", None), "name", "?"),
+                )
 
         for category, prefix in (
             ("add", "add"),
@@ -191,7 +237,97 @@ class LinkOpsMixin:
                     finished[category] - started[category]
                 )
 
+        if batch_updates:
+            # One batch call is the unit of work: wall, total and per-link
+            # figures all derive from the same elapsed time.
+            operation_stats["update_time_total"] = update_batch_wall
+            operation_stats["update_time_wall"] = update_batch_wall
+            operation_stats["update_time_per_link"] = (
+                update_batch_wall / len(processed_update)
+                if processed_update
+                else 0.0
+            )
+
         return operation_stats
+
+    def _apply_link_update_batch(self, links: list[Link]) -> tuple[int, int]:
+        """Update non-HIL links through ``LinkUpdateMany``.
+
+        Falls back to the per-link ``_execute_link_update`` path when the
+        launcher has no batch method or the server reports UNIMPLEMENTED. Other
+        gRPC failures propagate so a burst is never silently dropped.
+
+        Returns:
+            ``(updated, errors)`` counted from the per-link results.
+        """
+        launcher = getattr(self, "launcher", None)
+        if launcher is None:
+            logging.warning("launcher not set, skipping link update batch")
+            return 0, 0
+
+        update_many = getattr(launcher, "update_links", None)
+        if update_many is None or getattr(
+            self, "_link_update_many_unavailable", False
+        ):
+            for link in links:
+                self._execute_link_update(link)
+            return len(links), 0
+
+        try:
+            response = update_many(links)
+        except grpc.RpcError as exc:
+            if exc.code() != grpc.StatusCode.UNIMPLEMENTED:
+                raise
+            self._link_update_many_unavailable = True
+            logging.warning(
+                "LinkUpdateMany is not implemented by the server; "
+                "falling back to per-link LinkUpdate"
+            )
+            for link in links:
+                self._execute_link_update(link)
+            return len(links), 0
+
+        response_status = getattr(response, "status", None)
+        if (
+            response_status is not None
+            and response_status.code != netem_pb2.OK
+        ):
+            raise RuntimeError(
+                "LinkUpdateMany failed: "
+                + (response_status.error or "server returned a non-OK status")
+            )
+
+        results = list(getattr(response, "results", ()))
+        if len(results) != len(links):
+            raise RuntimeError(
+                "LinkUpdateMany returned "
+                f"{len(results)} result(s) for {len(links)} link(s)"
+            )
+
+        updated = 0
+        errors = 0
+        for link, result in zip(links, results):
+            status = getattr(result, "status", None)
+            if status is not None and status.code == netem_pb2.OK:
+                updated += 1
+                continue
+
+            errors += 1
+            source = getattr(getattr(link, "source", None), "name", "?")
+            target = getattr(getattr(link, "target", None), "name", "?")
+            peer1 = getattr(result, "peer1", "") or source
+            peer2 = getattr(result, "peer2", "") or target
+            detail = getattr(status, "error", "") if status is not None else ""
+            logging.error(
+                "LinkUpdateMany failed for %s<->%s (%s<->%s): %s",
+                source,
+                target,
+                peer1,
+                peer2,
+                detail or "unknown error",
+            )
+
+        return updated, errors
 
     def _update_routing_after_link_changes(
         self, new_links: List[Link], max_workers: int = ROUTE_APPLY_WORKERS

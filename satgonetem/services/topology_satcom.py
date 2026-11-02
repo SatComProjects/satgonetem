@@ -636,6 +636,15 @@ class TopologyManager(
         self.update_factor: float = 1.0
         self._stop_evt: threading.Event = threading.Event()
         self._sim_thread: Optional[threading.Thread] = None
+        self._lifecycle_lock: threading.Lock = threading.Lock()
+        # Most recent exception raised by a simulation loop tick (None when no
+        # tick has failed). Read via SimulationLoopMixin.get_last_simulation_error.
+        self.last_simulation_error: Optional[BaseException] = None
+        # Serializes loop ticks and API-driven topology mutations (next_step,
+        # move_to_time, simulate_link_failure). Reentrant because API entry
+        # points nest update_simulation; deliberately separate from
+        # _lifecycle_lock, which stop() holds while joining the loop thread.
+        self._simulation_lock: threading.RLock = threading.RLock()
 
         # Active routing daemon - set during init_routing() based on routing method
         self.routing_daemon: Optional[RoutingDaemon] = None
