@@ -1,5 +1,6 @@
 import enum
 import json
+import os
 import platform
 import shlex
 import subprocess
@@ -20,8 +21,13 @@ if TYPE_CHECKING:
     from satgonetem.models.node import Node
 
 
+# Default iperf3 server port pool: one port per concurrent flow of the
+# process, so it must hold the largest number of flows run at once.
+# SATGONETEM_IPERF3_PORT_RANGE ("first-last") or set_iperf3_port_range()
+# override it.
 _IPERF3_PORT_RANGE_START = 5201
-_IPERF3_PORT_RANGE_END = 5300
+_IPERF3_PORT_RANGE_END = 6200
+_IPERF3_PORT_RANGE_ENV = "SATGONETEM_IPERF3_PORT_RANGE"
 _IPERF3_SERVER_READY_TIMEOUT = 2.0
 _IPERF3_SERVER_READY_POLL_INTERVAL = 0.1
 _IPERF3_SERVER_START_FALLBACK = 0.5
@@ -92,7 +98,53 @@ class _Iperf3PortAllocator:
             return set(self._in_use)
 
 
-_IPERF3_PORT_ALLOCATOR = _Iperf3PortAllocator()
+def _port_range_from_env() -> tuple[int, int]:
+    """Return the port range from SATGONETEM_IPERF3_PORT_RANGE, or the default.
+
+    Raises:
+        ValueError: If the variable is set but not "first-last".
+    """
+    raw = os.environ.get(_IPERF3_PORT_RANGE_ENV, "").strip()
+    if not raw:
+        return _IPERF3_PORT_RANGE_START, _IPERF3_PORT_RANGE_END
+    try:
+        first, last = (int(part) for part in raw.split("-"))
+    except ValueError:
+        raise ValueError(
+            f"{_IPERF3_PORT_RANGE_ENV} must be 'first-last' (e.g. 5201-6200), "
+            f"got {raw!r}"
+        ) from None
+    return first, last
+
+
+_IPERF3_PORT_ALLOCATOR = _Iperf3PortAllocator(*_port_range_from_env())
+
+
+def set_iperf3_port_range(base_port: int, max_port: int) -> None:
+    """Replace the process-wide iperf3 server port pool.
+
+    The pool holds one port per concurrent flow: size it for the largest
+    number of iperf3 flows the process runs at once. Call it before the
+    flows start.
+
+    Raises:
+        ValueError: If the range is invalid.
+        RuntimeError: If flows currently hold ports from the current pool.
+    """
+    global _IPERF3_PORT_ALLOCATOR
+    new_allocator = _Iperf3PortAllocator(base_port, max_port)
+    in_use = _IPERF3_PORT_ALLOCATOR.in_use_ports
+    if in_use:
+        raise RuntimeError(
+            f"cannot change the iperf3 port range while {len(in_use)} "
+            "flow(s) hold ports"
+        )
+    _IPERF3_PORT_ALLOCATOR = new_allocator
+
+
+def get_iperf3_port_range() -> tuple[int, int]:
+    """Return the (first, last) ports of the process-wide iperf3 pool."""
+    return _IPERF3_PORT_ALLOCATOR._base_port, _IPERF3_PORT_ALLOCATOR._max_port
 
 
 def _is_iperf3_server_listening(
