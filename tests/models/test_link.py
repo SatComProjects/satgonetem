@@ -1,10 +1,11 @@
 """Tests for the Link model."""
 
 import pytest
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from satgonetem.link_budget.config import LinkBudgetConfig
-from satgonetem.models.link import Link, LinkBudgetService
+from satgonetem.models.link import Link, LinkBudgetService, satcom_distance_km
 from satgonetem.models.node import Node
 from satgonetem.models.interface import Interface
 
@@ -121,6 +122,13 @@ class TestLinkInit:
 
 class TestLinkDelay:
     """Tests for Link propagation delay calculation."""
+
+    def test_distance_km_property(self, gsl_link):
+        assert gsl_link.distance_km == pytest.approx(550.0)
+
+    def test_distance_km_tracks_distance_updates(self, gsl_link):
+        gsl_link.update_distance_and_delay(123_000.0)
+        assert gsl_link.distance_km == pytest.approx(123.0)
 
     def test_delay_computed_from_distance(self):
         node_a = Node("Sat0")
@@ -328,12 +336,48 @@ class TestLinkElevationAngle:
         assert elevation < 0.0
 
 
+class TestSatcomDistance:
+    """Tests for the V5 distance adapter."""
+
+    def test_returns_distance_km(self):
+        assert satcom_distance_km(SimpleNamespace(distance_km=123.5)) == 123.5
+
+    def test_returns_none_without_satcom_object(self):
+        assert satcom_distance_km(None) is None
+
+    def test_returns_none_for_missing_distance(self):
+        assert satcom_distance_km(SimpleNamespace(distance_km=None)) is None
+
+    def test_returns_none_for_negative_distance(self):
+        assert satcom_distance_km(SimpleNamespace(distance_km=-1.0)) is None
+
+    def test_returns_none_for_non_numeric_distance(self):
+        assert satcom_distance_km(SimpleNamespace(distance_km="bad")) is None
+
+
 class TestLinkSyncDistanceAndDelay:
     """Tests for Link.sync_distance_from_satcom_and_delay."""
 
     def test_raises_when_satcom_object_is_none(self, gsl_link):
         with pytest.raises(ValueError, match="Satcom object is not set"):
             gsl_link.sync_distance_from_satcom_and_delay()
+
+    def test_prefers_satcom_distance_over_positions(self, gsl_link):
+        gsl_link.satcom_object = SimpleNamespace(distance_km=123.0)
+        gsl_link.source.position = {}
+        gsl_link.target.position = {}
+
+        gsl_link.sync_distance_from_satcom_and_delay()
+
+        assert gsl_link.distance == pytest.approx(123_000.0)
+        assert gsl_link.distance_km == pytest.approx(123.0)
+
+    def test_falls_back_to_geometry_for_invalid_satcom_distance(self, gsl_link):
+        gsl_link.satcom_object = SimpleNamespace(distance_km=-1.0)
+
+        gsl_link.sync_distance_from_satcom_and_delay()
+
+        assert gsl_link.distance > 0.0
 
     def test_updates_delay_when_distance_changes(self, gsl_link):
         gsl_link.satcom_object = MagicMock()

@@ -387,8 +387,7 @@ leo = WalkerShellProperty(
         phase_difference_between_satellites=True,
     ),
     orbital_connectivity_property=OrbitalConnectivityProperty(
-        maximum_inter_satellite_count=4,
-        maximum_inter_satellite_range_distance=2000.0,
+        adjacent_inter_satellite_shifting=0,
     ),
     ground_object_white_list=[],
 )
@@ -402,8 +401,7 @@ meo = WalkerShellProperty(
         phase_difference_between_satellites=False,
     ),
     orbital_connectivity_property=OrbitalConnectivityProperty(
-        maximum_inter_satellite_count=2,
-        maximum_inter_satellite_range_distance=5000.0,
+        adjacent_inter_satellite_shifting=0,
     ),
     ground_object_white_list=[],
 )
@@ -444,9 +442,10 @@ topology = TopologyManager.from_simulation_manager(sim_manager)
 ## Using `SimulationProperty` directly (declarative alternative)
 
 If you prefer a declarative style but still want to build from Python, assemble a
-`SimulationProperty` directly from `sat_com_builder.models`.  Use `GroundObjectFile`
-to write ground-station CSVs, then pass the resulting path to
-`GroundObjectProperty`:
+`SimulationProperty` directly from `sat_com_builder.models`.  Prefer inline
+`GroundObjectData` entries (or `GroundObject.to_dict(inline=True)`) so no temporary
+CSV file is written and altitudes stay in metres. The file-based form below remains
+supported for existing workflows.
 
 ```python
 from sat_com_builder.models import (
@@ -471,7 +470,7 @@ conn = GroundConnectivityProperty(
     ground_to_space_connections_strategy="best-angle-until-disconnection",
     elevation_above_horizon=10,
     maximum_satellite_range_distance=1500.0,
-    shell_white_lists=["LEO"],
+    shells_whitelist=["LEO"],
     maximum_connected_satellites=3,
 )
 gs_obj = GroundObjectProperty(
@@ -491,8 +490,7 @@ shell = WalkerShellProperty(
         phase_difference_between_satellites=True,
     ),
     orbital_connectivity_property=OrbitalConnectivityProperty(
-        maximum_inter_satellite_count=4,
-        maximum_inter_satellite_range_distance=1500.0,
+        adjacent_inter_satellite_shifting=0,
     ),
     ground_object_white_list=["Ground Stations"],
 )

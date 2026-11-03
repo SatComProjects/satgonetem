@@ -3,12 +3,8 @@
 import pathlib
 import pytest
 
-from satgonetem.models.sat_com_models import (
-    ConnectivityProperties,
-    ConstellationProperty,
-    OrbitalConnectivityProperty,
-    WalkerShell,
-)
+from sat_com_builder.models import GroundConnectivityProperty
+
 from satgonetem.utils.project_builder import (
     GroundObject,
     GroundObjectFile,
@@ -24,39 +20,12 @@ from satgonetem.utils.project_builder import (
     _find_ground_object_by_name,
 )
 
-CONN_PROPS = ConnectivityProperties(
+CONN_PROPS = GroundConnectivityProperty(
     ground_to_space_connections_strategy="best-angle-until-disconnection",
     elevation_above_horizon=10,
     maximum_satellite_range_distance=1500.0,
-    shell_white_lists=["LEO"],
+    shells_whitelist=["LEO"],
     maximum_connected_satellites=3,
-)
-
-CONSTELLATION = ConstellationProperty(
-    identifier="LEO",
-    amount_of_orbit_plane=7,
-    amount_of_satellite_per_orbit_plane=11,
-    inclination=86.4,
-    mean_revolution_per_day=14.35,
-    phase_difference_between_satellites=True,
-)
-
-ORBITAL_CONN = OrbitalConnectivityProperty(
-    adjacent_inter_satellite_shifting=0,
-    maximum_inter_satellite_count=4,
-    maximum_inter_satellite_range_distance=1500.0,
-    maximum_ground_station_range=1200.0,
-    maximum_user_terminal_range=1000.0,
-    maximum_connected_ground_object=10000,
-    maximum_connected_user_terminal=500,
-    maximum_connected_ground_station=10,
-)
-
-WALKER_SHELL = WalkerShell(
-    type="star",
-    constellation_property=CONSTELLATION,
-    orbital_connectivity_property=ORBITAL_CONN,
-    ground_object_white_list=["Ground Stations"],
 )
 
 
@@ -65,11 +34,11 @@ class TestGroundStationEntry:
 
     def test_to_csv_line(self):
         entry = GroundStationEntry(0, "Berlin", 52.52, 13.405, 0.034)
-        assert entry.to_csv_line() == "0,Berlin,52.52,13.405,0.034"
+        assert entry.to_csv_line() == "0,Berlin,52.52,13.405,34"
 
     def test_to_csv_line_negative_coordinates(self):
         entry = GroundStationEntry(1, "Punta Arenas", -53.1638, -70.9171, 0.034)
-        assert entry.to_csv_line() == "1,Punta Arenas,-53.1638,-70.9171,0.034"
+        assert entry.to_csv_line() == "1,Punta Arenas,-53.1638,-70.9171,34"
 
 
 class TestGroundObjectFile:
@@ -96,8 +65,8 @@ class TestGroundObjectFile:
         gof = self._make_file()
         path = gof.write(str(tmp_path))
         lines = pathlib.Path(path).read_text().splitlines()
-        assert lines[0] == "0,Berlin,52.52,13.405,0.034"
-        assert lines[1] == "1,London,51.507,-0.127,0.011"
+        assert lines[0] == "0,Berlin,52.52,13.405,34"
+        assert lines[1] == "1,London,51.507,-0.127,11"
 
     def test_write_returns_absolute_path(self, tmp_path):
         gof = self._make_file()
@@ -108,6 +77,14 @@ class TestGroundObjectFile:
         gof = GroundObjectFile("Empty Group", [])
         path = gof.write(str(tmp_path))
         assert pathlib.Path(path).read_text() == ""
+
+    def test_from_csv_converts_metres_to_km(self, tmp_path):
+        path = tmp_path / "ground_stations.txt"
+        path.write_text("0,Berlin,52.52,13.405,34\n")
+
+        gof = GroundObjectFile.from_csv("Ground Stations", str(path))
+
+        assert gof.entries[0].elevation_km == pytest.approx(0.034)
 
 
 class TestGroundObject:
@@ -149,7 +126,22 @@ class TestGroundObject:
         conn = result["connectivity_properties"]
         assert conn["elevation_above_horizon"] == 10
         assert conn["maximum_connected_satellites"] == 3
-        assert conn["shell_white_lists"] == ["LEO"]
+        assert conn["shells_whitelist"] == ["LEO"]
+
+    def test_to_dict_inline_objects(self, tmp_path):
+        go = self._make_ground_object()
+        result = go.to_dict(str(tmp_path), inline=True)
+
+        assert "data_file" not in result
+        assert result["ground_objects"] == [
+            {
+                "id": 0,
+                "label": "Berlin",
+                "latitude": 52.52,
+                "longitude": 13.405,
+                "altitude": 34.0,
+            }
+        ]
 
     def test_to_dict_user_terminal_type(self, tmp_path):
         entries = [GroundStationEntry(0, "Terminal A", 10.0, 20.0, 0.01)]
@@ -208,6 +200,17 @@ class TestSimulationDates:
         )
 
         assert project.end_date == "01/01/2024 02:00:00"
+
+    def test_test_project_uses_inline_ground_objects(self):
+        project = create_test_project(start_date="01/01/2024 00:00:00")
+
+        ground_object = project.ground_objects_properties[0]
+        assert ground_object.data_file is None
+        assert ground_object.ground_objects[0].altitude == pytest.approx(34.0)
+        assert ground_object.connectivity_properties.shells_whitelist == ["LEO"]
+
+        orbital = project.walker_shells[0].orbital_connectivity_property
+        assert "maximum_inter_satellite_count" not in orbital.model_dump()
 
     def test_empty_project_end_date_is_start_plus_ten_minutes(self):
         project = create_empty_project(start_date="02/02/2025 06:30:00")

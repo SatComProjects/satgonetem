@@ -131,11 +131,8 @@ topology.start()                 # begins simulation loop (topology updates ever
 ### Defining a custom constellation
 
 ```python
-from satgonetem.utils.project_builder import (
-    GroundStationEntry,
-    GroundObjectFile,
-)
 from sat_com_builder.models import (
+    GroundObjectData,
     SimulationProperty,
     GroundObjectProperty,
     GroundConnectivityProperty,
@@ -144,21 +141,19 @@ from sat_com_builder.models import (
 )
 from sat_com_constellation.models import WalkerConstellationProperty
 
-# Ground stations
-entries = [
-    GroundStationEntry(0, "Berlin", 52.52, 13.405, 0.034),
-    GroundStationEntry(1, "London", 51.507, -0.127, 0.011),
-]
-gs_file = GroundObjectFile("Ground Stations", entries)
+# Ground stations (inline, altitude in metres)
 ground_obj = GroundObjectProperty(
-    identifier=gs_file.identifier,
-    data_file=gs_file.write("/tmp"),
+    identifier="Ground Stations",
     type="ground_station",
+    ground_objects=[
+        GroundObjectData(id=0, label="Berlin", latitude=52.52, longitude=13.405, altitude=34.0),
+        GroundObjectData(id=1, label="London", latitude=51.507, longitude=-0.127, altitude=11.0),
+    ],
     connectivity_properties=GroundConnectivityProperty(
         ground_to_space_connections_strategy="best-angle-until-disconnection",
         elevation_above_horizon=10,
         maximum_satellite_range_distance=1500.0,
-        shell_white_lists=["LEO"],
+        shells_whitelist=["LEO"],
         maximum_connected_satellites=3,
     ),
 )

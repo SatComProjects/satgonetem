@@ -64,7 +64,7 @@ conn_props = GroundConnectivityProperty(
     ground_to_space_connections_strategy="best-angle-until-disconnection",
     elevation_above_horizon=10,
     maximum_satellite_range_distance=1500.0,
-    shell_white_lists=["LEO"],
+    shells_whitelist=["LEO"],
     maximum_connected_satellites=3,
 )
 
@@ -89,22 +89,31 @@ gs_file = GroundObjectFile.from_csv(
 ```
 
 `from_csv` expects rows in this format (no header):
-`index,name,latitude,longitude,elevation_km`.
+`index,name,latitude,longitude,elevation_m`.
 
 `GroundObjectFile.identifier` becomes the key used in `ground_object_white_list` on the
 shell. The identifier string must match exactly.
 
+For programmatic projects, prefer inline ground objects: `GroundObject.to_dict(inline=True)`
+emits a `ground_objects` list instead of writing a temporary CSV file.
+
 **Ground-to-space connection strategies**
 
-| Strategy name                          | Description                                      |
-|----------------------------------------|--------------------------------------------------|
-| `best-angle-until-disconnection`       | Connect to the satellite with the best elevation angle; hold until the link drops |
-| `best-range-until-disconnection`       | Connect to the nearest satellite; hold until the link drops |
-| `best-multi-angle-until-disconnection` | Like best-angle but allows multiple simultaneous links |
-| `longest-connection-time-strategy`     | Prefer satellites that will remain visible longest |
-| `weighted-connection`                  | Score-based selection combining angle and range  |
-| `everything-visible`                   | Connect to all satellites above the horizon      |
-| `everything-in-range`                  | Connect to all satellites within range limit     |
+| Strategy name | Description |
+|---|---|
+| `best-angle-until-disconnection` | Connect to the best elevation angle; hold until the link drops |
+| `best-angle-until-disconnection-ordered` | Same, with shell whitelist order as priority |
+| `best-angle-until-disconnection-prefer-bigger-shell` | Prefer larger shells while holding the link |
+| `best-angle-until-disconnection-prefer-lower-shell` | Prefer lower shells while holding the link |
+| `best-angle` | Connect to the best elevation angle; recompute each tick |
+| `best-angle-ordered` | Same, with shell whitelist order as priority |
+| `everything-visible` | Connect to all satellites above the horizon |
+
+The distance-based strategies `everything-in-range` and
+`best-range-until-disconnection` are deprecated by satComTopology V5 and are no
+longer listed as supported values. The emulator-specific
+`longest-connection-time-strategy` and `weighted-connection` remain registered
+for compatibility but are deprecated; prefer the elevation-based strategies.
 
 ### 2. Define the constellation shell
 
@@ -123,10 +132,6 @@ constellation = WalkerConstellationProperty(
 
 isl_props = OrbitalConnectivityProperty(
     adjacent_inter_satellite_shifting=0,
-    maximum_inter_satellite_count=4,
-    maximum_inter_satellite_range_distance=1500.0,
-    maximum_ground_station_range=1200.0,
-    maximum_user_terminal_range=1000.0,
     maximum_connected_ground_object=10000,
     maximum_connected_user_terminal=500,
     maximum_connected_ground_station=10,
@@ -161,13 +166,14 @@ to.
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `adjacent_inter_satellite_shifting` | int | `0` | Phase offset between adjacent planes for ISLs |
-| `maximum_inter_satellite_count` | int | `4` | Max ISLs per satellite |
-| `maximum_inter_satellite_range_distance` | float | `None` | Max ISL distance in km |
-| `maximum_ground_station_range` | float | `None` | Max ground-station link distance in km |
-| `maximum_user_terminal_range` | float | `None` | Max user-terminal link distance in km |
 | `maximum_connected_ground_object` | int | `None` | Max ground objects per satellite |
 | `maximum_connected_user_terminal` | int | `None` | Max user terminals per satellite |
 | `maximum_connected_ground_station` | int | `None` | Max ground stations per satellite |
+
+The former `maximum_inter_satellite_count`,
+`maximum_inter_satellite_range_distance`, `maximum_ground_station_range`, and
+`maximum_user_terminal_range` fields are ignored with a `FutureWarning` by
+satComTopology V5. They no longer control connectivity.
 
 ### 3. Assemble the project
 
@@ -195,7 +201,9 @@ project = SimulationProperty(
 | `movement_model` | str | `"pyorbital"` | Orbital propagation backend |
 | `distance_model` | str | `"sklearn"` | Distance computation backend |
 | `disable_ground_station_link_preload` | bool | `False` | Disable link preload optimisation |
-| `static_ground_station_link_mode` | bool | `False` | Freeze GSL topology after first compute |
+| `dawn_dusk_sso_shells` | list | `[]` | Optional dawn-dusk SSO shells |
+| `inter_satellite_link_connection_strategy` | str | `"intra-shell-static-connectivity"` | `intra-shell-static-connectivity` or `inter-shell-sso-priority` |
+| `optical_inter_satellite_link_model` | str | `"basic"` | `basic` or `advanced` optical ISL model |
 
 ### 4. Create the topology manager
 
@@ -601,7 +609,7 @@ Node IDs follow these conventions:
 
 Pass multiple `WalkerShellProperty` objects to model multi-orbit constellations. Each shell
 must have a distinct `identifier` in its `WalkerConstellationProperty`. Ground objects
-reference shells by that identifier via `shell_white_lists` (in `GroundConnectivityProperty`)
+reference shells by that identifier via `shells_whitelist` (in `GroundConnectivityProperty`)
 and `ground_object_white_list` (on `WalkerShellProperty`).
 
 ```python
@@ -617,7 +625,7 @@ meo_shell = WalkerShellProperty(
 )
 
 conn_props = GroundConnectivityProperty(
-    shell_white_lists=["LEO", "MEO"],  # ground stations can connect to both shells
+    shells_whitelist=["LEO", "MEO"],  # ground stations can connect to both shells
     ...
 )
 
@@ -643,7 +651,7 @@ ut_conn = GroundConnectivityProperty(
     ground_to_space_connections_strategy="best-angle-until-disconnection",
     elevation_above_horizon=5,
     maximum_satellite_range_distance=1000.0,
-    shell_white_lists=["LEO"],
+    shells_whitelist=["LEO"],
     maximum_connected_satellites=1,
 )
 ut_obj = GroundObjectProperty(
@@ -654,5 +662,7 @@ ut_obj = GroundObjectProperty(
 )
 ```
 
-The shell's `orbital_connectivity_property.maximum_user_terminal_range` and
-`maximum_connected_user_terminal` fields control how satellites treat user terminal links.
+The shell's `maximum_connected_user_terminal` field controls how satellites treat user
+terminal links. SatGoNetEm currently creates emulator nodes for ground stations only;
+user terminals and points of presence are valid topology objects but are not yet
+first-class emulator nodes (see #139).

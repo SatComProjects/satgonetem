@@ -14,6 +14,7 @@ import pathlib
 from sat_com_builder.configuration_manager import BaseConfigurationManager
 from sat_com_builder.models import (
     GroundConnectivityProperty,
+    GroundObjectData,
     GroundObjectProperty,
     OrbitalConnectivityProperty,
     SimulationProperty,
@@ -55,10 +56,16 @@ class GroundStationEntry:
     def to_csv_line(self) -> str:
         """Return the entry formatted as a single CSV line (no newline).
 
+        The satComTopology file format stores elevation in metres.
+
         Returns:
-            Comma-separated string: index,name,latitude,longitude,elevation_km.
+            Comma-separated string: index,name,latitude,longitude,elevation_m.
         """
-        return f"{self.index},{self.name},{self.latitude},{self.longitude},{self.elevation_km}"
+        elevation_m = self.elevation_km * 1000.0
+        return (
+            f"{self.index},{self.name},{self.latitude},{self.longitude},"
+            f"{elevation_m:g}"
+        )
 
 
 class GroundObjectFile:
@@ -66,7 +73,7 @@ class GroundObjectFile:
 
     Entries are written in CSV format (no header) compatible with the
     sat_com_topology ground station file format:
-        index,name,latitude,longitude,elevation_km
+        index,name,latitude,longitude,elevation_m
 
     Args:
         identifier: Human-readable name used as the filename stem and as the
@@ -105,7 +112,7 @@ class GroundObjectFile:
         """Create a GroundObjectFile from a CSV file.
 
         The CSV file should have no header and follow the format:
-            index,name,latitude,longitude,elevation_km
+            index,name,latitude,longitude,elevation_m
         Args:
             identifier: Human-readable name for this ground object file.
             csv_path: Path to the input CSV file.
@@ -127,7 +134,7 @@ class GroundObjectFile:
                     name=name,
                     latitude=float(lat),
                     longitude=float(lon),
-                    elevation_km=float(elev),
+                    elevation_km=float(elev) / 1000.0,
                 )
                 entries.append(entry)
         return cls(identifier=identifier, entries=entries)
@@ -155,25 +162,49 @@ class GroundObject:
         self.object_type = object_type
         self.connectivity_properties = connectivity_properties
 
-    def to_dict(self, base_dir: str = "/tmp") -> Dict[str, Any]:
-        """Write the ground object file and return the configuration dict entry.
+    def to_dict(self, base_dir: str = "/tmp", inline: bool = False) -> Dict[str, Any]:
+        """Return the configuration dict entry for this ground object set.
 
         Args:
-            base_dir: Directory in which to write the ground object CSV file.
+            base_dir: Directory in which to write the ground object CSV file
+                when ``inline`` is False.
+            inline: When True, emit ``ground_objects`` in the configuration
+                instead of writing and referencing a data file. This is the
+                preferred form for programmatic projects because it avoids
+                temporary files and unit conversions at the file boundary.
 
         Returns:
             Dict matching the ground_objects_properties entry schema expected
             by create_satcom_project().
 
         Raises:
-            OSError: If the underlying file cannot be written.
+            OSError: If the underlying file cannot be written and ``inline`` is
+                False.
         """
+        properties = self.connectivity_properties.model_dump()
+        if inline:
+            return {
+                "identifier": self.ground_object_file.identifier,
+                "type": self.object_type,
+                "ground_objects": [
+                    GroundObjectData(
+                        id=entry.index,
+                        label=entry.name,
+                        latitude=entry.latitude,
+                        longitude=entry.longitude,
+                        altitude=entry.elevation_km * 1000.0,
+                    ).model_dump()
+                    for entry in self.ground_object_file.entries
+                ],
+                "connectivity_properties": properties,
+            }
+
         file_path = self.ground_object_file.write(base_dir)
         return {
             "identifier": self.ground_object_file.identifier,
             "data_file": file_path,
             "type": self.object_type,
-            "connectivity_properties": self.connectivity_properties.model_dump(),
+            "connectivity_properties": properties,
         }
 
 
@@ -802,10 +833,9 @@ def create_test_project(
         A fully configured SimulationProperty.
 
     Raises:
-        OSError: If the ground object CSV file cannot be written.
+        OSError: If ``ground_stations_file`` cannot be read.
     """
     start_date, end_date = _resolve_simulation_dates(start_date, end_date)
-    ground_files_dir = "/tmp/"
     if len(ground_stations_file) == 0:
         ground_stations = [
             GroundStationEntry(0, "Berlin", 52.52, 13.405, 0.034),
@@ -814,29 +844,25 @@ def create_test_project(
             GroundStationEntry(3, "Rome", 41.902, 12.496, 0.021),
             GroundStationEntry(4, "Madrid", 40.416, -3.703, 0.667),
         ]
-        gs_file = GroundObjectFile("Ground Stations", ground_stations)
-        data_file = gs_file.write(ground_files_dir)
-
-    elif len(ground_stations_file) > 0:
-
+    else:
         ground_stations = GroundObjectFile.from_csv(
             identifier="Ground Stations", csv_path=ground_stations_file
         ).entries
 
-        gs_file = GroundObjectFile("Ground Stations", ground_stations)
-        data_file = gs_file.write(ground_files_dir)
-
-    ground_object_property = GroundObjectProperty(
-        identifier=gs_file.identifier,
-        data_file=data_file,
-        type="ground_station",
-        connectivity_properties=GroundConnectivityProperty(
+    gs_file = GroundObjectFile("Ground Stations", ground_stations)
+    ground_object = GroundObject(
+        gs_file,
+        "ground_station",
+        GroundConnectivityProperty(
             ground_to_space_connections_strategy="best-angle-until-disconnection",
             elevation_above_horizon=10,
             maximum_satellite_range_distance=1500.0,
-            shell_white_lists=["LEO"],
+            shells_whitelist=["LEO"],
             maximum_connected_satellites=1,
         ),
+    )
+    ground_object_property = GroundObjectProperty(
+        **ground_object.to_dict(inline=True)
     )
 
     shell = WalkerShellProperty(
@@ -851,10 +877,6 @@ def create_test_project(
         ),
         orbital_connectivity_property=OrbitalConnectivityProperty(
             adjacent_inter_satellite_shifting=0,
-            maximum_inter_satellite_count=4,
-            maximum_inter_satellite_range_distance=1500.0,
-            maximum_ground_station_range=1200.0,
-            maximum_user_terminal_range=1000.0,
             maximum_connected_ground_object=10000,
             maximum_connected_user_terminal=500,
             maximum_connected_ground_station=10,
@@ -889,9 +911,6 @@ def create_empty_project(
 
     Returns:
         A fully configured SimulationProperty.
-
-    Raises:
-        OSError: If the ground object CSV file cannot be written.
     """
     start_date, end_date = _resolve_simulation_dates(start_date, end_date)
 

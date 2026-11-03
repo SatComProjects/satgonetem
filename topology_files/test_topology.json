@@ -14,11 +14,11 @@
           "elevation_above_horizon": 10.0,
           "maximum_satellite_range_distance": 1500.0,
           "maximum_satellite_connected_count": null,
-          "shell_white_lists": [
-            "LEO"
-          ],
           "maximum_connected_satellites": 3,
-          "ground_to_space_connections_strategy": "everything-visible"
+          "ground_to_space_connections_strategy": "everything-visible",
+          "shells_whitelist": [
+            "LEO"
+          ]
         }
       }
     ],
@@ -34,11 +34,7 @@
           "mean_revolution_per_day": 14.35
         },
         "orbital_connectivity_property": {
-          "maximum_inter_satellite_count": 4,
           "adjacent_inter_satellite_shifting": 0,
-          "maximum_inter_satellite_range_distance": 1500.0,
-          "maximum_ground_station_range": 1200.0,
-          "maximum_user_terminal_range": 1000.0,
           "maximum_connected_ground_object": 10000,
           "maximum_connected_user_terminal": 500,
           "maximum_connected_ground_station": 10
@@ -49,7 +45,6 @@
       }
     ],
     "disable_ground_station_link_preload": false,
-    "static_ground_station_link_mode": false,
     "ground_connectivity_properties": []
   },
   "network_config": {
@@ -65,7 +60,7 @@
   },
   "ground_files": {
     "/tmp/ground_stations.txt": {
-      "content": "0,Berlin,52.52,13.405,0.034\n1,London,51.507,-0.127,0.011\n2,Paris,48.856,2.352,0.035\n3,Rome,41.902,12.496,0.021\n4,Madrid,40.416,-3.703,0.667\n",
+      "content": "0,Berlin,52.52,13.405,34\n1,London,51.507,-0.127,11\n2,Paris,48.856,2.352,35\n3,Rome,41.902,12.496,21\n4,Madrid,40.416,-3.703,667\n",
       "basename": "ground_stations.txt"
     }
   }

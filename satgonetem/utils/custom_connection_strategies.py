@@ -27,12 +27,12 @@ from sat_com_trajectopy.angle_utils import get_elevation_angle
 @register_ground_to_space_connectivity_strategy
 class LongestConnectionTimeStrategy(GroundToSpaceConnectionStrategy):
     """
-    Connection strategy that connects ground objects to the furthest away satellites that are getting closer.
-    It sorts the visible satellites by their elevation above horizon and then checks which of them is getting closer to the ground object.
-    If a satellite is getting closer, it is added to the list of considered satellites. The strategy then connects the ground object to the best considered satellite.
-    If no satellites are getting closer, it connects the ground object to the best visible satellite.
-    If the ground object already has a connection to a satellite, it will keep that connection as long as it is still visible.
-    Minimizes number of handover
+    [DEPRECATED] Connection strategy that connects ground objects to the furthest away satellites that are getting closer.
+
+    Prefer satComTopology's elevation-based strategies, in particular
+    ``best-angle-until-disconnection``, which estimate the link duration in
+    batch at link creation. This strategy is retained for compatibility and
+    custom experiments only.
     """
 
     strategy_name = "longest-connection-time-strategy"
@@ -307,26 +307,15 @@ class LongestConnectionTimeStrategy(GroundToSpaceConnectionStrategy):
             return computed_ground_object_connections_result
 
         list_of_satellites = []
-        import time as _t
         for visible_satellite in visible_satellites:
             if id(visible_satellite.satellite) in retained_satellite_ids:
                 # Already kept above; do not create a duplicate connection.
                 continue
-            tic = _t.perf_counter()
             time_until_disconnection = self.estimate_time_until_disconnection_2(
                 ground_object=ground_object,
                 satellite=visible_satellite.satellite,
                 minimum_elevation=ground_object.ground_object_domain.elevation_above_horizon,
             )
-            tac = _t.perf_counter()
-            time_until_disconnection_2 = self.estimate_time_until_disconnection_2(
-                ground_object=ground_object,
-                satellite=visible_satellite.satellite,
-                minimum_elevation=ground_object.ground_object_domain.elevation_above_horizon,
-            )
-            print(time_until_disconnection, time_until_disconnection_2)
-            toc = _t.perf_counter()
-            print(f"First method took {tac - tic:.4f} seconds, second method took {toc - tac:.4f} seconds for satellite {visible_satellite.satellite.satellite_name}")
             if time_until_disconnection is None:
                 # Defensive guard: older/overridden estimators may still return None,
                 # which cannot be compared while sorting. Treat it as the longest
@@ -363,8 +352,10 @@ class LongestConnectionTimeStrategy(GroundToSpaceConnectionStrategy):
 @register_ground_to_space_connectivity_strategy
 class WeightedConnection(GroundToSpaceConnectionStrategy):
     """
-    Connection strategy that connects ground objects to the best visible satellites based on their elevation above horizon AND the number of already connected ground
-    stations to the satellite.
+    [DEPRECATED] Connection strategy weighted by elevation and existing load.
+
+    Prefer satComTopology's elevation-based strategies. This strategy is
+    retained for compatibility and custom experiments only.
     """
 
     strategy_name = "weighted-connection"

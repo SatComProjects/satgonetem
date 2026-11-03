@@ -8,7 +8,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from satgonetem.models.ground_station import GroundStation
 from satgonetem.models.satellite import Satellite
-from satgonetem.models.link import Link
+from satgonetem.models.link import Link, satcom_distance_km
 from satgonetem.services.mixins.simulation_loop import ensure_simulation_lock
 from satgonetem.utils.timing import StageTimings, measure_stage
 from satgonetem.utils.utils import distance_3d_km, distance_3d_km_many
@@ -244,7 +244,12 @@ class TopologySyncMixin:
         }
 
     def _refresh_link_distances(self, links: list[Link]) -> int:
-        """Refresh link distances and delays in one vectorized batch.
+        """Refresh link distances from V5, falling back to geometry.
+
+        V5 computes the straight-line distance once per tick and stores it on
+        the link. Use it directly for every link that has one; only links
+        without a V5 distance (for example static ground-object links) fall
+        back to the geometric calculation.
 
         Args:
             links: Existing Link objects whose endpoints have fresh positions.
@@ -252,6 +257,31 @@ class TopologySyncMixin:
         Returns:
             Number of links that could not be refreshed.
         """
+        if not links:
+            return 0
+
+        errors = 0
+        fallback_links: list[Link] = []
+        for link in links:
+            distance_km = satcom_distance_km(getattr(link, "satcom_object", None))
+            if distance_km is None:
+                fallback_links.append(link)
+                continue
+            try:
+                link.update_distance_and_delay(distance_km * 1000.0)
+            except Exception as exc:
+                errors += 1
+                logging.error(
+                    "Error refreshing distance for %s--%s: %s",
+                    link.source.name,
+                    link.target.name,
+                    exc,
+                )
+
+        return errors + self._refresh_link_distances_from_positions(fallback_links)
+
+    def _refresh_link_distances_from_positions(self, links: list[Link]) -> int:
+        """Refresh distances geometrically for links without a V5 distance."""
         if not links:
             return 0
 
@@ -403,8 +433,9 @@ class TopologySyncMixin:
         link_type = getattr(sat_com_link, "type", "Link")
         link_is_active = not getattr(sat_com_link, "disabled", True)
 
-        link_distance = (
-            distance_3d_km(
+        link_distance_km = satcom_distance_km(sat_com_link)
+        if link_distance_km is None:
+            link_distance_km = distance_3d_km(
                 lat1=link_source.position["latitude"],
                 lon1=link_source.position["longitude"],
                 alt1=link_source.position["altitude"],
@@ -412,8 +443,7 @@ class TopologySyncMixin:
                 lon2=link_destination.position["longitude"],
                 alt2=link_destination.position["altitude"],
             )
-            * 1000
-        )
+        link_distance = link_distance_km * 1000.0
 
         link_direction_id = getattr(
             sat_com_link,
@@ -423,6 +453,7 @@ class TopologySyncMixin:
         link_direction_map = {
             InterSatelliteLinkDirection.ORBITAL: "Orbital",
             InterSatelliteLinkDirection.ADJACENT: "Adjacent",
+            InterSatelliteLinkDirection.INTER_SHELL: "InterShell",
             InterSatelliteLinkDirection.UNDEFINED: "Undefined",
         }
 

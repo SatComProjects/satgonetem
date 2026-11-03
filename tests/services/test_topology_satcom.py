@@ -4,12 +4,14 @@ import random
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import networkx as nx
 import pytest
 
 from satgonetem.services.topology_satcom import TopologyManager
 from satgonetem.link_budget.config import AntennaConfig, LinkBudgetConfig
 from satgonetem.models.node import Node
 from satgonetem.models.link import Link
+from sat_com_model.models import InterSatelliteLinkDirection
 
 
 @pytest.fixture
@@ -140,6 +142,60 @@ class TestSetAntenna:
 class TestGetCurrentGraph:
     """Routing graph must exclude links that are not active."""
 
+    def test_requests_a_light_graph(self, topology_manager):
+        with patch.object(
+            topology_manager.nx_adapter,
+            "create_full_networkx_graph",
+            wraps=topology_manager.nx_adapter.create_full_networkx_graph,
+        ) as mocked:
+            topology_manager.get_current_graph()
+
+        kwargs = mocked.call_args.kwargs
+        assert kwargs["export_object_position"] is False
+        assert kwargs["export_model_data"] is False
+        assert kwargs["enable_export_flows_data"] is False
+
+    def test_drops_unsupported_topology_objects(self, topology_manager):
+        graph = nx.Graph()
+        sat_uid = next(iter(topology_manager.satellites))
+        graph.add_node(sat_uid)
+        graph.add_node(999_999, type="UserTerminal")
+        graph.add_edge(sat_uid, 999_999, type="UserTerminalLink", distance_km=1.0)
+
+        with patch.object(
+            topology_manager.nx_adapter,
+            "create_full_networkx_graph",
+            return_value=graph,
+        ):
+            result = topology_manager.get_current_graph()
+
+        assert sat_uid in result
+        assert 999_999 not in result
+
+    @pytest.mark.parametrize("distance_km", [None, -5.0, "bad", 0.0])
+    def test_invalid_distance_falls_back_to_unit_weight(
+        self, topology_manager, distance_km
+    ):
+        gsl = next(
+            link
+            for link in topology_manager.links.values()
+            if link.type == "GroundStationLink"
+        )
+        u = gsl.source.satcom_object.topology_uniq_id
+        v = gsl.target.satcom_object.topology_uniq_id
+        graph = nx.Graph()
+        graph.add_edge(u, v, type="GroundStationLink", distance_km=distance_km)
+        topology_manager.preference = "latency_no_preference"
+
+        with patch.object(
+            topology_manager.nx_adapter,
+            "create_full_networkx_graph",
+            return_value=graph,
+        ):
+            result = topology_manager.get_current_graph()
+
+        assert result[u][v]["weight"] == 1.0
+
     def test_removes_inactive_ground_station_edge(self, topology_manager):
         gsl = next(
             link
@@ -166,6 +222,27 @@ class TestGetCurrentGraph:
         gsl.satcom_object.disabled = True
 
         assert not topology_manager.get_current_graph().has_edge(u, v)
+
+
+class TestCreateLinkFromSatcomLink:
+    """Mapping from satComTopology links to emulator links."""
+
+    def test_maps_inter_shell_direction(self, topology_manager):
+        satellites = list(topology_manager.satellites.values())[:2]
+        sat_com_link = SimpleNamespace(
+            source=satellites[0].satcom_object,
+            destination=satellites[1].satcom_object,
+            type="InterSatelliteLink",
+            disabled=False,
+            distance_km=1_000.0,
+            inter_satellite_direction=InterSatelliteLinkDirection.INTER_SHELL,
+        )
+
+        link = topology_manager._create_link_from_satcom_link(sat_com_link)
+
+        assert link.direction == "InterShell"
+        assert link.distance == pytest.approx(1_000_000.0)
+        assert link.distance_km == pytest.approx(1_000.0)
 
 
 class TestSimulateLinkFailure:

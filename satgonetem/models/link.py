@@ -1,4 +1,6 @@
 import logging
+import math
+from numbers import Real
 from typing import Optional
 
 from satgonetem.link_budget.config import LinkBudgetConfig
@@ -20,6 +22,27 @@ logger = logging.getLogger(__name__)
 # Default frequencies for satellite-ground links (GHz)
 DEFAULT_DOWNLINK_FREQ_GHZ = 19.0
 DEFAULT_UPLINK_FREQ_GHZ = 14.25
+
+
+def satcom_distance_km(satcom_object: SatComLink | None) -> Optional[float]:
+    """Return the distance carried by a satComTopology link, in kilometres.
+
+    V5 stores ``distance_km`` on every link; ``None`` or a negative value means
+    the simulation did not provide one (for example a static ground-object
+    link). The caller can then fall back to a geometric calculation.
+    """
+    if satcom_object is None:
+        return None
+
+    value = getattr(satcom_object, "distance_km", None)
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, Real):
+        return None
+    distance_km = float(value)
+    if distance_km < 0 or not math.isfinite(distance_km):
+        return None
+    return distance_km
 
 
 class Link:
@@ -239,6 +262,11 @@ class Link:
 
     # Sync helpers
 
+    @property
+    def distance_km(self) -> float:
+        """Link distance in kilometres."""
+        return self.distance / 1000.0
+
     def update_distance_and_delay(self, new_distance: float) -> None:
         """Update distance and delay from an already-computed distance.
 
@@ -264,6 +292,11 @@ class Link:
         """
         if self.satcom_object is None:
             raise ValueError("Satcom object is not set")
+
+        satcom_distance = satcom_distance_km(self.satcom_object)
+        if satcom_distance is not None:
+            self.update_distance_and_delay(satcom_distance * 1000.0)
+            return None
 
         new_distance = (
             distance_3d_km(

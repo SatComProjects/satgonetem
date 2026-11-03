@@ -9,6 +9,10 @@ rebuilds link keys, refreshes distances, diffs add/update/remove sets, and
 updates the emulator's link objects. Later phases will compare the event-driven
 path against these numbers.
 
+This snapshot predates the Phase 1 graph and distance cleanup. Phase 1 removes
+node positions/model data from the routing graph and reads V5's precomputed
+`distance_km`; re-run the benchmark after Phase 1 to measure that delta.
+
 ## Scope and method
 
 - satComTopology `5.0.3`, Python `3.14.8`, one process per scenario.
@@ -110,6 +114,12 @@ What this says:
   installation are separate costs and must be measured with GoNetEm running.
 - `event_collection` is a placeholder in Phase 0; Phase 2 will replace it with
   the EventBus drain.
+
+After Phase 1, the routing graph no longer exports node positions or model data,
+and link distances come from V5's `distance_km`. The graph build p50 drops from
+about 0.019 s to 0.016 s at 3,360 satellites (about 17%), while the total tick
+p50 remains around 0.16 s because `link_sync` and `link_local_ops` still
+dominate. Phase 2 must reduce the update work, not only the graph build.
 
 ## Reading stage timings
 

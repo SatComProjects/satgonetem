@@ -649,14 +649,17 @@ class TopologyManager(
 
         ## Connection strategies
         self.allowed_strategies = [
+            # Emulator-specific strategies, retained for compatibility.
             "weighted-connection",
             "longest-connection-time-strategy",
+            # satComTopology V5 elevation-based strategies.
+            "best-angle",
+            "best-angle-ordered",
             "best-angle-until-disconnection",
+            "best-angle-until-disconnection-ordered",
+            "best-angle-until-disconnection-prefer-bigger-shell",
+            "best-angle-until-disconnection-prefer-lower-shell",
             "everything-visible",
-            "everything-in-range",
-            "best-range-until-disconnection",
-            "best-multi-angle-until-disconnection",
-            "one-link-per-layer",
         ]
 
         self.allowed_routing_methods = [
@@ -950,19 +953,24 @@ class TopologyManager(
 
         nx_adapter = self.nx_adapter
         graph = nx_adapter.create_full_networkx_graph(
-            export_object_position=True,
+            export_object_position=False,
             enable_export_flows_data=False,
+            export_model_data=False,
+        )
+
+        # The V5 graph also contains objects SatGoNetEm does not emulate yet
+        # (user terminals and points of presence). Drop them before building
+        # weights so their edges cannot become unowned routing edges.
+        node_names = {uniq_id: node.name for uniq_id, node in self.satellites.items()}
+        node_names.update(
+            {uniq_id: node.name for uniq_id, node in self.ground_stations.items()}
+        )
+        graph.remove_nodes_from(
+            [node_id for node_id in graph.nodes if node_id not in node_names]
         )
 
         def wrapper_link(u, v):
-            def ref(node_id):
-                if node_id in self.satellites:
-                    return f"Sat{node_id}"
-                if node_id in self.ground_stations:
-                    return f"Gnd{node_id}"
-                return None
-
-            source, target = ref(u), ref(v)
+            source, target = node_names.get(u), node_names.get(v)
             if source is None or target is None:
                 return None
             return self.links.get(frozenset((source, target)))
@@ -972,7 +980,7 @@ class TopologyManager(
                 return False
             link = wrapper_link(u, v)
             if link is None:
-                return True
+                return False
             # sat_com_topology 5 keeps the disabled flag on the link object;
             # the exported edge data only carries the model dump on request.
             return link.is_active and not getattr(
@@ -996,7 +1004,13 @@ class TopologyManager(
                 ):
                     graph[u][v]["weight"] = 0.5
             elif self.preference in ["latency_prefer_ISLs", "latency_no_preference"]:
-                graph[u][v]["weight"] = graph[u][v].get("distance_km", 1)
+                try:
+                    weight = float(graph[u][v].get("distance_km"))
+                except (TypeError, ValueError):
+                    weight = 1.0
+                if weight <= 0:
+                    weight = 1.0
+                graph[u][v]["weight"] = weight
                 if (
                     self.preference == "latency_prefer_ISLs"
                     and graph[u][v].get("type") == "InterSatelliteLink"
