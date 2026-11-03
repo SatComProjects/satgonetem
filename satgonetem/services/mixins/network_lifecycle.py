@@ -257,6 +257,12 @@ class NetworkLifecycleMixin:
             ground_stations: Optional flag to assign addresses to ground stations (defaults to True)
 
         """
+        if getattr(self, "address_plan", None) is None:
+            raise RuntimeError(
+                "IPv4 address plan is not initialized; construct the "
+                "TopologyManager from a topology before assigning addresses"
+            )
+
         tic: float = time.perf_counter()
         self.set_ipv4s_for_all_nodes(
             set_lo=True,

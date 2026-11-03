@@ -1,14 +1,19 @@
 from __future__ import annotations
 
-
-from satgonetem.utils.ip_utils import IPUtils
+import ipaddress
 
 
 class Interface:
+    """A network interface with an optional IPv4 address and prefix.
+
+    Point-to-point emulated links use ``/31`` and node loopbacks use ``/32`` by
+    default.  The prefix is stored with the address instead of being repeated
+    in every routing/daemon module.
+    """
 
     def __init__(self, name: str = "Default", iface_type: str = ""):
-
         self.ipv4: str = ""
+        self.prefix_len: int = 32 if iface_type == "lo" else 31
         self.name: str = name
         self.peer: Interface
         self.is_monitored: bool = False
@@ -19,16 +24,44 @@ class Interface:
         self.delay: int = 0
         self.mac_address: str | None = None
 
+    def set_ipv4(self, ip_address: str, prefix_len: int | None = None) -> None:
+        """Set the interface IPv4 address and prefix length.
+
+        Args:
+            ip_address: Canonical IPv4 address string.
+            prefix_len: Prefix length. Defaults to the interface's current
+                prefix (31 for links, 32 for loopbacks).
+
+        Raises:
+            ValueError: If the address or prefix is invalid.
+        """
+        try:
+            address = ipaddress.IPv4Address(ip_address)
+        except ipaddress.AddressValueError as exc:
+            raise ValueError(f"Invalid IPv4 address: {ip_address!r}") from exc
+
+        effective_prefix = self.prefix_len if prefix_len is None else prefix_len
+        if not isinstance(effective_prefix, int) or not 0 <= effective_prefix <= 32:
+            raise ValueError(
+                f"Invalid IPv4 prefix length: {effective_prefix!r}; expected 0..32"
+            )
+
+        self.ipv4 = str(address)
+        self.prefix_len = effective_prefix
+
     def set_ip(self, ip_address: str) -> None:
-        """
-        A method that sets the IP of the Interface.
-        """
-        self.ipv4 = ip_address
+        """Backward-compatible alias for :meth:`set_ipv4`."""
+        self.set_ipv4(ip_address)
+
+    @property
+    def network(self) -> ipaddress.IPv4Network | None:
+        """Return the interface network, or ``None`` when no address is set."""
+        if not self.ipv4:
+            return None
+        return ipaddress.IPv4Interface(f"{self.ipv4}/{self.prefix_len}").network
 
     def get_iname(self) -> str:
-        """
-        A method that returns the name of the interface.
-        """
+        """Return the name of the interface inside the container."""
         return "lo" if self.type == "lo" else "eth" + self.name.split(".")[1]
 
     def __eq__(self, other: object) -> bool:
@@ -36,47 +69,8 @@ class Interface:
             return NotImplemented
         return self.name == other.name
 
-    def set_ipv4_address(self) -> None:
-        """
-        A method that sets the ipv4 address of the interface.
-        """
-
-        if self.ipv4:
-            return  # IP already set
-
-        is_loopback = self.type == "lo"
-        local_name = self.name.split("_")[1] if is_loopback else self.name.split(".")[0]
-        local_id = int(local_name[3:])
-
-        if "Gnd" in local_name:
-            node_type = "GroundStation"
-        elif "Sat" in local_name:
-            node_type = "Satellite"
-        else:
-            raise ValueError(
-                f"Interface type {self.type} does not match node type {local_name}."
-            )
-
-        if is_loopback:
-            loopback_ip, _ = IPUtils.get_ipv4_address(
-                node=local_id, peer=local_id, type=node_type, loopback=True
-            )
-            self.set_ip(loopback_ip)
-        else:
-            peer_id = int(self.name.split(".")[1])
-            local_ip, peer_ip = IPUtils.get_ipv4_address(
-                node=local_id, peer=peer_id, type=node_type, loopback=False
-            )
-            self.set_ip(local_ip)
-            self.peer.set_ip(peer_ip)
-
     def get_mac_address(self) -> str | None:
-        """
-        A method that returns the mac address of the interface.
-        Mac Addresses are not configured by default. Call set_mac_address() to set a mac address for the interface.
-        Returns:
-
-        """
+        """Return the configured MAC address, if any."""
         return self.mac_address
 
     def set_mac_address(self, mac_address) -> None:

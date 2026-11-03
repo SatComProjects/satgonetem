@@ -21,7 +21,6 @@ from satgonetem.models.ground_station import GroundStation
 from satgonetem.models.interface import Interface
 from satgonetem.models.satellite import Satellite
 from satgonetem.routing.static_daemon import StaticRoutingDaemon
-from satgonetem.utils.ip_utils import IPUtils
 
 if TYPE_CHECKING:
     from satgonetem.models.node import Node
@@ -46,9 +45,8 @@ def _link_nodes(a: "Node", b: "Node") -> None:
     iface_a.peer = iface_b
     iface_b.peer = iface_a
     # Generate valid IPv4s for the point-to-point link.
-    iface_a.ipv4, iface_b.ipv4 = IPUtils.get_ipv4_address(
-        a.id, b.id, "GroundStation"
-    )
+    iface_a.set_ipv4(f"10.{(a.id >> 8) & 0xFF}.{a.id & 0xFF}.4", 31)
+    iface_b.set_ipv4(f"10.{(b.id >> 8) & 0xFF}.{b.id & 0xFF}.5", 31)
     a.interfaces.append(iface_a)
     b.interfaces.append(iface_b)
 

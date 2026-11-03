@@ -53,51 +53,6 @@ class IPUtils:
             return False
 
     @staticmethod
-    def get_ipv4_address(
-        node: int,
-        peer: int,
-        type: str,
-        loopback: bool = False,
-    ) -> tuple[str, str] | str:
-        """Generate an IPv4 address based on node, peer, type, and loopback."""
-
-        if type not in ["Satellite", "GroundStation", "UserTerminal"]:
-            raise ValueError(
-                f"Type must be either 'Satellite', 'GroundStation' or 'UserTerminal'. Current type is: {type}"
-            )
-        if not (0 <= node < 2**13):
-            raise ValueError("Node must be between 0 and 16383.")
-        if not (0 <= peer < 2**13):
-            raise ValueError("Peer must be between 0 and 16383.")
-        owner_code = ""
-        if type == "Satellite":
-            owner_code = "10"
-        elif type == "GroundStation":
-            owner_code = "01"
-        elif type == "UserTerminal":
-            owner_code = "11"
-
-        if loopback:
-            loopback_code = "1"
-        else:
-            loopback_code = "0"
-
-        base_ip = (
-            owner_code + f"{node:0>13b}" + loopback_code + f"{peer:0>13b}" + "1" + "0"
-        )
-        if node < peer:
-            first_ip = IPUtils.quaddot(base_ip + "0")
-            second_ip = IPUtils.quaddot(base_ip + "1")
-        else:
-            first_ip = IPUtils.quaddot(base_ip + "1")
-            second_ip = IPUtils.quaddot(base_ip + "0")
-
-        if not IPUtils.is_valid_ipv4(first_ip) or not IPUtils.is_valid_ipv4(second_ip):
-            raise ValueError("Generated IP addresses are not valid IPv4 addresses.")
-
-        return first_ip, second_ip
-
-    @staticmethod
     @lru_cache(maxsize=4096)
     def ipv4_to_binary(ip_address: str) -> str:
         """Convert an IPv4 address to a 32-bit binary string."""

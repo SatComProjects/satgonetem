@@ -1,6 +1,10 @@
 """Tests for the Interface model."""
 
 
+import ipaddress
+
+import pytest
+
 from satgonetem.models.interface import Interface
 
 
@@ -42,6 +46,42 @@ class TestInterfaceSetIp:
         iface.set_ip("10.0.0.1")
         iface.set_ip("10.0.0.2")
         assert iface.ipv4 == "10.0.0.2"
+
+
+class TestInterfaceSetIpv4:
+    """Tests for prefix-aware address assignment."""
+
+    def test_link_defaults_to_slash31(self):
+        iface = Interface(name="Sat0.1")
+        iface.set_ipv4("10.128.0.4")
+        assert iface.ipv4 == "10.128.0.4"
+        assert iface.prefix_len == 31
+        assert iface.network == ipaddress.ip_network("10.128.0.4/31")
+
+    def test_loopback_defaults_to_slash32(self):
+        iface = Interface(name="lo_Sat0", iface_type="lo")
+        iface.set_ipv4("10.128.0.1")
+        assert iface.prefix_len == 32
+        assert iface.network == ipaddress.ip_network("10.128.0.1/32")
+
+    def test_explicit_prefix_is_stored(self):
+        iface = Interface(name="Sat0.1")
+        iface.set_ipv4("10.128.0.4", 20)
+        assert iface.prefix_len == 20
+        assert iface.network == ipaddress.ip_network("10.128.0.0/20")
+
+    def test_invalid_address_raises(self):
+        iface = Interface(name="Sat0.1")
+        with pytest.raises(ValueError, match="Invalid IPv4 address"):
+            iface.set_ipv4("not-an-address")
+
+    def test_invalid_prefix_raises(self):
+        iface = Interface(name="Sat0.1")
+        with pytest.raises(ValueError, match="Invalid IPv4 prefix"):
+            iface.set_ipv4("10.128.0.4", 33)
+
+    def test_network_is_none_without_address(self):
+        assert Interface(name="Sat0.1").network is None
 
 
 class TestInterfaceGetIname:
