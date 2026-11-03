@@ -335,8 +335,8 @@ def _link_nodes(a, b):
     iface_a.peer = iface_b
     iface_b.peer = iface_a
     # Give them dummy IPv4s so route installation works
-    iface_a.ipv4 = f"10.{a.id}.{b.id}.1"
-    iface_b.ipv4 = f"10.{a.id}.{b.id}.2"
+    iface_a.ipv4 = f"10.{a.id}.{b.id}.4"
+    iface_b.ipv4 = f"10.{a.id}.{b.id}.5"
     a.interfaces.append(iface_a)
     b.interfaces.append(iface_b)
 
@@ -371,7 +371,7 @@ def _make_line_topology():
     """Return a topology: Gnd0 -- Sat0 -- Sat1 -- Gnd1.
 
     Sat1 is addressable; Sat0 is not.
-    Loopback IPs are spaced by /15 blocks so summarised destinations stay unique.
+    Each node has a unique loopback address used as the /32 route destination.
     """
     gnd0 = _make_gs("Gnd0", "10.0.0.0")
     gnd1 = _make_gs("Gnd1", "10.2.0.0")
