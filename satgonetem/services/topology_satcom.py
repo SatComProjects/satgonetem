@@ -48,6 +48,7 @@ from satgonetem.utils.project_builder import (
 )
 
 from satgonetem.services.mixins.topology_sync import TopologySyncMixin
+from satgonetem.services.mixins.event_sync import EventSyncMixin
 from satgonetem.services.mixins.link_ops import LinkOpsMixin
 from satgonetem.services.mixins.interface_mgr import InterfaceMgrMixin
 from satgonetem.services.mixins.network_lifecycle import NetworkLifecycleMixin
@@ -88,6 +89,8 @@ class NetworkConfig:
         topology_events: Use the satComTopology V5 EventBus for topology lifecycle
             updates instead of rediscovering every change from a full link scan.
             Defaults to False; the polling sync path remains the baseline.
+        event_reconcile_interval: Full link-scan reconciliation interval in ticks
+            when ``topology_events`` is enabled. Set to 0 to disable it.
         ground_station_pool: Data-plane pool subdivided into ground-station blocks.
         satellite_pool: Data-plane pool subdivided into satellite blocks.
         user_terminal_pool: Data-plane pool subdivided into user-terminal blocks.
@@ -127,10 +130,13 @@ class NetworkConfig:
 
     # Phase 2 event path switch. Off preserves the pull-based update path.
     topology_events: bool = False
+    # Full scan every N ticks to repair missed event deltas; 0 disables it.
+    event_reconcile_interval: int = 30
 
 
 class TopologyManager(
     TopologySyncMixin,
+    EventSyncMixin,
     LinkOpsMixin,
     InterfaceMgrMixin,
     NetworkLifecycleMixin,
@@ -379,6 +385,7 @@ class TopologyManager(
                 gonetem_server=self.gonetem_server,
                 use_budget=self.use_budget,
                 topology_events=self.topology_events,
+                event_reconcile_interval=self.event_reconcile_interval,
                 ground_station_pool=self.ground_station_pool,
                 satellite_pool=self.satellite_pool,
                 user_terminal_pool=self.user_terminal_pool,
@@ -642,6 +649,12 @@ class TopologyManager(
         # SatComTopology things
         self.initial_sync = False
 
+        # V5 event path state. The collector is created after the initial sync
+        # when topology_events is enabled.
+        self.event_bus = None
+        self._event_collector = None
+        self._ticks_since_reconcile = 0
+
         # Hashes to detect changes
         self.satellites_hash = None
         self.ground_stations_hash = None
@@ -696,6 +709,8 @@ class TopologyManager(
         if self.simulation_manager is not None:
 
             self.init()
+            if self.topology_events:
+                self.enable_event_sync()
 
         end_time = time.time()
         logging.info(
@@ -728,6 +743,7 @@ class TopologyManager(
         self.gonetem_server = config.gonetem_server
         self.use_budget = config.use_budget
         self.topology_events = config.topology_events
+        self.event_reconcile_interval = config.event_reconcile_interval
         self.ground_station_pool = config.ground_station_pool
         self.satellite_pool = config.satellite_pool
         self.user_terminal_pool = config.user_terminal_pool

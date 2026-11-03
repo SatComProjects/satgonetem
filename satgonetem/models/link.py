@@ -1,5 +1,6 @@
 import logging
 import math
+from datetime import datetime
 from numbers import Real
 from typing import Optional
 
@@ -84,6 +85,13 @@ class Link:
 
         # SatComTopology object
         self.satcom_object: SatComLink | None = None
+
+        # Link lifetime / optical state refreshed from the V5 link object.
+        self.estimated_duration_s: Optional[float] = None
+        self.estimated_disconnection_time: Optional[datetime] = None
+        self.elevation_deg: Optional[float] = None
+        self.temporary_unavailable: bool = False
+        self.recovery_time: Optional[datetime] = None
 
         # Network usage
         self.rx = 0
@@ -312,6 +320,66 @@ class Link:
 
         self.update_distance_and_delay(new_distance)
         return None
+
+    @staticmethod
+    def _optional_float(
+        value: object, minimum: Optional[float] = None
+    ) -> Optional[float]:
+        """Convert a V5 numeric field to a finite float, or return None."""
+        if isinstance(value, bool) or not isinstance(value, Real):
+            return None
+        result = float(value)
+        if not math.isfinite(result):
+            return None
+        if minimum is not None and result < minimum:
+            return None
+        return result
+
+    def refresh_from_satcom(self) -> bool:
+        """Refresh distance, active state, duration, and optical flags from V5.
+
+        Returns:
+            True when the link's active state changed.
+
+        Raises:
+            ValueError: If no satcom object is attached.
+        """
+        if self.satcom_object is None:
+            raise ValueError("Satcom object is not set")
+
+        active_before = self.is_active
+        self.is_active = not getattr(self.satcom_object, "disabled", False)
+
+        distance_km = satcom_distance_km(self.satcom_object)
+        if distance_km is not None:
+            self.update_distance_and_delay(distance_km * 1000.0)
+
+        duration = getattr(self.satcom_object, "estimated_link_duration", None)
+        if duration is None:
+            duration = getattr(self.satcom_object, "estimated_duration", None)
+        self.estimated_duration_s = self._optional_float(duration, minimum=0.0)
+
+        disconnection = getattr(
+            self.satcom_object, "estimated_disconnection_time", None
+        )
+        self.estimated_disconnection_time = (
+            disconnection if isinstance(disconnection, datetime) else None
+        )
+
+        elevation = getattr(
+            self.satcom_object, "elevation_above_horizon_angle", None
+        )
+        if elevation is None:
+            elevation = getattr(self.satcom_object, "elevation_angle", None)
+        self.elevation_deg = self._optional_float(elevation)
+
+        self.temporary_unavailable = bool(
+            getattr(self.satcom_object, "temporary_unavailable", False)
+        )
+        recovery = getattr(self.satcom_object, "recovery_time", None)
+        self.recovery_time = recovery if isinstance(recovery, datetime) else None
+
+        return self.is_active != active_before
 
     # ------------------------------------------------------------------
     # Public API

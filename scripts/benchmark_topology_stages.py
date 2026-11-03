@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Offline benchmark for the topology polling path (Phase 0).
+"""Offline benchmark for the topology polling and event paths.
 
 This measures ``TopologyManager.update_simulation()`` without Docker, GoNetEm,
 or traffic. It is intended to establish the per-tick cost of the pull-based
@@ -11,7 +11,8 @@ Run one scenario per process so ``ru_maxrss`` reflects that scenario only:
         --scenario starlink-g2-basic-60 --ticks 10
 
 The script prints a Markdown row plus a JSON object. Use ``--list`` to see the
-available scenarios.
+available scenarios. Pass ``--event-mode`` to measure the V5 EventBus lifecycle
+path with ``--reconcile-interval`` (default 30 ticks).
 """
 
 from __future__ import annotations
@@ -188,14 +189,21 @@ def _peak_rss_mb() -> float:
     return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024.0
 
 
-def run_scenario(scenario: Scenario, ticks: int, graph_repeats: int) -> dict:
+def run_scenario(
+    scenario: Scenario,
+    ticks: int,
+    graph_repeats: int,
+    topology_events: bool = False,
+    reconcile_interval: int = 30,
+) -> dict:
     gc.collect()
     started_at = time.perf_counter()
     manager = TopologyManager.from_satcom(
         build_simulation_property(scenario),
         NetworkConfig(
             update_time=scenario.tick_seconds,
-            topology_events=False,
+            topology_events=topology_events,
+            event_reconcile_interval=reconcile_interval,
         ),
     )
     load_seconds = time.perf_counter() - started_at
@@ -233,6 +241,7 @@ def run_scenario(scenario: Scenario, ticks: int, graph_repeats: int) -> dict:
         "scenario": scenario.key,
         "satellites": scenario.satellites,
         "optical_model": scenario.model,
+        "topology_events": topology_events,
         "tick_seconds": scenario.tick_seconds,
         "ticks": ticks,
         "load_seconds": load_seconds,
@@ -251,7 +260,7 @@ def _markdown_row(result: dict) -> str:
     return (
         f"| {result['scenario']} | {result['satellites']} | "
         f"{result['isl_count']} | {result['gsl_count']} | "
-        f"{result['optical_model']} | {result['tick_seconds']} | "
+        f"{result['optical_model']} | {result['topology_events']} | {result['tick_seconds']} | "
         f"{result['load_seconds']:.2f} | {result['tick_p50_seconds']:.3f} | "
         f"{result['tick_p95_seconds']:.3f} | "
         f"{result['graph_build_p50_seconds']:.3f} | "
@@ -280,6 +289,17 @@ def main() -> None:
         help="Repeats for the routing graph build (default: %(default)s).",
     )
     parser.add_argument(
+        "--event-mode",
+        action="store_true",
+        help="Use the V5 EventBus lifecycle path instead of the polling scan/diff.",
+    )
+    parser.add_argument(
+        "--reconcile-interval",
+        type=int,
+        default=30,
+        help="Full link-scan reconciliation interval in ticks (default: %(default)s).",
+    )
+    parser.add_argument(
         "--list",
         action="store_true",
         help="List scenario names and exit.",
@@ -305,16 +325,18 @@ def main() -> None:
         SCENARIOS[args.scenario],
         ticks=args.ticks,
         graph_repeats=args.graph_repeats,
+        topology_events=args.event_mode,
+        reconcile_interval=args.reconcile_interval,
     )
     if args.json:
         print(json.dumps(result, indent=2))
         return
 
     print(
-        "| Scenario | Sats | ISLs | GSLs | Model | Tick s | Load s | Tick p50 | "
+        "| Scenario | Sats | ISLs | GSLs | Model | Events | Tick s | Load s | Tick p50 | "
         "Tick p95 | Graph p50 | Peak MB |"
     )
-    print("|---|---:|---:|---:|---|---:|---:|---:|---:|---:|---:|")
+    print("|---|---:|---:|---:|---|---|---:|---:|---:|---:|---:|---:|")
     print(_markdown_row(result))
     print()
     print("Stage medians (seconds):")

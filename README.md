@@ -14,6 +14,7 @@ SatGoNetem bridges orbital mechanics and Linux network emulation. It computes sa
 - [`docs/link_budget.md`](docs/link_budget.md) — Link budget calculations and parameters
 - [`docs/addressing.md`](docs/addressing.md) — IPv4 pools, node blocks, loopbacks, and link allocation
 - [`docs/performance.md`](docs/performance.md) — Topology update stage timings and the Phase 0 baseline
+- [`docs/events.md`](docs/events.md) — Event-driven link sync, async ticks, and the Phase 2 decision
 
 ## Features
 
@@ -314,7 +315,8 @@ Key parameters on `TopologyManager`:
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `update_time` | 5 | Simulation tick interval in seconds |
-| `topology_events` | `False` | Reserved for the Phase 2 V5 EventBus path; polling remains the baseline |
+| `topology_events` | `False` | Experimental V5 EventBus lifecycle path; polling is faster at scale in V5.0.3 |
+| `event_reconcile_interval` | 30 | Full link-scan reconciliation interval in ticks when events are enabled; 0 disables |
 | `routing` | `"static"` | Routing method name |
 | `isl_link_capacity` | - | Inter-satellite link capacity in kbps |
 | `gnd_link_capacity` | - | Ground-space link capacity in kbps |

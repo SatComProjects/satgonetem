@@ -1,5 +1,7 @@
 """Tests for the Link model."""
 
+from datetime import datetime
+
 import pytest
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -435,6 +437,56 @@ class TestLinkSyncDistanceAndDelay:
         link.sync_distance_from_satcom_and_delay()
 
         assert isinstance(link.to_update, bool)
+
+
+class TestLinkRefreshFromSatcom:
+    """Tests for the metadata refresh used by the event path."""
+
+    def _satcom_link(self, **overrides):
+        values = {
+            "distance_km": 123.0,
+            "disabled": False,
+            "estimated_link_duration": 42.0,
+            "estimated_disconnection_time": datetime(2024, 1, 1, 12, 0, 0),
+            "elevation_above_horizon_angle": 35.0,
+            "temporary_unavailable": False,
+            "recovery_time": None,
+        }
+        values.update(overrides)
+        return SimpleNamespace(**values)
+
+    def test_refreshes_distance_duration_and_metadata(self, gsl_link):
+        gsl_link.satcom_object = self._satcom_link()
+
+        changed = gsl_link.refresh_from_satcom()
+
+        assert changed is False
+        assert gsl_link.distance == pytest.approx(123_000.0)
+        assert gsl_link.estimated_duration_s == pytest.approx(42.0)
+        assert gsl_link.estimated_disconnection_time == datetime(
+            2024, 1, 1, 12, 0, 0
+        )
+        assert gsl_link.elevation_deg == pytest.approx(35.0)
+        assert gsl_link.temporary_unavailable is False
+
+    def test_reports_active_state_change(self, gsl_link):
+        gsl_link.satcom_object = self._satcom_link(disabled=True)
+
+        changed = gsl_link.refresh_from_satcom()
+
+        assert changed is True
+        assert gsl_link.is_active is False
+
+    def test_invalid_duration_and_elevation_become_none(self, gsl_link):
+        gsl_link.satcom_object = self._satcom_link(
+            estimated_link_duration=-1.0,
+            elevation_above_horizon_angle="bad",
+        )
+
+        gsl_link.refresh_from_satcom()
+
+        assert gsl_link.estimated_duration_s is None
+        assert gsl_link.elevation_deg is None
 
 
 class TestLinkCapacityRefresh:

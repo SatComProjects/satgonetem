@@ -112,14 +112,32 @@ What this says:
   distance-driven update set is therefore a real target for Phase 2.
 - `get_current_graph()` is about 0.019 s at 3,360 offline. Live route build and
   installation are separate costs and must be measured with GoNetEm running.
-- `event_collection` is a placeholder in Phase 0; Phase 2 will replace it with
-  the EventBus drain.
+- `event_collection` was a placeholder in Phase 0; Phase 2 now records the
+  EventBus drain there when `topology_events=True`.
 
 After Phase 1, the routing graph no longer exports node positions or model data,
 and link distances come from V5's `distance_km`. The graph build p50 drops from
 about 0.019 s to 0.016 s at 3,360 satellites (about 17%), while the total tick
 p50 remains around 0.16 s because `link_sync` and `link_local_ops` still
 dominate. Phase 2 must reduce the update work, not only the graph build.
+
+## Phase 2 event path
+
+The event path is implemented behind `topology_events=True`. It is slower on
+V5.0.3 because attaching an EventBus makes V5 construct and publish every
+update event, even when the emulator has no subscriber for that event type.
+See [`docs/events.md`](events.md) for the architecture and the decision to keep
+polling as the default. Representative results:
+
+| Case | Polling tick p50 | Event tick p50 | Polling link_sync | Event link_sync |
+|---|---:|---:|---:|---:|
+| 720 basic, 5 s | 0.023 s | 0.069 s | 0.003 s | 0.007 s |
+| 3,360 basic, 60 s | 0.161 s | 0.393 s | 0.010 s | 0.070 s |
+| 3,360 advanced, 60 s | 0.702 s | 0.930 s | 0.013 s | 0.072 s |
+
+Both the V5 update and the emulator refresh are more expensive in event mode;
+this is not a handler-side problem alone. The Phase 2 performance acceptance
+is therefore not met on V5.0.3.
 
 ## Reading stage timings
 

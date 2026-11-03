@@ -102,6 +102,20 @@ class SimulationLoopMixin:
 
         return total if total > 0 else 0.00
 
+    async def next_step_async(self) -> float:
+        """Async wrapper for :meth:`next_step`.
+
+        Runs the blocking tick in a worker thread. This matters for the V5
+        event path: when ``tick()`` runs inside a running asyncio loop, V5
+        schedules event handlers as tasks instead of delivering them
+        synchronously, so the collector could be empty when the tick returns.
+        The worker thread has no running loop, which keeps event delivery
+        synchronous with the tick.
+        """
+        import asyncio
+
+        return await asyncio.to_thread(self.next_step)
+
     def speed_up(self) -> None:
         """Reduce the update factor to speed up simulation playback.
 

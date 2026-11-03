@@ -17,6 +17,10 @@ def test_network_config_accepts_topology_events():
     assert NetworkConfig(topology_events=True).topology_events is True
 
 
+def test_network_config_default_reconcile_interval():
+    assert NetworkConfig().event_reconcile_interval == 30
+
+
 def test_apply_network_config_sets_topology_events():
     manager = TopologyManager.__new__(TopologyManager)
     manager.simulation_manager = SimpleNamespace(project_name="Phase0")
@@ -59,9 +63,11 @@ def test_last_stage_timings_returns_a_copy():
 def test_topology_events_round_trips_through_file(tmp_path):
     manager = TopologyManager.from_file(TEST_TOPOLOGY_PATH)
     manager.topology_events = True
+    manager.event_reconcile_interval = 7
     path = tmp_path / "phase0_topology.json"
 
     manager.to_file(str(path))
     restored = TopologyManager.from_file(str(path))
 
     assert restored.topology_events is True
+    assert restored.event_reconcile_interval == 7

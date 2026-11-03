@@ -67,6 +67,18 @@ Advance the simulation by exactly one tick.
 
 ---
 
+### `next_step_async() -> float`
+
+Async wrapper for `next_step()`. It runs the blocking tick in a worker
+thread, which keeps V5 event delivery synchronous when the caller is already
+inside an asyncio event loop. Use this instead of calling `next_step()` from
+an async application when `topology_events=True`.
+
+**Returns**
+- `float` - elapsed wall-clock seconds.
+
+---
+
 ### `get_last_stage_timings() -> Dict[str, float]`
 
 Return the stage timings recorded during the most recent
@@ -78,7 +90,7 @@ Stages currently recorded:
 |---|---|
 | `tick` | satComTopology time-manager tick and its update protocol |
 | `position_sync` | satellite position refresh into emulator nodes |
-| `link_sync` | full link scan, key rebuild, distance refresh, and diff |
+| `link_sync` | polling scan/diff, or event-delta application plus existing-link refresh |
 | `link_local_ops` | local interface/flag operations after add/update/delete |
 | `link_add` | batched GoNetEm link-add RPC wall time |
 | `link_update` | batched GoNetEm link-update RPC wall time |
@@ -86,7 +98,7 @@ Stages currently recorded:
 | `routing_apply` | routing daemon update, including graph build |
 | `routing_graph` | `get_current_graph()` build; nested inside `routing_apply` when routing runs |
 | `interface_sync` | propagation of link state to peer interfaces |
-| `event_collection` | V5 EventBus drain (Phase 2 placeholder in Phase 0) |
+| `event_collection` | V5 EventBus drain when `topology_events=True`; otherwise 0 |
 | `total` | wall time inside the update pass |
 
 The stages are not mutually exclusive: `routing_graph` is nested inside

@@ -614,15 +614,26 @@ class TopologySyncMixin:
 
             with measure_stage(self, "position_sync"):
                 self._sync_node_positions()
-            with measure_stage(self, "link_sync"):
-                link_changes = self._sync_links()
+
+            event_collector = self.__dict__.get("_event_collector")
+            if event_collector is not None:
+                with measure_stage(self, "event_collection"):
+                    event_delta = self._drain_link_events()
+                with measure_stage(self, "link_sync"):
+                    link_changes = self._apply_link_delta(event_delta)
+                if self._should_reconcile():
+                    with measure_stage(self, "reconciliation"):
+                        self._sync_links()
+                    link_changes = self._collect_pending_link_changes()
+            else:
+                with measure_stage(self, "link_sync"):
+                    link_changes = self._sync_links()
+                timings.record("event_collection", 0.0)
+
             links_to_add = link_changes["links_to_add"]
             links_to_update = link_changes["links_to_update"]
             links_to_remove = link_changes["links_to_remove"]
             pending_delete_count = len(links_to_remove)
-
-            # Phase 2 will replace this placeholder with the EventBus drain.
-            timings.record("event_collection", 0.0)
 
             # Delete first: HIL handovers reuse bridge/interface names, so the old
             # link must be gone before the new one is created.
