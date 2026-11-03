@@ -56,6 +56,11 @@ class InterfaceMgrMixin:
             address = plan.register_node(node.id, kind)
             node.address_block = address.block
             node.loopback.set_ipv4(str(address.loopback.ip), 32)
+            satcom_object = getattr(node, "satcom_object", None)
+            if satcom_object is not None and hasattr(
+                satcom_object, "address_block"
+            ):
+                satcom_object.address_block = str(address.block)
 
         for satellite in sorted(self.satellites.values(), key=lambda n: n.id):
             register(satellite, NodeKind.SATELLITE)

@@ -62,6 +62,10 @@ class TopologySyncMixin:
             sat_id = f"Sat{getattr(sat_com_satellite, 'topology_uniq_id', 'Unknown')}"
             satellite = Satellite(sat_id)
             satellite.satcom_object = sat_com_satellite
+            if hasattr(sat_com_satellite, "emulator_id"):
+                sat_com_satellite.emulator_id = satellite.id
+            if hasattr(sat_com_satellite, "container_name"):
+                sat_com_satellite.container_name = satellite.name
             satellite.sync_position_from_satcom()
             return satellite
 
@@ -119,6 +123,10 @@ class TopologySyncMixin:
             node_class = UserTerminal if object_type == "UserTerminal" else GroundStation
             gs = node_class(gs_id)
             gs.satcom_object = sat_com_gs
+            if hasattr(sat_com_gs, "emulator_id"):
+                sat_com_gs.emulator_id = gs.id
+            if hasattr(sat_com_gs, "container_name"):
+                sat_com_gs.container_name = gs.name
             gs.city = getattr(sat_com_gs, "label", None)
             gs.sync_position_from_satcom()
             gs.type = object_type

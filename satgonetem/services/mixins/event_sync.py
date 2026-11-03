@@ -109,7 +109,15 @@ class EventSyncMixin:
                 return None
             if satellite_b_id not in self.satellites:
                 return None
-            return frozenset((f"Sat{satellite_a_id}", f"Sat{satellite_b_id}"))
+            satellite_a = (
+                getattr(event, "satellite_a_container", None)
+                or f"Sat{satellite_a_id}"
+            )
+            satellite_b = (
+                getattr(event, "satellite_b_container", None)
+                or f"Sat{satellite_b_id}"
+            )
+            return frozenset((satellite_a, satellite_b))
 
         if event_type in {EventType.GSL_CREATED, EventType.GSL_REMOVED}:
             satellite_id = getattr(event, "satellite_id", None)
@@ -118,9 +126,15 @@ class EventSyncMixin:
                 return None
             if ground_station_id not in self.ground_stations:
                 return None
-            return frozenset(
-                (f"Sat{satellite_id}", f"Gnd{ground_station_id}")
+            satellite_name = (
+                getattr(event, "satellite_container", None)
+                or f"Sat{satellite_id}"
             )
+            ground_station_name = (
+                getattr(event, "ground_station_container", None)
+                or f"Gnd{ground_station_id}"
+            )
+            return frozenset((satellite_name, ground_station_name))
 
         if event_type in {EventType.UTL_CREATED, EventType.UTL_REMOVED}:
             satellite_id = getattr(event, "satellite_id", None)
@@ -130,9 +144,15 @@ class EventSyncMixin:
             terminal = self.ground_stations.get(user_terminal_id)
             if terminal is None or terminal.type != "UserTerminal":
                 return None
-            return frozenset(
-                (f"Sat{satellite_id}", f"Usr{user_terminal_id}")
+            satellite_name = (
+                getattr(event, "satellite_container", None)
+                or f"Sat{satellite_id}"
             )
+            terminal_name = (
+                getattr(event, "user_terminal_container", None)
+                or f"Usr{user_terminal_id}"
+            )
+            return frozenset((satellite_name, terminal_name))
 
         return None
 

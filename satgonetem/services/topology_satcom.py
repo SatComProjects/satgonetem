@@ -201,6 +201,9 @@ class TopologyManager(
         cls,
         simulation_property: SimulationProperty,
         network_config: Optional[NetworkConfig] = None,
+        topology_object_factories: Any = None,
+        event_factories: Any = None,
+        event_bus: Any = None,
     ) -> "TopologyManager":
         """Create a TopologyManager from a SimulationProperty.
 
@@ -212,11 +215,18 @@ class TopologyManager(
         Args:
             simulation_property: A configured SimulationProperty instance.
             network_config: A NetworkConfig instance to override default values.
+            topology_object_factories: Optional V5 factories for custom node classes.
+            event_factories: Optional V5 event factories.
+            event_bus: Optional V5 EventBus (initial events are still not replayed).
         Returns:
             An initialised TopologyManager backed by the project's SimulationManager.
         """
         sim_manager = create_and_load_simulation(
-            simulation_property.model_dump(), simulation_property.simulation_name
+            simulation_property.model_dump(),
+            simulation_property.simulation_name,
+            topology_object_factories=topology_object_factories,
+            event_factories=event_factories,
+            event_bus=event_bus,
         )
         if network_config is None:
             network_config = NetworkConfig()

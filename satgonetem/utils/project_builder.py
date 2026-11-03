@@ -226,13 +226,17 @@ class DictConfigurationManager(BaseConfigurationManager):
         dictionary: Simulation property dict matching the SimulationProperty schema.
     """
 
-    def __init__(self, dictionary: dict) -> None:
+    def __init__(self, dictionary: dict, **kwargs: Any) -> None:
         simulation_property = SimulationProperty(**dictionary)
-        super().__init__(simulation_property)
+        super().__init__(simulation_property, **kwargs)
 
 
 def create_and_load_simulation(
-    dict_configuration: Dict[str, Any], project_name: str
+    dict_configuration: Dict[str, Any],
+    project_name: str,
+    topology_object_factories: Any = None,
+    event_factories: Any = None,
+    event_bus: Any = None,
 ) -> SimulationManager:
     """Create and load a simulation from a configuration dictionary.
 
@@ -240,12 +244,20 @@ def create_and_load_simulation(
         dict_configuration: Sat-com configuration dict matching the
             SimulationProperty schema.
         project_name: Name assigned to the simulation project.
+        topology_object_factories: Optional V5 factories for custom node classes.
+        event_factories: Optional V5 event factories.
+        event_bus: Optional V5 EventBus.
 
     Returns:
         Initialised SimulationManager instance.
     """
     logging.info("Creating and loading simulation.")
-    manager = DictConfigurationManager(dictionary=dict_configuration)
+    manager = DictConfigurationManager(
+        dictionary=dict_configuration,
+        topology_object_factories=topology_object_factories,
+        event_factories=event_factories,
+        event_bus=event_bus,
+    )
     simulation_manager = manager.load_simulation()
     return simulation_manager
 

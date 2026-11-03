@@ -16,6 +16,7 @@ SatGoNetem bridges orbital mechanics and Linux network emulation. It computes sa
 - [`docs/performance.md`](docs/performance.md) — Topology update stage timings and the Phase 0 baseline
 - [`docs/events.md`](docs/events.md) — Event-driven link sync, async ticks, and the Phase 2 decision
 - [`docs/optical.md`](docs/optical.md) — Optical ISLs, temporary unavailability, and SSO/inter-shell links
+- [`docs/factories.md`](docs/factories.md) — Emulator metadata factories and the Phase 5 design decision
 
 ## Features
 
