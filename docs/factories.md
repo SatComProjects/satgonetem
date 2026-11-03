@@ -1,5 +1,7 @@
 # Emulator metadata factories
 
+See [`factories_review.md`](factories_review.md) for the Phase 5 design review and decision.
+
 Phase 5 adds an optional, thin metadata layer on top of satComTopology V5
 objects. It does **not** replace SatGoNetEm's `Node`/`Link` classes.
 
@@ -65,3 +67,5 @@ concept.
 - Initial events are not replayed. Metadata is filled by the initial sync.
 - Full `Node`/`Link` unification remains a separate design decision, not part
   of Phase 5.
+
+- `from_file()` runtime-state restore rebuilds V5 objects with default factories; custom fields outside the runtime-state schema are not preserved.
