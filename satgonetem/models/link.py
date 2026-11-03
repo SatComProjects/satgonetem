@@ -335,24 +335,14 @@ class Link:
             return None
         return result
 
-    def refresh_from_satcom(self) -> bool:
-        """Refresh distance, active state, duration, and optical flags from V5.
+    def refresh_lifetime_from_satcom(self) -> None:
+        """Refresh duration, disconnection time, elevation, and optical flags.
 
-        Returns:
-            True when the link's active state changed.
-
-        Raises:
-            ValueError: If no satcom object is attached.
+        This is the cheap subset used by the polling path for ground links.
+        It leaves distance and active-state handling to the caller.
         """
         if self.satcom_object is None:
-            raise ValueError("Satcom object is not set")
-
-        active_before = self.is_active
-        self.is_active = not getattr(self.satcom_object, "disabled", False)
-
-        distance_km = satcom_distance_km(self.satcom_object)
-        if distance_km is not None:
-            self.update_distance_and_delay(distance_km * 1000.0)
+            return
 
         duration = getattr(self.satcom_object, "estimated_link_duration", None)
         if duration is None:
@@ -379,6 +369,47 @@ class Link:
         recovery = getattr(self.satcom_object, "recovery_time", None)
         self.recovery_time = recovery if isinstance(recovery, datetime) else None
 
+    def remaining_duration_s(self, now: datetime) -> Optional[float]:
+        """Return seconds until the predicted disconnection, or None.
+
+        The absolute disconnection time is stored by V5, so this remains
+        correct even when an event was missed or a kept link was not
+        re-published.
+        """
+        if self.estimated_disconnection_time is None:
+            return None
+        return max(
+            0.0,
+            (self.estimated_disconnection_time - now).total_seconds(),
+        )
+
+    def is_expiring(self, now: datetime, horizon_s: float) -> bool:
+        """Return True when the link is predicted to drop within the horizon."""
+        if horizon_s <= 0:
+            return False
+        remaining = self.remaining_duration_s(now)
+        return remaining is not None and remaining < horizon_s
+
+    def refresh_from_satcom(self) -> bool:
+        """Refresh distance, active state, duration, and optical flags from V5.
+
+        Returns:
+            True when the link's active state changed.
+
+        Raises:
+            ValueError: If no satcom object is attached.
+        """
+        if self.satcom_object is None:
+            raise ValueError("Satcom object is not set")
+
+        active_before = self.is_active
+        self.is_active = not getattr(self.satcom_object, "disabled", False)
+
+        distance_km = satcom_distance_km(self.satcom_object)
+        if distance_km is not None:
+            self.update_distance_and_delay(distance_km * 1000.0)
+
+        self.refresh_lifetime_from_satcom()
         return self.is_active != active_before
 
     # ------------------------------------------------------------------

@@ -269,6 +269,8 @@ class TopologySyncMixin:
                 continue
             try:
                 link.update_distance_and_delay(distance_km * 1000.0)
+                if link.type != "InterSatelliteLink":
+                    link.refresh_lifetime_from_satcom()
             except Exception as exc:
                 errors += 1
                 logging.error(
@@ -318,6 +320,8 @@ class TopologySyncMixin:
         for link, distance_km in zip(links, distances_km):
             try:
                 link.update_distance_and_delay(float(distance_km) * 1000.0)
+                if link.type != "InterSatelliteLink":
+                    link.refresh_lifetime_from_satcom()
             except Exception as exc:
                 errors += 1
                 logging.error(
@@ -476,6 +480,7 @@ class TopologySyncMixin:
             link_budget_config=self.link_budget_config,
         )
         link.satcom_object = sat_com_link
+        link.refresh_lifetime_from_satcom()
         return link
 
     def _build_link_key(self, source: "Node", target: "Node") -> frozenset:

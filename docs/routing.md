@@ -176,6 +176,24 @@ picked up automatically.
 
 ---
 
+## Link-lifetime-aware routing
+
+Ground links carry V5's `estimated_disconnection_time`. Two opt-in
+`NetworkConfig` fields make the routing graph prefer links that will last:
+
+| Field | Default | Effect |
+|---|---:|---|
+| `link_expiry_horizon_s` | `0` | Look-ahead window in seconds. Links dropping inside it are penalized. |
+| `link_expiry_penalty` | `0` | Maximum extra Dijkstra weight at the disconnection time. |
+
+With both non-zero, each edge also exposes `remaining_duration_s` in the
+NetworkX graph. The penalty scales linearly from `0` at the horizon to
+`link_expiry_penalty` at disconnection. It is off by default because it can
+cause route oscillation or move traffic onto a path that is longer but only
+slightly longer-lived. Validate it against the pacing of your traffic before
+enabling it. `get_expiring_links()` and `make_flow_guard()` expose the same
+lifetime data without changing routes.
+
 ## Lifecycle sequence
 
 ```

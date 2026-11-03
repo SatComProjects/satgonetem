@@ -317,6 +317,8 @@ Key parameters on `TopologyManager`:
 | `update_time` | 5 | Simulation tick interval in seconds |
 | `topology_events` | `False` | Experimental V5 EventBus lifecycle path; polling is faster at scale in V5.0.3 |
 | `event_reconcile_interval` | 30 | Full link-scan reconciliation interval in ticks when events are enabled; 0 disables |
+| `link_expiry_horizon_s` | `0` | Routing-penalty horizon for links predicted to disconnect soon; 0 disables |
+| `link_expiry_penalty` | `0` | Extra Dijkstra weight for links inside the expiry horizon; 0 disables |
 | `routing` | `"static"` | Routing method name |
 | `isl_link_capacity` | - | Inter-satellite link capacity in kbps |
 | `gnd_link_capacity` | - | Ground-space link capacity in kbps |

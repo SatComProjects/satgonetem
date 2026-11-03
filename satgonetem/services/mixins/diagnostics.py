@@ -456,12 +456,24 @@ class DiagnosticsMixin:
                 logging.error(f"Failed to disable tcpdump on {sat.name}: {e}")
 
     def get_topology_summary(self) -> Dict[str, Any]:
-        """Return a summary of the topology including counts of satellites, ground stations, and links."""
-        return {
+        """Return a summary of the topology including counts and link lifetimes."""
+        summary = {
             "satellites": len(self.satellites),
             "ground_stations": len(self.ground_stations),
             "links": len(self.links),
         }
+        if self.simulation_manager is not None:
+            now = self.get_current_time()
+            durations = [
+                remaining
+                for link in self.links.values()
+                if (remaining := link.remaining_duration_s(now)) is not None
+            ]
+            summary["links_with_known_lifetime"] = len(durations)
+            summary["min_remaining_link_duration_s"] = (
+                min(durations) if durations else None
+            )
+        return summary
 
     def open_bash_terminal(self, node: str) -> None:
         """Open a local terminal window connected to a node's bash shell.

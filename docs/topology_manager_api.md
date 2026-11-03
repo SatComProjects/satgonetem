@@ -255,6 +255,39 @@ Return the list of links.
 
 ---
 
+### `get_link_lifetime(link: Link) -> Dict[str, Any]`
+
+Return the V5 lifetime metadata for one link: estimated duration,
+disconnection time, remaining duration against the simulation clock,
+elevation, temporary-unavailable flag, and recovery time.
+
+Unknown values are `None`.
+
+---
+
+### `get_expiring_links(horizon_s: float) -> List[Link]`
+
+Return links predicted to disconnect within `horizon_s` seconds, sorted by
+remaining lifetime. Returns an empty list when `horizon_s <= 0`.
+
+---
+
+### `get_path_min_link_lifetime_s(source, target) -> Optional[float]`
+
+Return the shortest remaining link lifetime along the current path, or
+`None` when no link on the path has a predicted disconnection time.
+
+---
+
+### `make_flow_guard(min_lifetime_s: float) -> Callable[[Any], bool]`
+
+Build a `FlowScheduler` guard that rejects a flow when its current path has
+less than `min_lifetime_s` seconds of remaining link lifetime. Paths without
+lifetime data are allowed. See [`docs/traffic.md`](traffic.md) for the
+scheduler integration.
+
+---
+
 ## Node inspection
 
 ### `get_node_by_name(name: str) -> Optional[Node]`

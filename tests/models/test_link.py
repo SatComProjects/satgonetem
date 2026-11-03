@@ -488,6 +488,32 @@ class TestLinkRefreshFromSatcom:
         assert gsl_link.estimated_duration_s is None
         assert gsl_link.elevation_deg is None
 
+    def test_remaining_duration_uses_absolute_disconnection_time(self, gsl_link):
+        gsl_link.estimated_disconnection_time = datetime(2024, 1, 1, 12, 0, 0)
+
+        remaining = gsl_link.remaining_duration_s(
+            datetime(2024, 1, 1, 11, 59, 0)
+        )
+
+        assert remaining == pytest.approx(60.0)
+
+    def test_remaining_duration_clamps_past_disconnection_to_zero(self, gsl_link):
+        gsl_link.estimated_disconnection_time = datetime(2024, 1, 1, 12, 0, 0)
+
+        remaining = gsl_link.remaining_duration_s(
+            datetime(2024, 1, 1, 12, 1, 0)
+        )
+
+        assert remaining == 0.0
+
+    def test_is_expiring(self, gsl_link):
+        gsl_link.estimated_disconnection_time = datetime(2024, 1, 1, 12, 0, 0)
+        now = datetime(2024, 1, 1, 11, 59, 0)
+
+        assert gsl_link.is_expiring(now, horizon_s=120.0) is True
+        assert gsl_link.is_expiring(now, horizon_s=30.0) is False
+        assert gsl_link.is_expiring(now, horizon_s=0.0) is False
+
 
 class TestLinkCapacityRefresh:
     """Capacity refreshes must propagate to the emulator when values change."""

@@ -15,7 +15,7 @@ from satgonetem.utils.utils import fetch_iss_data, time_
 
 import threading
 from dataclasses import dataclass
-from typing import Any, ClassVar, Dict, List, Optional, Type, Union
+from typing import Any, Callable, ClassVar, Dict, List, Optional, Type, Union
 import json
 import logging
 import os
@@ -91,6 +91,10 @@ class NetworkConfig:
             Defaults to False; the polling sync path remains the baseline.
         event_reconcile_interval: Full link-scan reconciliation interval in ticks
             when ``topology_events`` is enabled. Set to 0 to disable it.
+        link_expiry_horizon_s: Routing penalty horizon for links predicted to
+            disconnect soon. Disabled when zero.
+        link_expiry_penalty: Extra Dijkstra weight applied to a link whose
+            remaining duration is inside the horizon. Disabled when zero.
         ground_station_pool: Data-plane pool subdivided into ground-station blocks.
         satellite_pool: Data-plane pool subdivided into satellite blocks.
         user_terminal_pool: Data-plane pool subdivided into user-terminal blocks.
@@ -132,6 +136,10 @@ class NetworkConfig:
     topology_events: bool = False
     # Full scan every N ticks to repair missed event deltas; 0 disables it.
     event_reconcile_interval: int = 30
+
+    # Link-lifetime-aware routing. Both default to zero (feature off).
+    link_expiry_horizon_s: float = 0.0
+    link_expiry_penalty: float = 0.0
 
 
 class TopologyManager(
@@ -386,6 +394,8 @@ class TopologyManager(
                 use_budget=self.use_budget,
                 topology_events=self.topology_events,
                 event_reconcile_interval=self.event_reconcile_interval,
+                link_expiry_horizon_s=self.link_expiry_horizon_s,
+                link_expiry_penalty=self.link_expiry_penalty,
                 ground_station_pool=self.ground_station_pool,
                 satellite_pool=self.satellite_pool,
                 user_terminal_pool=self.user_terminal_pool,
@@ -744,6 +754,8 @@ class TopologyManager(
         self.use_budget = config.use_budget
         self.topology_events = config.topology_events
         self.event_reconcile_interval = config.event_reconcile_interval
+        self.link_expiry_horizon_s = config.link_expiry_horizon_s
+        self.link_expiry_penalty = config.link_expiry_penalty
         self.ground_station_pool = config.ground_station_pool
         self.satellite_pool = config.satellite_pool
         self.user_terminal_pool = config.user_terminal_pool
@@ -1033,7 +1045,103 @@ class TopologyManager(
                 ):
                     graph[u][v]["weight"] *= 0.1
 
+        expiry_penalty = float(getattr(self, "link_expiry_penalty", 0.0) or 0.0)
+        expiry_horizon = float(getattr(self, "link_expiry_horizon_s", 0.0) or 0.0)
+        if expiry_penalty > 0.0 and expiry_horizon > 0.0 and graph.number_of_edges():
+            now = self.simulation_manager.time_manager.get_current_time()
+            for u, v in graph.edges():
+                link = wrapper_link(u, v)
+                if link is None:
+                    continue
+                remaining = link.remaining_duration_s(now)
+                if remaining is None:
+                    continue
+                graph[u][v]["remaining_duration_s"] = remaining
+                if remaining < expiry_horizon:
+                    urgency = 1.0 - (remaining / expiry_horizon)
+                    graph[u][v]["weight"] += expiry_penalty * max(
+                        0.0, min(1.0, urgency)
+                    )
+
         return graph
+
+    def get_link_lifetime(self, link: Link) -> Dict[str, Any]:
+        """Return the lifetime metadata known for *link*.
+
+        Returns:
+            Dict with the V5 duration/disconnection fields plus the remaining
+            duration computed against the simulation clock. Unknown values are
+            ``None``.
+        """
+        now = self.get_current_time()
+        return {
+            "estimated_duration_s": link.estimated_duration_s,
+            "estimated_disconnection_time": link.estimated_disconnection_time,
+            "remaining_duration_s": link.remaining_duration_s(now),
+            "elevation_deg": link.elevation_deg,
+            "temporary_unavailable": link.temporary_unavailable,
+            "recovery_time": link.recovery_time,
+        }
+
+    def get_expiring_links(self, horizon_s: float) -> List[Link]:
+        """Return links predicted to disconnect within *horizon_s* seconds."""
+        if horizon_s <= 0:
+            return []
+        now = self.get_current_time()
+        expiring = [
+            link
+            for link in self.links.values()
+            if link.is_expiring(now, horizon_s)
+        ]
+        def _remaining(link: Link) -> float:
+            duration = link.remaining_duration_s(now)
+            return duration if duration is not None else float("inf")
+
+        return sorted(expiring, key=_remaining)
+
+    def get_path_min_link_lifetime_s(
+        self, source: Any, target: Any
+    ) -> Optional[float]:
+        """Return the shortest remaining link lifetime along the current path.
+
+        Returns ``None`` when the path has no link with a predicted
+        disconnection time. This is intended for runtime admission checks:
+        pre-filter flows before handing them to ``FlowScheduler``.
+        """
+        path = self.get_path_between_nodes(source, target)
+        if len(path) < 2:
+            return None
+
+        now = self.get_current_time()
+        remaining: list[float] = []
+        for node_a, node_b in zip(path, path[1:]):
+            link = self.links.get(frozenset((node_a.name, node_b.name)))
+            if link is None:
+                continue
+            duration = link.remaining_duration_s(now)
+            if duration is not None:
+                remaining.append(duration)
+        return min(remaining) if remaining else None
+
+    def make_flow_guard(self, min_lifetime_s: float) -> Callable[[Any], bool]:
+        """Build a ``FlowScheduler`` guard for lifetime-aware admission.
+
+        The returned predicate rejects a flow when its current path has a
+        link with less than ``min_lifetime_s`` seconds remaining. A path with
+        no lifetime data is allowed.
+        """
+        if min_lifetime_s <= 0:
+            raise ValueError(
+                f"min_lifetime_s must be > 0, got {min_lifetime_s}"
+            )
+
+        def guard(flow: Any) -> bool:
+            remaining = self.get_path_min_link_lifetime_s(
+                flow.source, flow.destination
+            )
+            return remaining is None or remaining >= min_lifetime_s
+
+        return guard
 
     def get_satellites(self) -> List[Satellite]:
         """Return the list of satellites."""

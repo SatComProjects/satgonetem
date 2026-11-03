@@ -356,6 +356,7 @@ scheduler = FlowScheduler(
     debug=False,            # print start/done/active lines to stdout
     flow_timeout_sec=180.0, # per-flow deadline; None disables it
     save_results=True,      # keep per-flow results in memory
+    flow_guard=None,        # optional predicate; False skips the flow
 )
 ```
 
@@ -366,6 +367,7 @@ scheduler = FlowScheduler(
 | `debug` | `bool` | `False` | Print `[flow] START/DONE/ACTIVE` lines and a progress summary every second to stdout. |
 | `flow_timeout_sec` | `float or None` | `180.0` | Seconds before a running flow is declared failed. `None` disables. |
 | `save_results` | `bool` | `True` | If `False`, do not retain successful per-flow results. Use this for very large schedules (hundreds of thousands or millions of flows) to avoid excessive memory use. Errors are still collected; `results()` is unavailable. |
+| `flow_guard` | `Callable[[AnyFlow], bool] or None` | `None` | Predicate evaluated immediately before submission. `False` skips the flow and increments `skipped_count()`. |
 
 ### How it works
 
@@ -374,6 +376,28 @@ scheduler = FlowScheduler(
 3. The scheduler sleeps until `t0 + flow.delay`, then submits the flow to a `ThreadPoolExecutor`.
 4. Each worker zeroes `flow.delay` before calling `flow.start()` so the flow's internal sleep does not fire a second time.
 5. `run()` returns immediately and executes in a background thread. Poll `status()` for completion.
+
+### Lifetime-aware admission
+
+`TopologyManager.make_flow_guard()` builds a guard that rejects a flow when
+the shortest remaining link lifetime along its current path is below a
+threshold:
+
+```python
+guard = topology.make_flow_guard(min_lifetime_s=60.0)
+scheduler = FlowScheduler(flows, flow_guard=guard)
+scheduler.run()
+scheduler.join()
+print("skipped", scheduler.skipped_count())
+```
+
+The guard uses `get_path_min_link_lifetime_s()`, which returns `None` when no
+link on the path has a predicted disconnection time; those flows are allowed.
+The check runs at flow start, so a path can still change while the flow is
+running. Use a conservative threshold and combine it with the routing expiry
+penalty described in
+[`docs/performance.md`](performance.md) and the
+[TopologyManager API](topology_manager_api.md).
 
 ### Lifecycle
 
@@ -423,3 +447,4 @@ if errors:
 | `join(timeout=None)` | `None` | Block until the scheduler finishes. |
 | `errors()` | `list[Exception]` | Exceptions from failed flows. Raises `RuntimeError` if still running. |
 | `results(flow)` | `AnyResult` | Result of a specific flow. Raises `RuntimeError` if still running or if `save_results=False`. Raises `KeyError` if the flow failed or was not scheduled. |
+| `skipped_count()` | `int` | Number of flows rejected by `flow_guard` in the latest run. |

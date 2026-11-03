@@ -158,6 +158,7 @@ class FlowScheduler:
         debug: bool = False,
         flow_timeout_sec: float | None = None,
         save_results: bool = True,
+        flow_guard: Callable[[AnyFlow], bool] | None = None,
     ) -> None:
         """
         Args:
@@ -175,6 +176,11 @@ class FlowScheduler:
                 memory usage when running hundreds of thousands or millions
                 of flows, but ``results()`` will not be available after the
                 run. Errors are still recorded. Defaults to True.
+            flow_guard: Optional predicate evaluated immediately before a
+                flow is submitted. Return False to skip the flow. The scheduler
+                records skipped flows in ``skipped_count()``. Useful for
+                lifetime-aware admission (for example
+                ``topology.make_flow_guard(min_lifetime_s=...)``).
 
         Raises:
             ValueError: If max_workers is less than 1.
@@ -190,6 +196,8 @@ class FlowScheduler:
         self._debug = debug
         self._flow_timeout_sec = flow_timeout_sec
         self._save_results = save_results
+        self._flow_guard = flow_guard
+        self._skipped_count = 0
         self._active_flows: dict[str, int] = {}
         self._active_flows_lock = Lock()
         self._results: list[AnyResult] = []
@@ -259,6 +267,7 @@ class FlowScheduler:
             self._result_map = {}
             self._completed_count = 0
             self._active_flows.clear()
+            self._skipped_count = 0
             self._scheduler_error = None
 
         self._scheduler_thread = threading.Thread(target=self._run, daemon=True)
@@ -297,6 +306,19 @@ class FlowScheduler:
                     wait = (t0 + flow.delay) - time.monotonic()
                     if wait > 0.0:
                         time.sleep(wait)
+                    if self._flow_guard is not None:
+                        try:
+                            allowed = self._flow_guard(flow)
+                        except Exception as exc:
+                            errors.append(
+                                RuntimeError(
+                                    f"Flow guard failed for {_flow_label(flow)}: {exc}"
+                                )
+                            )
+                            continue
+                        if not allowed:
+                            self._skipped_count += 1
+                            continue
                     future: Future[AnyResult] = executor.submit(
                         _execute_flow,
                         flow,
@@ -345,6 +367,10 @@ class FlowScheduler:
             with self._status_lock:
                 self._errors = errors
                 self._status = FlowSchedulerStatus.DONE
+
+    def skipped_count(self) -> int:
+        """Return the number of flows rejected by ``flow_guard``."""
+        return self._skipped_count
 
     def status(self) -> FlowSchedulerStatus:
         """Return the current lifecycle state.

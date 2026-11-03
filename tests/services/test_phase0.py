@@ -21,6 +21,12 @@ def test_network_config_default_reconcile_interval():
     assert NetworkConfig().event_reconcile_interval == 30
 
 
+def test_network_config_expiry_defaults_off():
+    config = NetworkConfig()
+    assert config.link_expiry_horizon_s == 0.0
+    assert config.link_expiry_penalty == 0.0
+
+
 def test_apply_network_config_sets_topology_events():
     manager = TopologyManager.__new__(TopologyManager)
     manager.simulation_manager = SimpleNamespace(project_name="Phase0")
@@ -64,6 +70,8 @@ def test_topology_events_round_trips_through_file(tmp_path):
     manager = TopologyManager.from_file(TEST_TOPOLOGY_PATH)
     manager.topology_events = True
     manager.event_reconcile_interval = 7
+    manager.link_expiry_horizon_s = 120.0
+    manager.link_expiry_penalty = 5.0
     path = tmp_path / "phase0_topology.json"
 
     manager.to_file(str(path))
@@ -71,3 +79,5 @@ def test_topology_events_round_trips_through_file(tmp_path):
 
     assert restored.topology_events is True
     assert restored.event_reconcile_interval == 7
+    assert restored.link_expiry_horizon_s == 120.0
+    assert restored.link_expiry_penalty == 5.0
