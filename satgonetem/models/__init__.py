@@ -2,6 +2,7 @@
 from satgonetem.models.node import Node
 from satgonetem.models.satellite import Satellite
 from satgonetem.models.ground_station import GroundStation
+from satgonetem.models.user_terminal import UserTerminal
 from satgonetem.models.link import Link
 from satgonetem.models.interface import Interface
 from satgonetem.models.routing_entry import RoutingEntry
@@ -12,6 +13,7 @@ __all__ = [
     "Node",
     "Satellite",
     "GroundStation",
+    "UserTerminal",
     "Link",
     "Interface",
     "RoutingEntry",

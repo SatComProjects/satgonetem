@@ -59,16 +59,15 @@ class InterfaceMgrMixin:
 
         for satellite in sorted(self.satellites.values(), key=lambda n: n.id):
             register(satellite, NodeKind.SATELLITE)
-        for ground_station in sorted(self.ground_stations.values(), key=lambda n: n.id):
-            register(ground_station, NodeKind.GROUND_STATION)
-
-        # User terminals are not instantiated in this version, but the plan
-        # already supports them.  Register them if a future model provides
-        # them on the manager.
-        for user_terminal in sorted(
-            getattr(self, "user_terminals", {}).values(), key=lambda n: n.id
+        for ground_object in sorted(
+            self.ground_stations.values(), key=lambda n: n.id
         ):
-            register(user_terminal, NodeKind.USER_TERMINAL)
+            kind = (
+                NodeKind.USER_TERMINAL
+                if getattr(ground_object, "type", "") == "UserTerminal"
+                else NodeKind.GROUND_STATION
+            )
+            register(ground_object, kind)
 
         for link in sorted(self.links.values(), key=self._address_link_sort_key):
             plan.allocate_link(
@@ -124,19 +123,10 @@ class InterfaceMgrMixin:
         int1.delay = link.delay
         int2.delay = link.delay
 
-        # Set type
-        if "Gnd" in source.name[:3] and "Gnd" in target.name[:3]:
-            int1.type = "GroundObjectLink"
-            int2.type = "GroundObjectLink"
-        elif "Gnd" in [source.name[:3], target.name[:3]]:
-            int1.type = "GroundStationLink"
-            int2.type = "GroundStationLink"
-
-        elif "Sat" in [source.name[:3], target.name[:3]]:
-            int1.type = "InterSatelliteLink"
-            int2.type = "InterSatelliteLink"
-        else:
-            logging.info(f"Unknown link type for {source.name} -> {target.name}")
+        # Set type directly from the modelled link so UserTerminalLink,
+        # GroundStationLink, GroundObjectLink, and InterSatelliteLink all work.
+        int1.type = link.type
+        int2.type = link.type
 
         # Set peer
         int1.peer = int2

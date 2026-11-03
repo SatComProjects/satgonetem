@@ -459,7 +459,16 @@ class DiagnosticsMixin:
         """Return a summary of the topology including counts and link lifetimes."""
         summary = {
             "satellites": len(self.satellites),
-            "ground_stations": len(self.ground_stations),
+            "ground_stations": sum(
+                1
+                for node in self.ground_stations.values()
+                if getattr(node, "type", "") == "GroundStation"
+            ),
+            "user_terminals": sum(
+                1
+                for node in self.ground_stations.values()
+                if getattr(node, "type", "") == "UserTerminal"
+            ),
             "links": len(self.links),
         }
         if self.simulation_manager is not None:

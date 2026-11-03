@@ -7,6 +7,7 @@ import os
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from satgonetem.models.ground_station import GroundStation
+from satgonetem.models.user_terminal import UserTerminal
 from satgonetem.models.satellite import Satellite
 from satgonetem.models.link import Link, satcom_distance_km
 from satgonetem.services.mixins.simulation_loop import ensure_simulation_lock
@@ -87,11 +88,11 @@ class TopologySyncMixin:
         )
 
     def _sync_ground_stations(self) -> None:
-        """Sync all ground stations from the simulation manager into self.ground_stations.
+        """Sync ground stations and user terminals into ``ground_stations``.
 
-        Fetches ground station data from the simulation manager, constructs a
-        GroundStation instance for each entry in parallel, and stores each one
-        keyed by its integer node ID.
+        Both node kinds share the ground-object container behaviour; their
+        ``type`` and ``Usr``/``Gnd`` names distinguish them for links and
+        diagnostics.
 
         Raises:
             ValueError: If self.simulation_manager is None.
@@ -99,20 +100,28 @@ class TopologySyncMixin:
         if self.simulation_manager is None:
             raise ValueError("Simulation manager is not set")
 
-        gs_data = self.simulation_manager.get_ground_stations()
+        gs_data = list(self.simulation_manager.get_ground_stations())
+        user_terminal_getter = getattr(
+            self.simulation_manager, "get_user_terminals", None
+        )
+        if callable(user_terminal_getter):
+            gs_data.extend(user_terminal_getter())
         num_gs = len(gs_data)
 
         if num_gs == 0:
-            logging.info("No ground stations found to sync.")
+            logging.info("No ground stations or user terminals found to sync.")
             return
 
         def process_ground_station(sat_com_gs):
-            gs_id = f"Gnd{getattr(sat_com_gs, 'topology_uniq_id', 'Unknown')}"
-            gs = GroundStation(gs_id)
+            object_type = getattr(sat_com_gs, "type", "GroundStation")
+            prefix = "Usr" if object_type == "UserTerminal" else "Gnd"
+            gs_id = f"{prefix}{getattr(sat_com_gs, 'topology_uniq_id', 'Unknown')}"
+            node_class = UserTerminal if object_type == "UserTerminal" else GroundStation
+            gs = node_class(gs_id)
             gs.satcom_object = sat_com_gs
             gs.city = getattr(sat_com_gs, "label", None)
             gs.sync_position_from_satcom()
-            gs.type = "GroundStation"
+            gs.type = object_type
             return gs
 
         max_workers = min(32, (os.cpu_count() or 4) * 4, num_gs)
@@ -128,10 +137,10 @@ class TopologySyncMixin:
                     synced_count += 1
                 except Exception as e:
                     error_count += 1
-                    logging.error(f"Error syncing ground station: {e}")
+                    logging.error(f"Error syncing ground object: {e}")
 
         logging.info(
-            f"Ground station sync complete: {synced_count}/{num_gs} "
+            f"Ground object sync complete: {synced_count}/{num_gs} "
             f"(Ok: {synced_count} | Fail: {error_count})"
         )
 
@@ -503,96 +512,29 @@ class TopologySyncMixin:
     def _build_link_key(self, source: "Node", target: "Node") -> frozenset:
         """Build a unique frozenset key identifying a link between two nodes.
 
-        Accepts either SatGoNeTem nodes (Satellite/GroundStation) or
-        sat_com_model topology objects (SatComSatellite/SatComGroundStation),
-        so the same method can be used during both initial sync and runtime
-        update passes.
-
-        Args:
-            source: The link source, either a local node or a satcom object.
-            target: The link target, either a local node or a satcom object.
-
-        Returns:
-            A frozenset of two name strings that uniquely identifies the link
-            regardless of direction.
-
-        Raises:
-            ValueError: If source/target are not a recognised node type pair.
+        Accepts emulator nodes and sat_com_model topology objects. Emulator
+        nodes use their ``Gnd``/``Usr``/``Sat`` name; V5 objects use their type
+        prefix plus ``topology_uniq_id``.
         """
-        if isinstance(source, SatComSatellite) and isinstance(target, SatComSatellite):
-            return frozenset(
-                (
-                    "Sat" + str(getattr(source, "topology_uniq_id", None)),
-                    "Sat" + str(getattr(target, "topology_uniq_id", None)),
+
+        def name(value):
+            if isinstance(value, (Satellite, GroundStation)):
+                return value.name
+            prefix = {
+                "Satellite": "Sat",
+                "GroundStation": "Gnd",
+                "UserTerminal": "Usr",
+                "PointOfPresence": "Pop",
+            }.get(getattr(value, "type", None))
+            unique_id = getattr(value, "topology_uniq_id", None)
+            if prefix is None or unique_id is None:
+                raise ValueError(
+                    "Source and target must be Satellite, GroundStation, "
+                    "UserTerminal, or PointOfPresence"
                 )
-            )
-        elif isinstance(source, SatComSatellite) and isinstance(
-            target, SatComGroundStation
-        ):
-            return frozenset(
-                (
-                    "Sat" + str(getattr(source, "topology_uniq_id", None)),
-                    "Gnd" + str(getattr(target, "topology_uniq_id", None)),
-                )
-            )
-        elif isinstance(source, SatComGroundStation) and isinstance(
-            target, SatComSatellite
-        ):
-            return frozenset(
-                (
-                    "Gnd" + str(getattr(source, "topology_uniq_id", None)),
-                    "Sat" + str(getattr(target, "topology_uniq_id", None)),
-                )
-            )
-        elif isinstance(source, SatComGroundStation) and isinstance(
-            target, SatComGroundStation
-        ):
-            return frozenset(
-                (
-                    "Gnd" + str(getattr(source, "topology_uniq_id", None)),
-                    "Gnd" + str(getattr(target, "topology_uniq_id", None)),
-                )
-            )
-        elif isinstance(source, Satellite) and isinstance(target, Satellite):
-            return frozenset(
-                (
-                    "Sat"
-                    + str(getattr(source.satcom_object, "topology_uniq_id", None)),
-                    "Sat"
-                    + str(getattr(target.satcom_object, "topology_uniq_id", None)),
-                )
-            )
-        elif isinstance(source, Satellite) and isinstance(target, GroundStation):
-            return frozenset(
-                (
-                    "Sat"
-                    + str(getattr(source.satcom_object, "topology_uniq_id", None)),
-                    "Gnd"
-                    + str(getattr(target.satcom_object, "topology_uniq_id", None)),
-                )
-            )
-        elif isinstance(source, GroundStation) and isinstance(target, Satellite):
-            return frozenset(
-                (
-                    "Gnd"
-                    + str(getattr(source.satcom_object, "topology_uniq_id", None)),
-                    "Sat"
-                    + str(getattr(target.satcom_object, "topology_uniq_id", None)),
-                )
-            )
-        elif isinstance(source, GroundStation) and isinstance(target, GroundStation):
-            return frozenset(
-                (
-                    "Gnd"
-                    + str(getattr(source.satcom_object, "topology_uniq_id", None)),
-                    "Gnd"
-                    + str(getattr(target.satcom_object, "topology_uniq_id", None)),
-                )
-            )
-        else:
-            raise ValueError(
-                "Source and target must be either Satellite or GroundStation"
-            )
+            return f"{prefix}{unique_id}"
+
+        return frozenset((name(source), name(target)))
 
     def update_simulation(self, advance_timestep: bool = True) -> None:
         """

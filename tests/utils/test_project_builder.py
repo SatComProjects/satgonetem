@@ -14,6 +14,7 @@ from satgonetem.utils.project_builder import (
     create_and_load_simulation,
     create_custom_satellite,
     create_custom_ground_station,
+    create_custom_user_terminal,
     add_custom_ground_station,
     _find_satellite_by_name,
     _find_ground_station_by_name,
@@ -149,6 +150,21 @@ class TestGroundObject:
         go = GroundObject(gs_file, "user_terminal", CONN_PROPS)
         result = go.to_dict(str(tmp_path))
         assert result["type"] == "user_terminal"
+
+
+class TestCreateCustomUserTerminal:
+    """Tests for create_custom_user_terminal."""
+
+    def test_user_terminal_fields(self):
+        terminal = create_custom_user_terminal(
+            "UT Test", 48.856, 2.352, 0.035, object_id=7
+        )
+
+        assert terminal.label == "UT Test"
+        assert terminal.object_id == 7
+        assert terminal.domain == "public"
+        assert terminal.get_coordinates().latitude == pytest.approx(48.856)
+        assert terminal.get_coordinates().altitude == pytest.approx(35.0)
 
 
 class TestCreateCustomGroundStation:

@@ -44,8 +44,8 @@ handlers never touch Docker, gRPC, routing, or emulator collections.
 
 Only `ISL_*`, `GSL_*`, and `UTL_*` created/removed events are subscribed.
 `ISL_UPDATED`/`GSL_UPDATED` events are deliberately not subscribed: continuous
-state is refreshed directly from the V5 link objects. UTL events are collected
-and ignored until user terminals become first-class emulator nodes.
+state is refreshed directly from the V5 link objects. ISL, GSL, and UTL
+created/removed events are all applied; user terminals are first-class nodes.
 
 ## Reconciliation
 

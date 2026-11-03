@@ -239,10 +239,16 @@ Return the list of satellites.
 
 ### `get_ground_stations() -> List[GroundStation]`
 
-Return the list of ground stations.
+Return all terrestrial nodes: ground stations and user terminals.
 
 **Returns**
-- `List[GroundStation]` - all ground-station node objects.
+- `List[GroundStation]` - all ground-station and user-terminal node objects.
+
+---
+
+### `get_user_terminals() -> List[GroundStation]`
+
+Return only the user-terminal subset of `ground_stations`.
 
 ---
 

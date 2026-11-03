@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Literal
 import pathlib
 
 from sat_com_builder.configuration_manager import BaseConfigurationManager
+from sat_com_builder.factories import DefaultUserTerminalFactory
 from sat_com_builder.models import (
     DawnDuskSunSynchronousOrbitShellProperty,
     GroundConnectivityProperty,
@@ -37,6 +38,7 @@ from sat_com_model.models import (
     GroundObjectDomain,
     GroundStation as SatComGroundStation,
     Satellite as SatComSatellite,
+    UserTerminal as SatComUserTerminal,
     InterSatelliteLinkDirection,
     OpticalInterSatelliteLinkModel,
 )
@@ -336,6 +338,26 @@ def create_custom_ground_station(
     return gs
 
 
+def create_custom_user_terminal(
+    name: str,
+    latitude: float,
+    longitude: float,
+    elevation_km: float,
+    object_id: int = 0,
+    domain: str = "public",
+) -> SatComUserTerminal:
+    """Create a fixed-position user terminal."""
+    user_terminal = DefaultUserTerminalFactory().create_user_terminal(
+        object_id=object_id,
+        label=name,
+        longitude=longitude,
+        latitude=latitude,
+        altitude=elevation_km * 1000.0,
+    )
+    user_terminal.domain = domain
+    return user_terminal
+
+
 def _attach_ground_object_domain(
     ground_object: SatComGroundObject, simulation_manager: SimulationManager
 ) -> None:
@@ -400,6 +422,15 @@ def add_custom_ground_station(
     _attach_ground_object_domain(ground_station, simulation_manager)
     simulation_manager.add_ground_station(ground_station)
     logging.info(f"Custom ground station {ground_station.topology_uniq_id} added")
+
+
+def add_custom_user_terminal(
+    user_terminal: SatComUserTerminal, simulation_manager: SimulationManager
+) -> None:
+    """Add a user terminal to an existing simulation manager."""
+    _attach_ground_object_domain(user_terminal, simulation_manager)
+    simulation_manager.add_user_terminals(user_terminal)
+    logging.info(f"Custom user terminal {user_terminal.topology_uniq_id} added")
 
 
 def _find_satellite_by_name(

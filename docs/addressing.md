@@ -95,9 +95,11 @@ after all nodes have been attempted if any node fails.
 
 ## User terminals
 
-The plan supports user-terminal blocks and tests them, but the current
-emulator does not create user-terminal nodes or user-terminal links. UT links
-are skipped by topology sync. Full UT emulation is a separate feature.
+User terminals are first-class emulator nodes named `Usr{topology_uniq_id}`.
+They use the user-terminal pool, receive a `/32` loopback and `/31` link
+addresses, and are stored in `TopologyManager.ground_stations` alongside
+gateways so the launcher, routing, and graph paths are shared. A V5
+`UserTerminalLink` is modelled as an emulator `UserTerminalLink`.
 
 ## Controller plane
 

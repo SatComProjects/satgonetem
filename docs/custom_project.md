@@ -550,7 +550,6 @@ topology = TopologyManager.from_file("my_custom_project.json")
 | `create_custom_ground_station` | Build a fixed-position ground station object. |
 | `add_custom_ground_station` | Register a ground station in a manager. |
 | `create_custom_user_terminal` | Build a fixed-position user terminal object. |
-| `create_custom_point_of_presence` | Build a fixed-position point of presence object. |
 | `add_mesh_links` | Auto-create a Walker-delta-style mesh from TLE-based satellites and connect ground stations to the closest satellite. |
 | `sim_manager.create_and_add_inter_satellite_link_connection(...)` | Wire two satellites directly via the `SimulationManager`. |
 | `sim_manager.create_and_add_ground_station_link_connection(...)` | Wire a satellite to a ground station directly via the `SimulationManager`. |

@@ -32,13 +32,14 @@ from satgonetem.services.event_collection import (
     LinkKey,
 )
 
-_CREATED_EVENT_TYPES = frozenset({EventType.ISL_CREATED, EventType.GSL_CREATED})
+_CREATED_EVENT_TYPES = frozenset(
+    {EventType.ISL_CREATED, EventType.GSL_CREATED, EventType.UTL_CREATED}
+)
 _SUBSCRIBED_EVENT_TYPES = (
     EventType.ISL_CREATED,
     EventType.ISL_REMOVED,
     EventType.GSL_CREATED,
     EventType.GSL_REMOVED,
-    # UTLs are collected and ignored until the emulator models terminals as nodes.
     EventType.UTL_CREATED,
     EventType.UTL_REMOVED,
 )
@@ -121,7 +122,18 @@ class EventSyncMixin:
                 (f"Sat{satellite_id}", f"Gnd{ground_station_id}")
             )
 
-        # UTLs and any future event types are collected but not modelled yet.
+        if event_type in {EventType.UTL_CREATED, EventType.UTL_REMOVED}:
+            satellite_id = getattr(event, "satellite_id", None)
+            user_terminal_id = getattr(event, "user_terminal_id", None)
+            if satellite_id not in self.satellites:
+                return None
+            terminal = self.ground_stations.get(user_terminal_id)
+            if terminal is None or terminal.type != "UserTerminal":
+                return None
+            return frozenset(
+                (f"Sat{satellite_id}", f"Usr{user_terminal_id}")
+            )
+
         return None
 
     def _apply_link_delta(self, delta: LinkDelta) -> dict[str, list[Link]]:
@@ -228,7 +240,12 @@ class EventSyncMixin:
         source, target, satcom_link = endpoints
 
         is_isl = event.type in {EventType.ISL_CREATED, EventType.ISL_REMOVED}
-        link_type = "InterSatelliteLink" if is_isl else "GroundStationLink"
+        if is_isl:
+            link_type = "InterSatelliteLink"
+        elif event.type in {EventType.UTL_CREATED, EventType.UTL_REMOVED}:
+            link_type = "UserTerminalLink"
+        else:
+            link_type = "GroundStationLink"
         direction = ""
         if is_isl:
             direction = self._event_direction(event, satcom_link)
@@ -241,7 +258,9 @@ class EventSyncMixin:
             else True
         )
         capacity = (
-            self.isl_link_capacity if is_isl else self.gnd_link_capacity
+            self.isl_link_capacity
+            if is_isl
+            else self.gnd_link_capacity
         )
         link = Link(
             source=source,
@@ -273,6 +292,11 @@ class EventSyncMixin:
         elif event.type in {EventType.GSL_CREATED, EventType.GSL_REMOVED}:
             source_id = getattr(event, "satellite_id", None)
             target_id = getattr(event, "ground_station_id", None)
+            source = self.satellites.get(source_id)
+            target = self.ground_stations.get(target_id)
+        elif event.type in {EventType.UTL_CREATED, EventType.UTL_REMOVED}:
+            source_id = getattr(event, "satellite_id", None)
+            target_id = getattr(event, "user_terminal_id", None)
             source = self.satellites.get(source_id)
             target = self.ground_stations.get(target_id)
         else:
@@ -324,6 +348,11 @@ class EventSyncMixin:
             return self._find_satcom_link(
                 getattr(event, "satellite_id", None),
                 getattr(event, "ground_station_id", None),
+            )
+        if event.type in {EventType.UTL_CREATED, EventType.UTL_REMOVED}:
+            return self._find_satcom_link(
+                getattr(event, "satellite_id", None),
+                getattr(event, "user_terminal_id", None),
             )
         return None
 

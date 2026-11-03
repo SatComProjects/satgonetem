@@ -95,8 +95,7 @@ mapped to the `"InterShell"` direction on the emulator `Link`.
 
 ## Limitations
 
-- User terminals and points of presence are still not first-class emulator
-  nodes. Their links are collected and ignored by the event path and are not
-  built into containers. See the Phase 4 tracking item.
+- User terminals are now first-class emulator nodes (container, address plan,
+  UTL links, graph, and event path). Points of presence remain unsupported.
 - Advanced optical metrics increase the per-tick cost; benchmark with
   `scripts/benchmark_topology_stages.py` before making them the default.

@@ -292,7 +292,7 @@ class GoNetEmLauncher(NetworkLauncher):
         p2 = int(getattr(link, "peer2_capacity", 0) or 0)
         fb = int(getattr(link, "capacity", 0) or 0)
         link_type = getattr(link, "type", "")
-        if link_type == "GroundStationLink":
+        if link_type in {"GroundStationLink", "UserTerminalLink"}:
             default = self.gnd_capacity_kbps
         elif link_type == "GroundObjectLink":
             default = self.ground_object_capacity_kbps
@@ -661,7 +661,7 @@ class GoNetEmLauncher(NetworkLauncher):
         for link in links:
             if not getattr(link, "use_budget", False):
                 link_type = getattr(link, "type", "")
-                if link_type == "GroundStationLink":
+                if link_type in {"GroundStationLink", "UserTerminalLink"}:
                     capacity = gnd_kbps
                 elif link_type == "GroundObjectLink":
                     capacity = self.ground_object_capacity_kbps

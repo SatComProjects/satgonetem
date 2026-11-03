@@ -650,29 +650,33 @@ policy, and limitations.
 
 ## User terminals
 
-User terminals are defined the same way as ground stations but with `type="user_terminal"`:
+User terminals are defined the same way as ground stations but with `type="user_terminal"`.
+They receive `Usr{topology_uniq_id}` names, use the user-terminal address pool, and
+their links are `UserTerminalLink` objects:
 
 ```python
-ut_entries = [
-    GroundStationEntry(0, "Terminal-A", 48.8, 2.3, 0.05),
-]
-ut_file = GroundObjectFile("User Terminals", ut_entries)
-ut_conn = GroundConnectivityProperty(
-    ground_to_space_connections_strategy="best-angle-until-disconnection",
-    elevation_above_horizon=5,
-    maximum_satellite_range_distance=1000.0,
-    shells_whitelist=["LEO"],
-    maximum_connected_satellites=1,
-)
+from sat_com_builder.models import GroundObjectData
+
 ut_obj = GroundObjectProperty(
-    identifier=ut_file.identifier,
-    data_file=ut_file.write("/tmp"),
+    identifier="User Terminals",
     type="user_terminal",
-    connectivity_properties=ut_conn,
+    ground_objects=[
+        GroundObjectData(id=0, label="Terminal-A", latitude=48.8, longitude=2.3, altitude=50.0),
+    ],
+    connectivity_properties=GroundConnectivityProperty(
+        ground_to_space_connections_strategy="best-angle-until-disconnection",
+        elevation_above_horizon=5,
+        maximum_satellite_range_distance=1000.0,
+        shells_whitelist=["LEO"],
+        maximum_connected_satellites=1,
+    ),
 )
+
+# Add "User Terminals" to the shell's ground_object_white_list too.
 ```
 
-The shell's `maximum_connected_user_terminal` field controls how satellites treat user
-terminal links. SatGoNetEm currently creates emulator nodes for ground stations only;
-user terminals and points of presence are valid topology objects but are not yet
-first-class emulator nodes (see #139).
+`create_custom_user_terminal()` creates a terminal for an existing simulation.
+`TopologyManager.get_user_terminals()` returns the terminal subset;
+`get_ground_stations()` also includes them because the launcher, graph, and routing
+layers treat terrestrial nodes uniformly. Points of presence remain unsupported
+(see #139).

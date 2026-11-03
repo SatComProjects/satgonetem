@@ -41,9 +41,11 @@ from sat_com_application.simulation_manager import (
 from sat_com_builder.models import SimulationProperty
 from satgonetem.utils.project_builder import (
     add_custom_ground_station,
+    add_custom_user_terminal,
     create_and_load_simulation,
     create_custom_ground_station,
     create_custom_satellite,
+    create_custom_user_terminal,
     create_empty_project,
 )
 
@@ -476,6 +478,17 @@ class TopologyManager(
             )
             add_custom_ground_station(gs, sim_manager)
 
+        for ut_data in runtime_state.get("user_terminals", []):
+            ut = create_custom_user_terminal(
+                name=ut_data["label"],
+                latitude=ut_data["latitude"],
+                longitude=ut_data["longitude"],
+                elevation_km=ut_data.get("altitude", 0) / 1000.0,
+                object_id=ut_data.get("object_id", 0),
+                domain=ut_data.get("domain", "public"),
+            )
+            add_custom_user_terminal(ut, sim_manager)
+
         from sat_com_model.models import InterSatelliteLinkDirection
 
         links = runtime_state.get("links", {})
@@ -524,6 +537,24 @@ class TopologyManager(
                 sim_manager.create_and_add_ground_station_link_connection(sat, gs)
             except Exception as exc:
                 logging.warning(f"Failed to restore GSL {gsl}: {exc}")
+
+        for utl in links.get("user_terminal", []):
+            try:
+                sat = next(
+                    s
+                    for s in sim_manager.get_satellites()
+                    if s.satellite_name == utl["source"]
+                )
+                user_terminal = next(
+                    g
+                    for g in sim_manager.get_user_terminals()
+                    if g.label == utl["destination"]
+                )
+                sim_manager.create_and_add_user_terminal_link_connection(
+                    sat, user_terminal
+                )
+            except Exception as exc:
+                logging.warning(f"Failed to restore UTL {utl}: {exc}")
 
         for gol in links.get("ground_object", []):
             try:
@@ -1158,8 +1189,16 @@ class TopologyManager(
         return list(self.satellites.values())
 
     def get_ground_stations(self) -> List[GroundStation]:
-        """Return the list of ground stations."""
+        """Return all terrestrial nodes (ground stations and user terminals)."""
         return list(self.ground_stations.values())
+
+    def get_user_terminals(self) -> List[GroundStation]:
+        """Return the user-terminal subset of ``ground_stations``."""
+        return [
+            node
+            for node in self.ground_stations.values()
+            if getattr(node, "type", "") == "UserTerminal"
+        ]
 
     def get_links(self) -> List[Link]:
         """Return the list of links."""

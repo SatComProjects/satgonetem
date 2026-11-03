@@ -522,3 +522,19 @@ def test_update_links_rejects_missing_results(launcher):
 
     with pytest.raises(RuntimeError, match="1 result"):
         launcher.update_links(links)
+
+
+def test_write_ground_stations_supports_user_terminal():
+    terminal = SimpleNamespace(
+        id=5,
+        name="Usr5",
+        image="",
+        type="UserTerminal",
+    )
+
+    text = GoNetEmLauncher._write_ground_stations(
+        [terminal], "docker.gndstation"
+    )
+
+    assert " Usr5:" in text
+    assert "type: docker.gndstation" in text
