@@ -57,57 +57,22 @@ For development extras (linting, type checking, coverage):
 pip install -e ".[dev]"
 ```
 
-### GoNetem
+### GoNetEm
 
-The `GoNetEmLauncher` backend delegates network operations to a running `gonetem-server` daemon via gRPC.
+The `GoNetEmLauncher` backend delegates network operations to a running `gonetem-server` daemon via gRPC. SatGoNetEm is developed against the [SatComProjects fork of GoNetEm](https://github.com/SatComProjects/gonetem).
 
-Clone and build from source:
+Clone and install from source:
 
 ```bash
-git clone https://github.com/mroy31/gonetem
+git clone https://github.com/SatComProjects/gonetem
 cd gonetem
-make build-amd64   # or armv7 / arm64
+sudo make install-amd64   # or install-arm64
+gonetem-console pull
 ```
 
-If using the stock gonetem version, make sure to copy the configuration file to use SGNT's custom docker images:
-```
-sudo cp resources/gonetem_config/config.yaml /etc/gonetem/config.yaml
-
-sudo service gonetem restart # If running
-
-docker pull jariassuarez/sgnt:satellite
-docker pull jariassuarez/sgnt:ground-station
-```
-
-The compiled binaries are placed in `bin/`. Pull the Docker images GoNetem uses internally:
-
-```bash
-./bin/gonetem-console pull
-```
-
-
-
-Start the server (requires root):
-
-```bash
-sudo ./bin/gonetem-server
-```
+`make install-*` builds `gonetem-server` and `gonetem-console`, installs them under `/usr/local/bin`, installs the default configuration at `/etc/gonetem/config.yaml` (including the `jariassuarez/sgnt` satellite and ground-station images), and starts `gonetem.service`. `gonetem-console pull` fetches every Docker image that configuration references.
 
 The server listens on `localhost:10110` by default, which matches the `gonetem_server` default in `NetworkConfig`. To use this backend, set `network_launcher="GONETEM"` when constructing `TopologyManager`.
-
-or a modified, satgonetem-optimized version:
-```bash
-git clone https://github.com/jariassuarez/gonetem
-cd gonetem
-make install-amd64   # or armv7 / arm64
-
-gonetem-console pull
-docker pull jariassuarez/sgnt:satellite
-docker pull jariassuarez/sgnt:ground-station
-
-```
-
-
 
 ## Quick Start
 
