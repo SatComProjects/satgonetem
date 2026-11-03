@@ -10,6 +10,7 @@ from satgonetem.models.ground_station import GroundStation
 from satgonetem.models.satellite import Satellite
 from satgonetem.models.link import Link
 from satgonetem.services.mixins.simulation_loop import ensure_simulation_lock
+from satgonetem.utils.timing import StageTimings, measure_stage
 from satgonetem.utils.utils import distance_3d_km, distance_3d_km_many
 from sat_com_model.models import InterSatelliteLinkDirection
 from sat_com_model.models import Link as SatComLink
@@ -564,6 +565,8 @@ class TopologySyncMixin:
         """
         with ensure_simulation_lock(self):
             start_t = time.perf_counter()
+            timings = StageTimings()
+            self.stage_timings = timings
             logging.info(
                 "Simulation update started for time step %d, %.3fs",
                 self.current_time_step,
@@ -575,14 +578,20 @@ class TopologySyncMixin:
 
             if advance_timestep:
                 self.current_time_step += 1
-                self._update_simulation_manager_time()
-            
-            self._sync_node_positions()
-            link_changes = self._sync_links()
+                with measure_stage(self, "tick"):
+                    self._update_simulation_manager_time()
+
+            with measure_stage(self, "position_sync"):
+                self._sync_node_positions()
+            with measure_stage(self, "link_sync"):
+                link_changes = self._sync_links()
             links_to_add = link_changes["links_to_add"]
             links_to_update = link_changes["links_to_update"]
             links_to_remove = link_changes["links_to_remove"]
             pending_delete_count = len(links_to_remove)
+
+            # Phase 2 will replace this placeholder with the EventBus drain.
+            timings.record("event_collection", 0.0)
 
             # Delete first: HIL handovers reuse bridge/interface names, so the old
             # link must be gone before the new one is created.
@@ -593,13 +602,14 @@ class TopologySyncMixin:
                 links_to_update=[],
                 links_to_remove=links_to_remove,
             )
-            self._perform_local_link_operations(
-                to_add=False,
-                to_update=False,
-                links_to_add=[],
-                links_to_update=[],
-                links_to_remove=links_to_remove,
-            )
+            with measure_stage(self, "link_local_ops"):
+                self._perform_local_link_operations(
+                    to_add=False,
+                    to_update=False,
+                    links_to_add=[],
+                    links_to_update=[],
+                    links_to_remove=links_to_remove,
+                )
 
             link_stats = self.bulk_link_operations(
                 to_del=False,
@@ -607,24 +617,32 @@ class TopologySyncMixin:
                 links_to_update=links_to_update,
                 links_to_remove=[],
             )
-            self._perform_local_link_operations(
-                to_del=False,
-                links_to_add=links_to_add,
-                links_to_update=links_to_update,
-                links_to_remove=[],
-            )
+            with measure_stage(self, "link_local_ops"):
+                self._perform_local_link_operations(
+                    to_del=False,
+                    links_to_add=links_to_add,
+                    links_to_update=links_to_update,
+                    links_to_remove=[],
+                )
 
             link_stats["deleted_count"] = delete_stats["deleted_count"]
             link_stats["delete_time_total"] = delete_stats["delete_time_total"]
             link_stats["delete_time_wall"] = delete_stats.get("delete_time_wall", 0.0)
             link_stats["delete_time_per_link"] = delete_stats["delete_time_per_link"]
 
+            timings.record("link_add", link_stats.get("add_time_wall", 0.0))
+            timings.record("link_update", link_stats.get("update_time_wall", 0.0))
+            timings.record("link_delete", link_stats.get("delete_time_wall", 0.0))
+
             if (
                 link_stats["added_count"]
                 or link_stats["updated_count"]
                 or pending_delete_count
             ):
-                self._update_routing_after_link_changes(link_stats["links_to_add"])
+                with measure_stage(self, "routing_apply"):
+                    self._update_routing_after_link_changes(
+                        link_stats["links_to_add"]
+                    )
 
             if (
                 link_stats["added_count"] > 0
@@ -657,13 +675,21 @@ class TopologySyncMixin:
                     )
                 logging.info(" ".join(parts))
 
-            self._sync_interfaces_and_links()
+            with measure_stage(self, "interface_sync"):
+                self._sync_interfaces_and_links()
 
-            elapsed_ms = (time.perf_counter() - start_t) * 1000
+            elapsed = time.perf_counter() - start_t
+            timings.record("total", elapsed)
+            self.last_stage_timings = timings.as_dict()
+            logging.debug(
+                "Simulation update stage timings for time step %d: %s",
+                self.current_time_step,
+                self.last_stage_timings,
+            )
             logging.info(
                 "Simulation update completed for time step %d, total time: %.2fms",
                 self.current_time_step,
-                elapsed_ms,
+                elapsed * 1000,
             )
 
     def _sync_interfaces_and_links(self) -> None:

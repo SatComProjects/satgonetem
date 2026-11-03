@@ -7,6 +7,7 @@ Satellites will include a satcom_object, which will correspond to their satcomto
 
 from satgonetem.traffic.ping_utils import PingResults
 from satgonetem.utils.satcom_fix import apply_satcom_fix
+from satgonetem.utils.timing import StageTimings, measure_stage
 
 apply_satcom_fix()
 
@@ -84,6 +85,9 @@ class NetworkConfig:
         controller_bridge_name: Name of the OVS bridge inside the controller container.
         controller_node_iface_pattern: Python format string for node controller interfaces.
             Must contain ``{node_id}``.
+        topology_events: Use the satComTopology V5 EventBus for topology lifecycle
+            updates instead of rediscovering every change from a full link scan.
+            Defaults to False; the polling sync path remains the baseline.
         ground_station_pool: Data-plane pool subdivided into ground-station blocks.
         satellite_pool: Data-plane pool subdivided into satellite blocks.
         user_terminal_pool: Data-plane pool subdivided into user-terminal blocks.
@@ -120,6 +124,9 @@ class NetworkConfig:
     controller_subnet_prefix: int = 16
     controller_bridge_name: str = "Controller"
     controller_node_iface_pattern: str = "eth{node_id}"
+
+    # Phase 2 event path switch. Off preserves the pull-based update path.
+    topology_events: bool = False
 
 
 class TopologyManager(
@@ -371,6 +378,7 @@ class TopologyManager(
                 network_launcher=self.network_launcher,
                 gonetem_server=self.gonetem_server,
                 use_budget=self.use_budget,
+                topology_events=self.topology_events,
                 ground_station_pool=self.ground_station_pool,
                 satellite_pool=self.satellite_pool,
                 user_terminal_pool=self.user_terminal_pool,
@@ -598,6 +606,12 @@ class TopologyManager(
         self.interfaces: list[Interface] = []  # List of all interfaces in the network
         self.interface_version = 0
 
+        # Stage timings from the most recent update_simulation() tick. The
+        # active timer is replaced at the start of each tick; the snapshot is
+        # exposed through get_last_stage_timings().
+        self.stage_timings: StageTimings = StageTimings()
+        self.last_stage_timings: dict[str, float] = {}
+
         # QoS thingies
         self.use_file_routes = False
 
@@ -710,6 +724,7 @@ class TopologyManager(
         self.network_launcher = config.network_launcher
         self.gonetem_server = config.gonetem_server
         self.use_budget = config.use_budget
+        self.topology_events = config.topology_events
         self.ground_station_pool = config.ground_station_pool
         self.satellite_pool = config.satellite_pool
         self.user_terminal_pool = config.user_terminal_pool
@@ -870,6 +885,14 @@ class TopologyManager(
         """Get the current time step counter."""
         return self.current_time_step
 
+    def get_last_stage_timings(self) -> dict[str, float]:
+        """Return stage timings from the most recent update_simulation() tick.
+
+        Durations are in seconds. Stages may overlap: ``routing_graph`` is
+        nested inside ``routing_apply`` when routing updates run.
+        """
+        return dict(getattr(self, "last_stage_timings", {}))
+
     def get_project_duration_in_timesteps(self) -> int:
         """Get the project duration in time steps."""
         if self.simulation_manager is None:
@@ -896,6 +919,11 @@ class TopologyManager(
 
     def get_current_graph(self):
         """Get the current topology as a NetworkX graph."""
+        with measure_stage(self, "routing_graph"):
+            return self._build_current_graph()
+
+    def _build_current_graph(self):
+        """Build the current routing graph; timed by get_current_graph()."""
 
         if self.simulation_manager is None:
             raise ValueError("Simulation manager is not set")

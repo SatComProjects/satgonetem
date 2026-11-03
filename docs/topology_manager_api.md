@@ -67,6 +67,38 @@ Advance the simulation by exactly one tick.
 
 ---
 
+### `get_last_stage_timings() -> Dict[str, float]`
+
+Return the stage timings recorded during the most recent
+`update_simulation()` pass. Values are wall-clock seconds.
+
+Stages currently recorded:
+
+| Stage | Meaning |
+|---|---|
+| `tick` | satComTopology time-manager tick and its update protocol |
+| `position_sync` | satellite position refresh into emulator nodes |
+| `link_sync` | full link scan, key rebuild, distance refresh, and diff |
+| `link_local_ops` | local interface/flag operations after add/update/delete |
+| `link_add` | batched GoNetEm link-add RPC wall time |
+| `link_update` | batched GoNetEm link-update RPC wall time |
+| `link_delete` | GoNetEm link-delete RPC wall time |
+| `routing_apply` | routing daemon update, including graph build |
+| `routing_graph` | `get_current_graph()` build; nested inside `routing_apply` when routing runs |
+| `interface_sync` | propagation of link state to peer interfaces |
+| `event_collection` | V5 EventBus drain (Phase 2 placeholder in Phase 0) |
+| `total` | wall time inside the update pass |
+
+The stages are not mutually exclusive: `routing_graph` is nested inside
+`routing_apply`. The dictionary is empty before the first tick. See
+[`docs/performance.md`](performance.md) for the Phase 0 baseline and tick
+budget.
+
+**Returns**
+- `Dict[str, float]` - stage name to seconds.
+
+---
+
 ### `speed_up() -> None`
 
 Reduce `update_factor` by 10%, clamped to a minimum of `0.01`.

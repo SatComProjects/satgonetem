@@ -13,6 +13,7 @@ SatGoNetem bridges orbital mechanics and Linux network emulation. It computes sa
 - [`docs/hil_manager.md`](docs/hil_manager.md) — Hardware-in-the-loop integration
 - [`docs/link_budget.md`](docs/link_budget.md) — Link budget calculations and parameters
 - [`docs/addressing.md`](docs/addressing.md) — IPv4 pools, node blocks, loopbacks, and link allocation
+- [`docs/performance.md`](docs/performance.md) — Topology update stage timings and the Phase 0 baseline
 
 ## Features
 
@@ -318,6 +319,7 @@ Key parameters on `TopologyManager`:
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `update_time` | 5 | Simulation tick interval in seconds |
+| `topology_events` | `False` | Reserved for the Phase 2 V5 EventBus path; polling remains the baseline |
 | `routing` | `"static"` | Routing method name |
 | `isl_link_capacity` | - | Inter-satellite link capacity in kbps |
 | `gnd_link_capacity` | - | Ground-space link capacity in kbps |
