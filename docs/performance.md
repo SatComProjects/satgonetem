@@ -164,3 +164,21 @@ outside it.
 - V5's published benchmark uses a different ground-link shape (roughly 482
   GSLs) and reports larger absolute tick times; do not compare the two tables
   directly.
+
+
+## Phase 4 optical refresh
+
+Phase 4 adds advanced optical constraint metrics to the per-tick refresh. A
+post-change run on the same method gives:
+
+| Case | Tick p50 | Tick p95 | `link_sync` p50 |
+|---|---:|---:|---:|
+| 720 basic, 5 s | 0.022 s | 0.023 s | 0.0026 s |
+| 720 advanced, 5 s | 0.173 s | 0.217 s | 0.0085 s |
+| 3,360 basic, 60 s | 0.155 s | 0.249 s | 0.0089 s |
+| 3,360 advanced, 60 s | 0.700 s | 0.877 s | 0.0320 s |
+
+Basic is unchanged within noise. Advanced `link_sync` grows because both ends'
+constraint metrics are refreshed, but the V5 optical tick still dominates and
+the totals stay inside the documented 5 s / 60 s budgets. At 1 s, 3,360
+advanced remains over budget, as in the Phase 0 baseline.

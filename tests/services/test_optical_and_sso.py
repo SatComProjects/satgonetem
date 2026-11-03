@@ -75,3 +75,10 @@ def test_sso_walker_project_creates_inter_shell_links():
         link for link in manager.links.values() if link.direction == "InterShell"
     ]
     assert inter_shell
+
+    graph = manager.get_current_graph()
+    for link in inter_shell:
+        assert graph.has_edge(
+            link.source.satcom_object.topology_uniq_id,
+            link.target.satcom_object.topology_uniq_id,
+        )
