@@ -515,6 +515,76 @@ class TestLinkRefreshFromSatcom:
         assert gsl_link.is_expiring(now, horizon_s=0.0) is False
 
 
+class TestLinkOpticalRefresh:
+    """Tests for advanced optical metrics and temporary unavailability."""
+
+    def _constraint(self, azimuth=10.0):
+        return SimpleNamespace(
+            azimuth_angle_degree=azimuth,
+            relative_azimuth_angle_degree=5.0,
+            elevation_angle_degree=-20.0,
+            range_distance_km=2_500.0,
+            angular_velocity_rate_degree_per_second=0.01,
+            los_min_altitude_km=540.0,
+            estimated_duration=600.0,
+            range_rate=-1.2,
+        )
+
+    def test_refreshes_advanced_optical_metrics(self, isl_link):
+        isl_link.satcom_object = SimpleNamespace(
+            distance_km=2_500.0,
+            disabled=False,
+            temporary_unavailable=False,
+            recovery_time=None,
+            optical_link_model=SimpleNamespace(value="advanced"),
+            source_constraint=self._constraint(10.0),
+            destination_constraint=self._constraint(20.0),
+        )
+
+        isl_link.refresh_from_satcom()
+
+        assert isl_link.optical_link_model == "advanced"
+        assert isl_link.optical_metrics["source"]["azimuth_deg"] == 10.0
+        assert (
+            isl_link.optical_metrics["destination"]["azimuth_deg"] == 20.0
+        )
+        assert isl_link.optical_metrics["source"]["range_km"] == 2_500.0
+
+    def test_temporary_unavailable_marks_link_inactive(self, isl_link):
+        isl_link.satcom_object = SimpleNamespace(
+            distance_km=2_500.0,
+            disabled=False,
+            temporary_unavailable=True,
+            recovery_time=None,
+            optical_link_model=SimpleNamespace(value="advanced"),
+            source_constraint=self._constraint(),
+            destination_constraint=self._constraint(),
+        )
+
+        changed = isl_link.refresh_from_satcom()
+
+        assert changed is True
+        assert isl_link.is_active is False
+        assert isl_link.temporary_unavailable is True
+
+    def test_recovery_marks_link_active_again(self, isl_link):
+        isl_link.satcom_object = SimpleNamespace(
+            distance_km=2_500.0,
+            disabled=False,
+            temporary_unavailable=False,
+            recovery_time=None,
+            optical_link_model=SimpleNamespace(value="advanced"),
+            source_constraint=self._constraint(),
+            destination_constraint=self._constraint(),
+        )
+
+        isl_link.is_active = False
+        changed = isl_link.refresh_from_satcom()
+
+        assert changed is True
+        assert isl_link.is_active is True
+
+
 class TestLinkCapacityRefresh:
     """Capacity refreshes must propagate to the emulator when values change."""
 

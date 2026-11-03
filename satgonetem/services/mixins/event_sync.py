@@ -236,6 +236,7 @@ class EventSyncMixin:
         distance_km = self._event_distance_km(event, satcom_link)
         is_active = (
             not getattr(satcom_link, "disabled", False)
+            and not getattr(satcom_link, "temporary_unavailable", False)
             if satcom_link is not None
             else True
         )

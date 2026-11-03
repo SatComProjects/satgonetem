@@ -265,6 +265,14 @@ Unknown values are `None`.
 
 ---
 
+### `get_link_optical_metrics(link: Link) -> Dict[str, Any]`
+
+Return `model`, per-end optical metrics (`source` / `destination`), the
+temporary-unavailable flag, and recovery time for one link. Basic links have
+`None` for both ends.
+
+---
+
 ### `get_expiring_links(horizon_s: float) -> List[Link]`
 
 Return links predicted to disconnect within `horizon_s` seconds, sorted by

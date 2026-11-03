@@ -15,10 +15,12 @@ SatGoNetem bridges orbital mechanics and Linux network emulation. It computes sa
 - [`docs/addressing.md`](docs/addressing.md) — IPv4 pools, node blocks, loopbacks, and link allocation
 - [`docs/performance.md`](docs/performance.md) — Topology update stage timings and the Phase 0 baseline
 - [`docs/events.md`](docs/events.md) — Event-driven link sync, async ticks, and the Phase 2 decision
+- [`docs/optical.md`](docs/optical.md) — Optical ISLs, temporary unavailability, and SSO/inter-shell links
 
 ## Features
 
-- Real-time satellite constellation simulation (LEO/MEO/GEO, walker and TLE-based)
+- Real-time satellite constellation simulation (LEO/MEO/GEO, walker, SSO, and TLE-based)
+- Optical ISLs with basic/advanced models, terminals, and inter-shell links
 - Docker container-per-node with kernel-level netem delay and rate shaping
 - Hardware-in-the-loop (HIL) support for bridging physical ground station equipment
 - Pluggable routing backends: static (Dijkstra), OSPF (Bird2), IS-IS SR (patched Bird2), SR-MPLS

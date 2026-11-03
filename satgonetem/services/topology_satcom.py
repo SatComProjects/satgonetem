@@ -1083,6 +1083,16 @@ class TopologyManager(
             "recovery_time": link.recovery_time,
         }
 
+    def get_link_optical_metrics(self, link: Link) -> Dict[str, Any]:
+        """Return the advanced optical model and per-end metrics for *link*."""
+        return {
+            "model": link.optical_link_model,
+            "source": link.optical_metrics.get("source"),
+            "destination": link.optical_metrics.get("destination"),
+            "temporary_unavailable": link.temporary_unavailable,
+            "recovery_time": link.recovery_time,
+        }
+
     def get_expiring_links(self, horizon_s: float) -> List[Link]:
         """Return links predicted to disconnect within *horizon_s* seconds."""
         if horizon_s <= 0:

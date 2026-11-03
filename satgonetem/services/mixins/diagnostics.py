@@ -473,6 +473,11 @@ class DiagnosticsMixin:
             summary["min_remaining_link_duration_s"] = (
                 min(durations) if durations else None
             )
+            summary["advanced_optical_links"] = sum(
+                1
+                for link in self.links.values()
+                if link.optical_link_model == "advanced"
+            )
         return summary
 
     def open_bash_terminal(self, node: str) -> None:

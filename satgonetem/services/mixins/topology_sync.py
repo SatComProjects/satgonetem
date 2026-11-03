@@ -192,11 +192,9 @@ class TopologySyncMixin:
                     # leave the wrapper pointing at an object that is no longer
                     # in the simulation manager.
                     link.satcom_object = sat_com_link
-                    new_active = getattr(
-                        sat_com_link,
-                        "is_active",
-                        not getattr(sat_com_link, "disabled", False),
-                    )
+                    new_active = not getattr(
+                        sat_com_link, "disabled", False
+                    ) and not getattr(sat_com_link, "temporary_unavailable", False)
                     if link.is_active != new_active:
                         link.is_active = new_active
                         if new_active:
@@ -269,7 +267,15 @@ class TopologySyncMixin:
                 continue
             try:
                 link.update_distance_and_delay(distance_km * 1000.0)
-                if link.type != "InterSatelliteLink":
+                if link.type == "InterSatelliteLink":
+                    model = getattr(
+                        getattr(link, "satcom_object", None),
+                        "optical_link_model",
+                        None,
+                    )
+                    if getattr(model, "value", model) == "advanced":
+                        link.refresh_optical_from_satcom()
+                else:
                     link.refresh_lifetime_from_satcom()
             except Exception as exc:
                 errors += 1
@@ -320,7 +326,15 @@ class TopologySyncMixin:
         for link, distance_km in zip(links, distances_km):
             try:
                 link.update_distance_and_delay(float(distance_km) * 1000.0)
-                if link.type != "InterSatelliteLink":
+                if link.type == "InterSatelliteLink":
+                    model = getattr(
+                        getattr(link, "satcom_object", None),
+                        "optical_link_model",
+                        None,
+                    )
+                    if getattr(model, "value", model) == "advanced":
+                        link.refresh_optical_from_satcom()
+                else:
                     link.refresh_lifetime_from_satcom()
             except Exception as exc:
                 errors += 1
@@ -435,7 +449,9 @@ class TopologySyncMixin:
                 )
 
         link_type = getattr(sat_com_link, "type", "Link")
-        link_is_active = not getattr(sat_com_link, "disabled", True)
+        link_is_active = not getattr(
+            sat_com_link, "disabled", True
+        ) and not getattr(sat_com_link, "temporary_unavailable", False)
 
         link_distance_km = satcom_distance_km(sat_com_link)
         if link_distance_km is None:
@@ -481,6 +497,7 @@ class TopologySyncMixin:
         )
         link.satcom_object = sat_com_link
         link.refresh_lifetime_from_satcom()
+        link.refresh_optical_from_satcom()
         return link
 
     def _build_link_key(self, source: "Node", target: "Node") -> frozenset:

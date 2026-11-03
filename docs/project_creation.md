@@ -638,6 +638,16 @@ project = SimulationProperty(
 
 ---
 
+## Optical ISLs and SSO shells
+
+Set `optical_inter_satellite_link_model="advanced"` on `SimulationProperty`
+for terminal-constrained optical links, and use `create_sso_walker_project()`
+for a mixed Walker + dawn-dusk SSO example with `INTER_SHELL` links. See
+[`docs/optical.md`](optical.md) for the metrics, temporary-unavailability
+policy, and limitations.
+
+---
+
 ## User terminals
 
 User terminals are defined the same way as ground stations but with `type="user_terminal"`:

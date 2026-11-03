@@ -2,7 +2,7 @@ import logging
 import math
 from datetime import datetime
 from numbers import Real
-from typing import Optional
+from typing import Any, Dict, Optional
 
 from satgonetem.link_budget.config import LinkBudgetConfig
 from satgonetem.link_budget.geometry import get_elevation_angle
@@ -92,6 +92,10 @@ class Link:
         self.elevation_deg: Optional[float] = None
         self.temporary_unavailable: bool = False
         self.recovery_time: Optional[datetime] = None
+
+        # Advanced optical model details, keyed by "source"/"destination".
+        self.optical_link_model: Optional[str] = None
+        self.optical_metrics: Dict[str, Any] = {}
 
         # Network usage
         self.rx = 0
@@ -390,6 +394,60 @@ class Link:
         remaining = self.remaining_duration_s(now)
         return remaining is not None and remaining < horizon_s
 
+    @classmethod
+    def _constraint_metrics(cls, constraint: Any) -> Optional[Dict[str, Any]]:
+        """Convert one V5 OpticalConstraint to a plain metrics dict."""
+        if constraint is None:
+            return None
+        return {
+            "azimuth_deg": cls._optional_float(
+                getattr(constraint, "azimuth_angle_degree", None)
+            ),
+            "relative_azimuth_deg": cls._optional_float(
+                getattr(constraint, "relative_azimuth_angle_degree", None)
+            ),
+            "elevation_deg": cls._optional_float(
+                getattr(constraint, "elevation_angle_degree", None)
+            ),
+            "angular_velocity_deg_s": cls._optional_float(
+                getattr(
+                    constraint,
+                    "angular_velocity_rate_degree_per_second",
+                    None,
+                )
+            ),
+            "range_km": cls._optional_float(
+                getattr(constraint, "range_distance_km", None)
+            ),
+            "los_min_altitude_km": cls._optional_float(
+                getattr(constraint, "los_min_altitude_km", None)
+            ),
+            "estimated_duration_s": cls._optional_float(
+                getattr(constraint, "estimated_duration", None), minimum=0.0
+            ),
+            "range_rate_km_s": cls._optional_float(
+                getattr(constraint, "range_rate", None)
+            ),
+        }
+
+    def refresh_optical_from_satcom(self) -> None:
+        """Refresh the advanced optical model and per-end constraint metrics."""
+        if self.satcom_object is None:
+            return
+
+        model = getattr(self.satcom_object, "optical_link_model", None)
+        self.optical_link_model = (
+            str(getattr(model, "value", model)) if model is not None else None
+        )
+        self.optical_metrics = {
+            "source": self._constraint_metrics(
+                getattr(self.satcom_object, "source_constraint", None)
+            ),
+            "destination": self._constraint_metrics(
+                getattr(self.satcom_object, "destination_constraint", None)
+            ),
+        }
+
     def refresh_from_satcom(self) -> bool:
         """Refresh distance, active state, duration, and optical flags from V5.
 
@@ -403,13 +461,16 @@ class Link:
             raise ValueError("Satcom object is not set")
 
         active_before = self.is_active
-        self.is_active = not getattr(self.satcom_object, "disabled", False)
+        self.refresh_lifetime_from_satcom()
+        self.is_active = not getattr(
+            self.satcom_object, "disabled", False
+        ) and not self.temporary_unavailable
 
         distance_km = satcom_distance_km(self.satcom_object)
         if distance_km is not None:
             self.update_distance_and_delay(distance_km * 1000.0)
 
-        self.refresh_lifetime_from_satcom()
+        self.refresh_optical_from_satcom()
         return self.is_active != active_before
 
     # ------------------------------------------------------------------

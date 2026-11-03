@@ -13,14 +13,22 @@ import pathlib
 
 from sat_com_builder.configuration_manager import BaseConfigurationManager
 from sat_com_builder.models import (
+    DawnDuskSunSynchronousOrbitShellProperty,
     GroundConnectivityProperty,
     GroundObjectData,
     GroundObjectProperty,
+    InterSatelliteLinkOrientationProperty,
+    OpticalTerminalInstallationProperty,
+    OpticalTerminalProperty,
     OrbitalConnectivityProperty,
+    SatelliteProperty,
     SimulationProperty,
     WalkerShellProperty,
 )
-from sat_com_constellation.models import WalkerConstellationProperty
+from sat_com_constellation.models import (
+    DawnDuskSunSynchronousOrbitConstellationProperty,
+    WalkerConstellationProperty,
+)
 from sat_com_application.simulation_manager import SimulationManager
 from sat_com_model.exceptions import GroundObjectDomainNotFoundError
 from sat_com_model.models import (
@@ -30,6 +38,7 @@ from sat_com_model.models import (
     GroundStation as SatComGroundStation,
     Satellite as SatComSatellite,
     InterSatelliteLinkDirection,
+    OpticalInterSatelliteLinkModel,
 )
 
 from satgonetem.utils.satcom_fix import PyOrbitalModel
@@ -810,6 +819,8 @@ def create_test_project(
     start_date: str = "",
     end_date: str = "",
     ground_stations_file: str = "",
+    optical_inter_satellite_link_model: str = "basic",
+    inter_satellite_link_connection_strategy: str = "intra-shell-static-connectivity",
 ) -> SimulationProperty:
     """Build a minimal SimulationProperty suitable for tests and quick experiments.
 
@@ -828,6 +839,11 @@ def create_test_project(
         ground_stations_file: Optional path to a CSV file containing ground
             station entries. If not provided, a default set of five European
             stations is used.
+        optical_inter_satellite_link_model: ``basic`` (default) or
+            ``advanced``. Advanced links carry optical constraint metrics and
+            can be dropped for geometry.
+        inter_satellite_link_connection_strategy: V5 ISL strategy. Defaults to
+            ``intra-shell-static-connectivity``.
 
     Returns:
         A fully configured SimulationProperty.
@@ -884,12 +900,142 @@ def create_test_project(
         ground_object_white_list=["Ground Stations"],
     )
 
+    model = optical_inter_satellite_link_model
+    if not isinstance(model, OpticalInterSatelliteLinkModel):
+        model = OpticalInterSatelliteLinkModel(str(model).lower())
+
     return SimulationProperty(
         simulation_name=simulation_name,
         start_date=start_date,
         end_date=end_date,
         ground_objects_properties=[ground_object_property],
         walker_shells=[shell],
+        optical_inter_satellite_link_model=model,
+        inter_satellite_link_connection_strategy=inter_satellite_link_connection_strategy,
+    )
+
+
+def _inter_shell_satellite_property() -> SatelliteProperty:
+    """Default terminal set plus one inter-shell-capable terminal."""
+    terminals = list(
+        SatelliteProperty().optical_inter_satellite_link_installations
+    )
+    terminals.append(
+        OpticalTerminalInstallationProperty(
+            azimuth_angle_configuration=90.0,
+            elevation_angle_configuration=-90.0,
+            descriptor=InterSatelliteLinkOrientationProperty.INTER_SHELL_LEFT,
+            orientation_possibilities=[
+                InterSatelliteLinkOrientationProperty.INTER_SHELL_LEFT,
+                InterSatelliteLinkOrientationProperty.INTER_SHELL_RIGHT,
+            ],
+            optical_terminal_property=OpticalTerminalProperty(
+                maximum_range_distance_km=10_000.0,
+                minimum_contact_duration_seconds=30.0,
+                max_azimuth_degrees=180.0,
+                min_elevation_degrees=-25.0,
+                max_elevation_degrees=5.0,
+                los_central_angle_max_degrees=80.0,
+            ),
+        )
+    )
+    return SatelliteProperty(
+        optical_inter_satellite_link_installations=terminals
+    )
+
+
+def create_sso_walker_project(
+    simulation_name: str = "SSOWalker",
+    start_date: str = "",
+    end_date: str = "",
+    optical_inter_satellite_link_model: str = "basic",
+    walker_planes: int = 6,
+    walker_satellites_per_plane: int = 10,
+    walker_inclination: float = 53.0,
+    walker_mean_motion: float = 15.5,
+    sso_satellites: int = 12,
+    sso_altitude_km: float = 600.0,
+) -> SimulationProperty:
+    """Build a small Walker + dawn-dusk SSO project with inter-shell links.
+
+    Defaults are sized for tests and examples; use 36 x 20 Walker satellites
+    and 80 SSO satellites to approximate the Starlink G2 + SSO benchmark.
+    """
+    start_date, end_date = _resolve_simulation_dates(start_date, end_date)
+    walker_id = "Walker"
+    sso_id = "SSO"
+
+    ground_stations = [
+        GroundStationEntry(0, "Berlin", 52.52, 13.405, 0.034),
+        GroundStationEntry(1, "London", 51.507, -0.127, 0.011),
+        GroundStationEntry(2, "Paris", 48.856, 2.352, 0.035),
+        GroundStationEntry(3, "Rome", 41.902, 12.496, 0.021),
+        GroundStationEntry(4, "Madrid", 40.416, -3.703, 0.667),
+    ]
+    gs_file = GroundObjectFile("Ground Stations", ground_stations)
+    ground_object = GroundObject(
+        gs_file,
+        "ground_station",
+        GroundConnectivityProperty(
+            ground_to_space_connections_strategy="best-angle-until-disconnection",
+            elevation_above_horizon=10,
+            maximum_satellite_range_distance=2_000.0,
+            shells_whitelist=[walker_id, sso_id],
+            maximum_connected_satellites=3,
+        ),
+    )
+
+    walker_shell = WalkerShellProperty(
+        type="delta",
+        static_addressing_plan="FULL_MESH_WALKER_DELTA",
+        satellite_property=_inter_shell_satellite_property(),
+        constellation_property=WalkerConstellationProperty(
+            identifier=walker_id,
+            amount_of_orbit_plane=walker_planes,
+            amount_of_satellite_per_orbit_plane=walker_satellites_per_plane,
+            inclination=walker_inclination,
+            mean_revolution_per_day=walker_mean_motion,
+            phase_difference_between_satellites=True,
+        ),
+        orbital_connectivity_property=OrbitalConnectivityProperty(
+            adjacent_inter_satellite_shifting=0,
+            maximum_connected_ground_object=100,
+            maximum_connected_user_terminal=100,
+            maximum_connected_ground_station=10,
+        ),
+        ground_object_white_list=["Ground Stations"],
+    )
+    sso_shell = DawnDuskSunSynchronousOrbitShellProperty(
+        satellite_property=_inter_shell_satellite_property(),
+        constellation_property=DawnDuskSunSynchronousOrbitConstellationProperty(
+            identifier=sso_id,
+            altitude_in_km=sso_altitude_km,
+            amount_of_satellite=sso_satellites,
+        ),
+        orbital_connectivity_property=OrbitalConnectivityProperty(
+            adjacent_inter_satellite_shifting=0,
+            maximum_connected_ground_object=100,
+            maximum_connected_user_terminal=100,
+            maximum_connected_ground_station=10,
+        ),
+        ground_object_white_list=["Ground Stations"],
+    )
+
+    model = optical_inter_satellite_link_model
+    if not isinstance(model, OpticalInterSatelliteLinkModel):
+        model = OpticalInterSatelliteLinkModel(str(model).lower())
+
+    return SimulationProperty(
+        simulation_name=simulation_name,
+        start_date=start_date,
+        end_date=end_date,
+        ground_objects_properties=[
+            GroundObjectProperty(**ground_object.to_dict(inline=True))
+        ],
+        walker_shells=[walker_shell],
+        dawn_dusk_sso_shells=[sso_shell],
+        inter_satellite_link_connection_strategy="inter-shell-sso-priority",
+        optical_inter_satellite_link_model=model,
     )
 
 
