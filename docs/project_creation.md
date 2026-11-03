@@ -680,4 +680,6 @@ ut_obj = GroundObjectProperty(
 `get_ground_stations()` also includes them because the launcher, graph, and routing
 layers treat terrestrial nodes uniformly. Points of presence are supported too:
 use `type="point_of_presence"`, `Pop*` names, and `create_custom_point_of_presence()`;
-their links are `GroundObjectLink` objects.
+their links are `GroundObjectLink` objects. V5 does not publish GOL events
+and its `remove_link()` does not handle GOL; event mode relies on the
+reconciliation pass for GOL lifecycle changes.
