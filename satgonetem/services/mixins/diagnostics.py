@@ -469,6 +469,11 @@ class DiagnosticsMixin:
                 for node in self.ground_stations.values()
                 if getattr(node, "type", "") == "UserTerminal"
             ),
+            "points_of_presence": sum(
+                1
+                for node in self.ground_stations.values()
+                if getattr(node, "type", "") == "PointOfPresence"
+            ),
             "links": len(self.links),
         }
         if self.simulation_manager is not None:

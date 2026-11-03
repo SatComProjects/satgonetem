@@ -33,7 +33,12 @@ from satgonetem.services.event_collection import (
 )
 
 _CREATED_EVENT_TYPES = frozenset(
-    {EventType.ISL_CREATED, EventType.GSL_CREATED, EventType.UTL_CREATED}
+    {
+        EventType.ISL_CREATED,
+        EventType.GSL_CREATED,
+        EventType.UTL_CREATED,
+        EventType.GOL_CREATED,
+    }
 )
 _SUBSCRIBED_EVENT_TYPES = (
     EventType.ISL_CREATED,
@@ -42,6 +47,8 @@ _SUBSCRIBED_EVENT_TYPES = (
     EventType.GSL_REMOVED,
     EventType.UTL_CREATED,
     EventType.UTL_REMOVED,
+    EventType.GOL_CREATED,
+    EventType.GOL_REMOVED,
 )
 
 _DIRECTION_LABELS = {
@@ -99,6 +106,16 @@ class EventSyncMixin:
             delta.record(key, action, event)
         return delta
 
+    def _ground_object_name(self, uniq_id: int) -> Optional[str]:
+        node = self.ground_stations.get(uniq_id)
+        if node is None:
+            return None
+        prefix = {
+            "UserTerminal": "Usr",
+            "PointOfPresence": "Pop",
+        }.get(getattr(node, "type", ""), "Gnd")
+        return f"{prefix}{uniq_id}"
+
     def _link_event_key(self, event: Any) -> Optional[LinkKey]:
         """Map an ISL/GSL event to the emulator's undirected link key."""
         event_type = getattr(event, "type", None)
@@ -153,6 +170,15 @@ class EventSyncMixin:
                 or f"Usr{user_terminal_id}"
             )
             return frozenset((satellite_name, terminal_name))
+
+        if event_type in {EventType.GOL_CREATED, EventType.GOL_REMOVED}:
+            object_a_id = getattr(event, "ground_object_a_id", None)
+            object_b_id = getattr(event, "ground_object_b_id", None)
+            name_a = self._ground_object_name(object_a_id)
+            name_b = self._ground_object_name(object_b_id)
+            if name_a is None or name_b is None:
+                return None
+            return frozenset((name_a, name_b))
 
         return None
 
@@ -264,6 +290,8 @@ class EventSyncMixin:
             link_type = "InterSatelliteLink"
         elif event.type in {EventType.UTL_CREATED, EventType.UTL_REMOVED}:
             link_type = "UserTerminalLink"
+        elif event.type in {EventType.GOL_CREATED, EventType.GOL_REMOVED}:
+            link_type = "GroundObjectLink"
         else:
             link_type = "GroundStationLink"
         direction = ""
@@ -277,11 +305,14 @@ class EventSyncMixin:
             if satcom_link is not None
             else True
         )
-        capacity = (
-            self.isl_link_capacity
-            if is_isl
-            else self.gnd_link_capacity
-        )
+        if is_isl:
+            capacity = self.isl_link_capacity
+        elif event.type in {EventType.GOL_CREATED, EventType.GOL_REMOVED}:
+            capacity = getattr(
+                self, "ground_object_link_capacity", self.gnd_link_capacity
+            )
+        else:
+            capacity = self.gnd_link_capacity
         link = Link(
             source=source,
             target=target,
@@ -318,6 +349,11 @@ class EventSyncMixin:
             source_id = getattr(event, "satellite_id", None)
             target_id = getattr(event, "user_terminal_id", None)
             source = self.satellites.get(source_id)
+            target = self.ground_stations.get(target_id)
+        elif event.type in {EventType.GOL_CREATED, EventType.GOL_REMOVED}:
+            source_id = getattr(event, "ground_object_a_id", None)
+            target_id = getattr(event, "ground_object_b_id", None)
+            source = self.ground_stations.get(source_id)
             target = self.ground_stations.get(target_id)
         else:
             return None
@@ -373,6 +409,11 @@ class EventSyncMixin:
             return self._find_satcom_link(
                 getattr(event, "satellite_id", None),
                 getattr(event, "user_terminal_id", None),
+            )
+        if event.type in {EventType.GOL_CREATED, EventType.GOL_REMOVED}:
+            return self._find_satcom_link(
+                getattr(event, "ground_object_a_id", None),
+                getattr(event, "ground_object_b_id", None),
             )
         return None
 

@@ -678,5 +678,6 @@ ut_obj = GroundObjectProperty(
 `create_custom_user_terminal()` creates a terminal for an existing simulation.
 `TopologyManager.get_user_terminals()` returns the terminal subset;
 `get_ground_stations()` also includes them because the launcher, graph, and routing
-layers treat terrestrial nodes uniformly. Points of presence remain unsupported
-(see #139).
+layers treat terrestrial nodes uniformly. Points of presence are supported too:
+use `type="point_of_presence"`, `Pop*` names, and `create_custom_point_of_presence()`;
+their links are `GroundObjectLink` objects.

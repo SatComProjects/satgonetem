@@ -22,7 +22,7 @@ SatGoNetem bridges orbital mechanics and Linux network emulation. It computes sa
 
 - Real-time satellite constellation simulation (LEO/MEO/GEO, walker, SSO, and TLE-based)
 - Optical ISLs with basic/advanced models, terminals, and inter-shell links
-- First-class user terminal nodes with UTL links and the user-terminal address pool
+- First-class ground objects: stations, user terminals, and points of presence
 - Docker container-per-node with kernel-level netem delay and rate shaping
 - Hardware-in-the-loop (HIL) support for bridging physical ground station equipment
 - Pluggable routing backends: static (Dijkstra), OSPF (Bird2), IS-IS SR (patched Bird2), SR-MPLS

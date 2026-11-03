@@ -8,6 +8,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from satgonetem.models.ground_station import GroundStation
 from satgonetem.models.user_terminal import UserTerminal
+from satgonetem.models.point_of_presence import PointOfPresence
 from satgonetem.models.satellite import Satellite
 from satgonetem.models.link import Link, satcom_distance_km
 from satgonetem.services.mixins.simulation_loop import ensure_simulation_lock
@@ -110,6 +111,9 @@ class TopologySyncMixin:
         )
         if callable(user_terminal_getter):
             gs_data.extend(user_terminal_getter())
+        pop_getter = getattr(self.simulation_manager, "get_point_of_presences", None)
+        if callable(pop_getter):
+            gs_data.extend(pop_getter())
         num_gs = len(gs_data)
 
         if num_gs == 0:
@@ -118,9 +122,15 @@ class TopologySyncMixin:
 
         def process_ground_station(sat_com_gs):
             object_type = getattr(sat_com_gs, "type", "GroundStation")
-            prefix = "Usr" if object_type == "UserTerminal" else "Gnd"
+            prefix = {
+                "UserTerminal": "Usr",
+                "PointOfPresence": "Pop",
+            }.get(object_type, "Gnd")
             gs_id = f"{prefix}{getattr(sat_com_gs, 'topology_uniq_id', 'Unknown')}"
-            node_class = UserTerminal if object_type == "UserTerminal" else GroundStation
+            node_class = {
+                "UserTerminal": UserTerminal,
+                "PointOfPresence": PointOfPresence,
+            }.get(object_type, GroundStation)
             gs = node_class(gs_id)
             gs.satcom_object = sat_com_gs
             if hasattr(sat_com_gs, "emulator_id"):

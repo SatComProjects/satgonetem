@@ -12,7 +12,10 @@ from typing import Any, Dict, List, Literal
 import pathlib
 
 from sat_com_builder.configuration_manager import BaseConfigurationManager
-from sat_com_builder.factories import DefaultUserTerminalFactory
+from sat_com_builder.factories import (
+    DefaultPointOfPresenceFactory,
+    DefaultUserTerminalFactory,
+)
 from sat_com_builder.models import (
     DawnDuskSunSynchronousOrbitShellProperty,
     GroundConnectivityProperty,
@@ -39,6 +42,7 @@ from sat_com_model.models import (
     GroundStation as SatComGroundStation,
     Satellite as SatComSatellite,
     UserTerminal as SatComUserTerminal,
+    PointOfPresence as SatComPointOfPresence,
     InterSatelliteLinkDirection,
     OpticalInterSatelliteLinkModel,
 )
@@ -370,6 +374,26 @@ def create_custom_user_terminal(
     return user_terminal
 
 
+def create_custom_point_of_presence(
+    name: str,
+    latitude: float,
+    longitude: float,
+    elevation_km: float,
+    object_id: int = 0,
+    domain: str = "public",
+) -> SatComPointOfPresence:
+    """Create a fixed-position point of presence."""
+    point = DefaultPointOfPresenceFactory().create_point_of_presence(
+        object_id=object_id,
+        label=name,
+        longitude=longitude,
+        latitude=latitude,
+        altitude=elevation_km * 1000.0,
+    )
+    point.domain = domain
+    return point
+
+
 def _attach_ground_object_domain(
     ground_object: SatComGroundObject, simulation_manager: SimulationManager
 ) -> None:
@@ -443,6 +467,18 @@ def add_custom_user_terminal(
     _attach_ground_object_domain(user_terminal, simulation_manager)
     simulation_manager.add_user_terminals(user_terminal)
     logging.info(f"Custom user terminal {user_terminal.topology_uniq_id} added")
+
+
+def add_custom_point_of_presence(
+    point_of_presence: SatComPointOfPresence,
+    simulation_manager: SimulationManager,
+) -> None:
+    """Add a point of presence to an existing simulation manager."""
+    _attach_ground_object_domain(point_of_presence, simulation_manager)
+    simulation_manager.add_point_of_presence(point_of_presence)
+    logging.info(
+        f"Custom point of presence {point_of_presence.topology_uniq_id} added"
+    )
 
 
 def _find_satellite_by_name(

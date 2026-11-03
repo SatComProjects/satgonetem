@@ -188,7 +188,12 @@ class GoNetEmLauncher(NetworkLauncher):
     ) -> str:
         result = ""
         for gs in ground_stations:
-            prefix = "Gnd" if gs.type == "GroundStation" else "Usr"
+            if gs.type == "GroundStation":
+                prefix = "Gnd"
+            elif gs.type == "PointOfPresence":
+                prefix = "Pop"
+            else:
+                prefix = "Usr"
             image = gs.image
             if not image and not fallback:
                 image = "jariassuarez/sgnt:ground-station"

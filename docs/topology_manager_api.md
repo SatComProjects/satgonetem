@@ -252,6 +252,12 @@ Return only the user-terminal subset of `ground_stations`.
 
 ---
 
+### `get_point_of_presences() -> List[GroundStation]`
+
+Return only the point-of-presence subset of `ground_stations`.
+
+---
+
 ### `get_links() -> List[Link]`
 
 Return the list of links.

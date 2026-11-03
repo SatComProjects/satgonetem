@@ -41,10 +41,12 @@ from sat_com_application.simulation_manager import (
 from sat_com_builder.models import SimulationProperty
 from satgonetem.utils.project_builder import (
     add_custom_ground_station,
+    add_custom_point_of_presence,
     add_custom_user_terminal,
     create_and_load_simulation,
     create_custom_ground_station,
     create_custom_satellite,
+    create_custom_point_of_presence,
     create_custom_user_terminal,
     create_empty_project,
 )
@@ -460,10 +462,17 @@ class TopologyManager(
         """
         from datetime import datetime
 
+        def _runtime_date(value: str) -> str:
+            if "T" in value:
+                return datetime.fromisoformat(value).strftime(
+                    "%d/%m/%Y %H:%M:%S"
+                )
+            return value
+
         empty_project = create_empty_project(
             simulation_name=runtime_state.get("simulation_name", "Constellation"),
-            start_date=runtime_state.get("start_date", ""),
-            end_date=runtime_state.get("end_date", ""),
+            start_date=_runtime_date(runtime_state.get("start_date", "")),
+            end_date=_runtime_date(runtime_state.get("end_date", "")),
         )
         sim_manager = create_and_load_simulation(
             empty_project.model_dump(), empty_project.simulation_name
@@ -498,6 +507,17 @@ class TopologyManager(
                 domain=ut_data.get("domain", "public"),
             )
             add_custom_user_terminal(ut, sim_manager)
+
+        for pop_data in runtime_state.get("points_of_presence", []):
+            pop = create_custom_point_of_presence(
+                name=pop_data["label"],
+                latitude=pop_data["latitude"],
+                longitude=pop_data["longitude"],
+                elevation_km=pop_data.get("altitude", 0) / 1000.0,
+                object_id=pop_data.get("object_id", 0),
+                domain=pop_data.get("domain", "public"),
+            )
+            add_custom_point_of_presence(pop, sim_manager)
 
         from sat_com_model.models import InterSatelliteLinkDirection
 
@@ -1208,6 +1228,14 @@ class TopologyManager(
             node
             for node in self.ground_stations.values()
             if getattr(node, "type", "") == "UserTerminal"
+        ]
+
+    def get_point_of_presences(self) -> List[GroundStation]:
+        """Return the point-of-presence subset of ``ground_stations``."""
+        return [
+            node
+            for node in self.ground_stations.values()
+            if getattr(node, "type", "") == "PointOfPresence"
         ]
 
     def get_links(self) -> List[Link]:

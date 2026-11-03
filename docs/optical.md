@@ -93,9 +93,10 @@ The project sets `inter_satellite_link_connection_strategy="inter-shell-sso-prio
 and gives both shells an inter-shell-capable terminal. `INTER_SHELL` links are
 mapped to the `"InterShell"` direction on the emulator `Link`.
 
-## Limitations
+## Notes
 
-- User terminals are now first-class emulator nodes (container, address plan,
-  UTL links, graph, and event path). Points of presence remain unsupported.
+- Ground stations, user terminals, and points of presence are first-class
+  emulator nodes with containers, address-plan blocks, graph participation,
+  and runtime-state persistence.
 - Advanced optical metrics increase the per-tick cost; benchmark with
   `scripts/benchmark_topology_stages.py` before making them the default.

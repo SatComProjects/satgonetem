@@ -101,6 +101,9 @@ addresses, and are stored in `TopologyManager.ground_stations` alongside
 gateways so the launcher, routing, and graph paths are shared. A V5
 `UserTerminalLink` is modelled as an emulator `UserTerminalLink`.
 
+Points of presence are also first-class nodes (`Pop*`). They use the
+ground-station pool and are connected by `GroundObjectLink` links.
+
 ## Controller plane
 
 The optional controller plane is an out-of-band management network and is
