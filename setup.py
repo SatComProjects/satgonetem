@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="satgonetem-core",
-    version="0.1.0",
+    version="0.2.1",
     description="SatGoNetem Core - Satellite Network Emulation Tool",
     long_description=(
         open("README.md").read() if __import__("os").path.exists("README.md") else ""
