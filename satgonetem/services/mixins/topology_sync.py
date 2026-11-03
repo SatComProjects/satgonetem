@@ -31,8 +31,8 @@ class TopologySyncMixin:
         self._sync_satellites()
         self._sync_ground_stations()
         self._sync_links()
+        self._initialize_address_plan()
         self._assign_interfaces_to_nodes()
-        self._set_ips_to_nodes()
         self._add_loopback_interfaces_to_list()
         _ = self.check_for_updates()  # Init hashes
 

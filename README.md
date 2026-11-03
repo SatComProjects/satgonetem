@@ -12,6 +12,7 @@ SatGoNetem bridges orbital mechanics and Linux network emulation. It computes sa
 - [`docs/project_creation.md`](docs/project_creation.md) — End-to-end constellation design guide
 - [`docs/hil_manager.md`](docs/hil_manager.md) — Hardware-in-the-loop integration
 - [`docs/link_budget.md`](docs/link_budget.md) — Link budget calculations and parameters
+- [`docs/addressing.md`](docs/addressing.md) — IPv4 pools, node blocks, loopbacks, and link allocation
 
 ## Features
 
@@ -228,10 +229,11 @@ satgonetem/
   routing/       RoutingDaemon (abstract) + static, OSPF, ISIS-SR, SR-MPLS
   traffic/       Ping, iperf2, iperf3, hping3 traffic tools and FlowScheduler
   link_budget/   Antenna, transmitter, receiver, propagation, MODCOD, geometry
+  addressing/    Deterministic IPv4 pools, node blocks, loopbacks, and /31 links
   services/      TopologyManager (central orchestrator)
                  mixins: topology sync, link ops, routing mgr, interface mgr,
                          network lifecycle, traffic testing, simulation loop, diagnostics
-  utils/         project_builder, IP utilities, custom connection strategies
+  utils/         project_builder, IP helpers, custom connection strategies
   proto/         gRPC definitions for GoNetem backend
 ```
 
@@ -240,6 +242,31 @@ satgonetem/
 **Delay model:** `delay_ms = distance_km / 299792.458 * 1000` (propagation at speed of light).
 
 **QoS stack per link:** `netem` (propagation delay) + `TBF` (rate limiting), applied via batched `tc` commands using pyroute2.
+
+## IPv4 Addressing
+
+Addresses come from a deterministic, private `10.0.0.0/8` plan by default:
+
+| Purpose | Pool | Per-node block | Capacity |
+|---------|------|----------------|----------|
+| Ground stations | `10.0.0.0/10` | `/20` | 1,024 |
+| User terminals | `10.64.0.0/10` | `/20` | 1,024 |
+| Satellites | `10.128.0.0/9` | `/27` | 262,144 |
+
+Each node has a stable `/32` loopback at `<block>.0.1`; traffic and static routes target that loopback, not an interface. Every point-to-point link gets a `/31` starting at `<block>.0.4`. Ground stations and user terminals own their links; satellite links are owned by the lower satellite ID. See [`docs/addressing.md`](docs/addressing.md) for the link-ownership rules and configuration.
+
+The pools are configurable via `NetworkConfig`:
+
+```python
+config = NetworkConfig(
+    ground_station_pool="10.0.0.0/10",
+    satellite_pool="10.128.0.0/9",
+    user_terminal_pool="10.64.0.0/10",
+    ground_station_prefix_len=20,
+    satellite_prefix_len=27,
+    user_terminal_prefix_len=20,
+)
+```
 
 ## Routing Methods
 
@@ -296,6 +323,12 @@ Key parameters on `TopologyManager`:
 | `gnd_link_capacity` | - | Ground-space link capacity in kbps |
 | `satellite_image` | - | Docker image used for satellite containers |
 | `network_launcher` | `"DIRECT"` | `"GONETEM"` to use legacy gRPC backend |
+| `ground_station_pool` | `10.0.0.0/10` | Pool subdivided into ground-station `/20` blocks |
+| `satellite_pool` | `10.128.0.0/9` | Pool subdivided into satellite blocks |
+| `user_terminal_pool` | `10.64.0.0/10` | Pool subdivided into user-terminal `/20` blocks |
+| `ground_station_prefix_len` | 20 | Prefix length of each ground-station block |
+| `satellite_prefix_len` | 27 | Prefix length of each satellite block |
+| `user_terminal_prefix_len` | 20 | Prefix length of each user-terminal block |
 
 ## Testing
 
@@ -304,6 +337,19 @@ pytest tests/ -v
 ```
 
 Tests cover models, routing daemons, traffic result parsing, launchers, and project builder utilities. Tests that exercise Docker or network operations require a suitable host environment.
+
+Scale and live connectivity checks:
+
+```bash
+# Address-plan scale: 900 satellites, 5 GS, 20 UTs, 2,900 unique /31 links
+python scripts/verify_900_satellites.py
+
+# Live three-node topology: GSL + ISL, static routing, bidirectional pings
+python scripts/verify_connectivity.py
+
+# Same, when GoNetEm NodeRun cannot exec into containers in the environment
+python scripts/verify_connectivity.py --transport docker
+```
 
 ## Citation
 

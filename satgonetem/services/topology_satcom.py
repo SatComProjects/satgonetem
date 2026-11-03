@@ -84,6 +84,12 @@ class NetworkConfig:
         controller_bridge_name: Name of the OVS bridge inside the controller container.
         controller_node_iface_pattern: Python format string for node controller interfaces.
             Must contain ``{node_id}``.
+        ground_station_pool: Data-plane pool subdivided into ground-station blocks.
+        satellite_pool: Data-plane pool subdivided into satellite blocks.
+        user_terminal_pool: Data-plane pool subdivided into user-terminal blocks.
+        ground_station_prefix_len: Prefix length of each ground-station block.
+        satellite_prefix_len: Prefix length of each satellite block.
+        user_terminal_prefix_len: Prefix length of each user-terminal block.
     """
 
     project_name: Optional[str] = None
@@ -97,6 +103,15 @@ class NetworkConfig:
     network_launcher: str = "GONETEM"
     gonetem_server: str = "localhost:10110"
     use_budget: bool = False
+
+    # Data-plane IPv4 addressing.  The defaults tile 10.0.0.0/8:
+    # ground stations /10, user terminals /10, satellites /9.
+    ground_station_pool: str = "10.0.0.0/10"
+    satellite_pool: str = "10.128.0.0/9"
+    user_terminal_pool: str = "10.64.0.0/10"
+    ground_station_prefix_len: int = 20
+    satellite_prefix_len: int = 27
+    user_terminal_prefix_len: int = 20
 
     # Controller connection settings
     controller_veth_host: str = "veth-host"
@@ -356,6 +371,12 @@ class TopologyManager(
                 network_launcher=self.network_launcher,
                 gonetem_server=self.gonetem_server,
                 use_budget=self.use_budget,
+                ground_station_pool=self.ground_station_pool,
+                satellite_pool=self.satellite_pool,
+                user_terminal_pool=self.user_terminal_pool,
+                ground_station_prefix_len=self.ground_station_prefix_len,
+                satellite_prefix_len=self.satellite_prefix_len,
+                user_terminal_prefix_len=self.user_terminal_prefix_len,
             )
 
         if self.simulation_property is not None:
@@ -591,6 +612,9 @@ class TopologyManager(
         # Active network launcher (GoNetEm)
         self.launcher: Optional[NetworkLauncher] = None
 
+        # Topology-wide IPv4 plan, built during init().
+        self.address_plan = None
+
         # Optional HIL manager. Set this before calling start_gonetem() to
         # replace specific ground stations with host-bridged hardware.
         self.hil_manager = None
@@ -686,6 +710,12 @@ class TopologyManager(
         self.network_launcher = config.network_launcher
         self.gonetem_server = config.gonetem_server
         self.use_budget = config.use_budget
+        self.ground_station_pool = config.ground_station_pool
+        self.satellite_pool = config.satellite_pool
+        self.user_terminal_pool = config.user_terminal_pool
+        self.ground_station_prefix_len = config.ground_station_prefix_len
+        self.satellite_prefix_len = config.satellite_prefix_len
+        self.user_terminal_prefix_len = config.user_terminal_prefix_len
         self.controller_veth_host = config.controller_veth_host
         self.controller_veth_peer = config.controller_veth_peer
         self.controller_host_ip = config.controller_host_ip

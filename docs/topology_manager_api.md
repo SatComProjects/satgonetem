@@ -109,12 +109,21 @@ The matching removal method is invoked on the underlying
 
 ## Addressing and routing
 
-### `set_IP_addresses() -> float`
+### `set_ip_addresses() -> float`
 
-Assign IPv4 addresses to all node interfaces, including loopbacks.
+Push the already-planned IPv4 addresses into every satellite and ground-station
+container. The plan is built during topology initialization; call this after
+`start_gonetem()`.
+
+Addresses are applied with `ip addr replace`, one batched command per node,
+in parallel. The method raises after all nodes have been attempted if any node
+fails.
 
 **Returns**
 - `float` - elapsed wall-clock seconds.
+
+See [`addressing.md`](addressing.md) for the address pools, `/20` ground-station
+blocks, `/27` satellite blocks, and `/31` link allocation.
 
 ---
 

@@ -556,6 +556,13 @@ class LinkOpsMixin:
                 self.interfaces = [
                     intf for intf in self.interfaces if intf not in link.peer_interfaces
                 ]
+                # Return the link's /31 slot to the address plan so later
+                # dynamic links can reuse it.
+                address_plan = getattr(self, "address_plan", None)
+                if address_plan is not None:
+                    address_plan.release_link(
+                        frozenset((link.source.name, link.target.name))
+                    )
                 # Remove link from dictionary
                 key = self._build_link_key(link.source, link.target)
                 del self.links[key]

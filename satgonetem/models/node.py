@@ -15,6 +15,7 @@ are handled by the mixin classes in satgonetem.models.mixins.
 from __future__ import annotations
 
 import base64
+import ipaddress
 import logging
 import shlex
 
@@ -55,6 +56,8 @@ class Node:
 
         self.position: dict[str, float] = {}
         self.antenna: Antenna | None = None
+        # Address block assigned by the topology-wide IPv4 plan.
+        self.address_block: ipaddress.IPv4Network | None = None
 
         # We create a loopback interface for the node
         self.loopback = Interface("lo", iface_type="lo")
@@ -312,41 +315,45 @@ class Node:
 
     def set_ipv4_to_containers(
         self,
-        interface: Interface,
+        interface: Interface | None,
         set_lo: bool = True,
     ) -> None:
+        """Apply this node's planned IPv4 addresses in one batched command.
+
+        The prefix comes from each :class:`Interface`; it is no longer assumed
+        to be ``/31`` here.  ``addr replace`` keeps repeated setup calls
+        idempotent and updates an address if a link is recreated.
+
+        Args:
+            interface: One interface to push, or ``None`` for all node
+                interfaces.
+            set_lo: Also apply the node loopback address.
         """
-        Set IPv4 addresses on all interfaces inside the container in one fast shot.
+        lines: list[str] = []
 
-        Performance improvements:
-        - No temp files: pipe a single base64-encoded batch to `ip -force -batch -`.
-        - Use `addr replace` to make ops idempotent (no "File exists" errors).
-        - Single shell process per node (lower process exec overhead).
+        int_list = [interface] if interface is not None else self.interfaces
 
-        Side effects and concurrency model remain the same (detach=True).
-        """
-        # Build batch lines
-        lines = []
-
-        int_list = [interface] if interface else self.interfaces
-
-        for interface in int_list:
-            ip = getattr(interface, "ipv4", None)
+        for iface in int_list:
+            ip = getattr(iface, "ipv4", None)
             if not ip:
                 continue
-            dev = interface.get_iname()
-            # /31 per your original code
-            lines.append(f"addr add {ip}/31 dev {dev}")
+            if iface.prefix_len not in (31, 32):
+                raise ValueError(
+                    f"{self.name} interface {iface.name} has unsupported IPv4 "
+                    f"prefix /{iface.prefix_len}; expected /31 or /32"
+                )
+            lines.append(
+                f"addr replace {ip}/{iface.prefix_len} dev {iface.get_iname()}"
+            )
 
         if (
             set_lo
-            and hasattr(self, "loopback")
+            and getattr(self, "loopback", None) is not None
             and getattr(self.loopback, "ipv4", None)
         ):
-            lines.append(f"addr add {self.loopback.ipv4}/32 dev lo")
+            lines.append(f"addr replace {self.loopback.ipv4}/32 dev lo")
 
         if not lines:
-            # Nothing to do
             return None
 
         payload = "\n".join(lines)

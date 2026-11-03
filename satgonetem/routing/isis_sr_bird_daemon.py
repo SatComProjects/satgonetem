@@ -308,7 +308,7 @@ def _assign_ips(node: "Node") -> None:
     for iface in node.interfaces:
         ip = getattr(iface, "ipv4", None)
         if ip:
-            lines.append(f"addr replace {ip}/31 dev {iface.get_iname()}")
+            lines.append(f"addr replace {ip}/{iface.prefix_len} dev {iface.get_iname()}")
     if getattr(node.loopback, "ipv4", None):
         lines.append(f"addr replace {node.loopback.ipv4}/32 dev lo")
     if not lines:

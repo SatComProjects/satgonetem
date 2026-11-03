@@ -320,7 +320,7 @@ message NodeRunResponse {
 // A gateway may be empty for an on-link route.
 message RouteSpec {
     RouteAction action = 1;
-    string destination = 2; // CIDR, e.g. 10.0.0.0/15
+    string destination = 2; // CIDR, e.g. 10.0.0.0/24
     string gateway = 3;
     string device = 4;      // interface name inside the node netns
 }
