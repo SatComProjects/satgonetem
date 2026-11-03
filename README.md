@@ -338,6 +338,19 @@ pytest tests/ -v
 
 Tests cover models, routing daemons, traffic result parsing, launchers, and project builder utilities. Tests that exercise Docker or network operations require a suitable host environment.
 
+Scale and live connectivity checks:
+
+```bash
+# Address-plan scale: 900 satellites, 5 GS, 20 UTs, 2,900 unique /31 links
+python scripts/verify_900_satellites.py
+
+# Live three-node topology: GSL + ISL, static routing, bidirectional pings
+python scripts/verify_connectivity.py
+
+# Same, when GoNetEm NodeRun cannot exec into containers in the environment
+python scripts/verify_connectivity.py --transport docker
+```
+
 ## Citation
 
 If you use this project in your research, please cite:
