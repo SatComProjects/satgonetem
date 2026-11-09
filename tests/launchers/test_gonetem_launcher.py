@@ -428,6 +428,39 @@ def test_write_links_uses_corrected_tbf_values(topology_with_hil):
     assert "buffer: 2.6112" in yaml
 
 
+def test_write_links_uses_default_queue_length(topology_with_hil):
+    topology_manager, sat, gnd, _hil_gnd, _sat_to_gnd, _sat_to_hil = (
+        topology_with_hil
+    )
+    launcher = GoNetEmLauncher(topology_manager, "localhost:10110", "test")
+
+    yaml = launcher.get_gonetem_topology(nodes=[sat, gnd])
+
+    # Defaults preserving the server behaviour: 1000 packets on both bounds,
+    # emitted once per direction.
+    assert yaml.count("limit: 1000") == 2
+    assert yaml.count("txqueuelen: 1000") == 2
+
+
+def test_write_links_uses_configured_queue_length(topology_with_hil):
+    topology_manager, sat, gnd, _hil_gnd, _sat_to_gnd, _sat_to_hil = (
+        topology_with_hil
+    )
+    launcher = GoNetEmLauncher(
+        topology_manager,
+        "localhost:10110",
+        "test",
+        netem_limit=5000,
+        txqueuelen=8000,
+    )
+
+    yaml = launcher.get_gonetem_topology(nodes=[sat, gnd])
+
+    assert "limit: 5000" in yaml
+    assert "txqueuelen: 8000" in yaml
+    assert "limit: 1000" not in yaml
+
+
 def test_link_request_includes_corrected_tbf_values(launcher):
     link = SimpleNamespace(
         source=SimpleNamespace(name="Sat0", id=0),
@@ -445,6 +478,27 @@ def test_link_request_includes_corrected_tbf_values(launcher):
     assert request.link.peer1qos.burst == 2014
     assert request.link.peer1qos.buffer == pytest.approx(2.6112)
     assert request.link.peer2qos.burst == 2014
+
+
+def test_link_request_includes_configured_queue_length(launcher):
+    launcher.netem_limit = 5000
+    launcher.txqueuelen = 8000
+    link = SimpleNamespace(
+        source=SimpleNamespace(name="Sat0", id=0),
+        target=SimpleNamespace(name="Gnd0", id=1),
+        delay=10,
+        loss=0,
+        jitter=0,
+        type="GroundStationLink",
+        peer1_capacity=1000,
+        peer2_capacity=1000,
+    )
+
+    request = launcher._link_request(link)
+
+    for qos in (request.link.peer1qos, request.link.peer2qos):
+        assert qos.limit == 5000
+        assert qos.txqueuelen == 8000
 
 
 def _link_update_response(request):

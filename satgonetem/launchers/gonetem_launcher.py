@@ -59,12 +59,16 @@ class GoNetEmLauncher(NetworkLauncher):
         gnd_capacity_kbps: int = 100_000,
         ground_object_capacity_kbps: int = 100_000,
         temp_path: str = "/tmp/",
+        netem_limit: int = 1000,
+        txqueuelen: int = 1000,
     ) -> None:
         super().__init__(
             project_name,
             isl_capacity_kbps,
             gnd_capacity_kbps,
             ground_object_capacity_kbps,
+            netem_limit,
+            txqueuelen,
         )
         self._topology_manager = topology_manager
         self._server_address = server_address
@@ -195,8 +199,7 @@ class GoNetEmLauncher(NetworkLauncher):
             result += f" {prefix}{gs.id}:\n  type: {gs_type}\n  image: {image}\n  volumes:\n  - /tmp:/tmp\n"
         return result
 
-    @staticmethod
-    def _write_links(links) -> str:
+    def _write_links(self, links) -> str:
         result = ""
         for link in links:
             if not getattr(link, "is_active", True):
@@ -204,11 +207,12 @@ class GoNetEmLauncher(NetworkLauncher):
             delay = max(int(link.delay), 1)
             rate = link.get_capacity()
             burst, buffer = _tbf_qos(rate, delay)
+            queue = f"limit: {self.netem_limit}, txqueuelen: {self.txqueuelen}"
             result += (
                 f" - {{peer1: {link.source.name}.{link.target.id},"
                 f" peer2: {link.target.name}.{link.source.id},"
-                f" peer1qos: {{ rate: {rate}, buffer: {buffer}, jitter: 0, delay: {delay}, burst: {burst}}},"
-                f" peer2qos: {{ rate: {rate}, buffer: {buffer}, jitter: 0, delay: {delay}, burst: {burst}}}}}"
+                f" peer1qos: {{ rate: {rate}, buffer: {buffer}, jitter: 0, delay: {delay}, burst: {burst}, {queue}}},"
+                f" peer2qos: {{ rate: {rate}, buffer: {buffer}, jitter: 0, delay: {delay}, burst: {burst}, {queue}}}}}"
                 f" #Latency of {delay}ms \n"
             )
         return result
@@ -270,6 +274,8 @@ class GoNetEmLauncher(NetworkLauncher):
             jitter=jitter,
             buffer=buffer1,
             burst=burst1,
+            limit=self.netem_limit,
+            txqueuelen=self.txqueuelen,
         )
         qos2 = netem_pb2.LinkConfig.QoSConfig(
             delay=delay_ms,
@@ -278,6 +284,8 @@ class GoNetEmLauncher(NetworkLauncher):
             jitter=jitter,
             buffer=buffer2,
             burst=burst2,
+            limit=self.netem_limit,
+            txqueuelen=self.txqueuelen,
         )
         link_cfg = netem_pb2.LinkConfig(
             peer1=f"{link.source.name}.{link.target.id}",

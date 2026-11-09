@@ -41,6 +41,8 @@ class NetworkLifecycleMixin:
             ground_object_capacity_kbps=getattr(
                 self, "ground_object_link_capacity", self.gnd_link_capacity
             ),
+            netem_limit=getattr(self, "link_netem_limit", 1000),
+            txqueuelen=getattr(self, "link_txqueuelen", 1000),
         )
         # Assign before startup so a failed launch can still be torn down.
         self.launcher = launcher

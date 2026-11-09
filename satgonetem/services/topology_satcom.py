@@ -57,6 +57,12 @@ from satgonetem.services.mixins.diagnostics import DiagnosticsMixin
 from satgonetem.services.mixins.controller import ControllerMixin
 
 
+# Upper bound for the netem queue limit and the interface txqueuelen, in
+# packets. It mirrors the GoNetEm server's maxQueuePackets so a configuration
+# accepted here is never rejected by the server.
+MAX_LINK_QUEUE_PACKETS = 1_000_000
+
+
 @dataclass
 class NetworkConfig:
     """Network configuration parameters for TopologyManager.
@@ -72,6 +78,12 @@ class NetworkConfig:
         gnd_link_capacity: Capacity in kbps for ground-station links.
         isl_link_capacity: Capacity in kbps for inter-satellite links.
         ground_object_link_capacity: Capacity in kbps for ground-object-to-ground-object links.
+        link_netem_limit: netem queue limit in packets for emulated links.
+            0 keeps the GoNetEm server default (1000 packets). This bounds the
+            packets held by the netem qdisc, i.e. the modelled link buffer.
+        link_txqueuelen: Transmit queue length in packets of the interfaces
+            terminating an emulated link. 0 keeps the GoNetEm server default
+            (1000 packets).
         protocol: Network-layer protocol string (e.g. "ipv4").
         routing: Default routing method (e.g. "static", "dynamic-ospf").
         satellite_image: Docker image tag used for satellite containers.
@@ -97,6 +109,8 @@ class NetworkConfig:
     gnd_link_capacity: int = 100000
     isl_link_capacity: int = 100000
     ground_object_link_capacity: int = 100000
+    link_netem_limit: int = 1000
+    link_txqueuelen: int = 1000
     protocol: str = "ipv4"
     routing: str = "static"
     satellite_image: str = "jariassuarez/sgnt:satellite"
@@ -120,6 +134,26 @@ class NetworkConfig:
     controller_subnet_prefix: int = 16
     controller_bridge_name: str = "Controller"
     controller_node_iface_pattern: str = "eth{node_id}"
+
+    def __post_init__(self) -> None:
+        """Validate the queue-length fields.
+
+        Raises:
+            TypeError: If a queue-length field is not an integer.
+            ValueError: If a queue-length field is outside
+                ``[0, MAX_LINK_QUEUE_PACKETS]``.
+        """
+        for name in ("link_netem_limit", "link_txqueuelen"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise TypeError(
+                    f"NetworkConfig.{name} must be an int, got {value!r}"
+                )
+            if value < 0 or value > MAX_LINK_QUEUE_PACKETS:
+                raise ValueError(
+                    f"NetworkConfig.{name} must be between 0 and "
+                    f"{MAX_LINK_QUEUE_PACKETS} packets, got {value}"
+                )
 
 
 class TopologyManager(
@@ -365,6 +399,8 @@ class TopologyManager(
                 gnd_link_capacity=self.gnd_link_capacity,
                 isl_link_capacity=self.isl_link_capacity,
                 ground_object_link_capacity=self.ground_object_link_capacity,
+                link_netem_limit=self.link_netem_limit,
+                link_txqueuelen=self.link_txqueuelen,
                 protocol=self.protocol,
                 routing=self.routing,
                 satellite_image=self.satellite_image,
@@ -704,6 +740,8 @@ class TopologyManager(
         self.gnd_link_capacity = config.gnd_link_capacity
         self.isl_link_capacity = config.isl_link_capacity
         self.ground_object_link_capacity = config.ground_object_link_capacity
+        self.link_netem_limit = config.link_netem_limit
+        self.link_txqueuelen = config.link_txqueuelen
         self.protocol = config.protocol
         self.routing = config.routing
         self.satellite_image = config.satellite_image

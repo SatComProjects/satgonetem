@@ -68,10 +68,27 @@ tm.hil_manager = HILManager(
         "Gnd1": "enp3s0",  # Gnd1 bridged to enp3s0
     },
     gnd_capacity_kbps=50_000,
+    netem_limit=1000,  # netem queue limit, in packets
+    txqueuelen=1000,   # SAT-side interface transmit queue, in packets
 )
 
 tm.start_gonetem()
 ```
+
+To keep the HIL links consistent with the emulated ones, pass the values from
+your `NetworkConfig`:
+
+```python
+tm.hil_manager = HILManager(
+    gnd_hardware_map={"Gnd0": "eth1"},
+    gnd_capacity_kbps=net_cfg.gnd_link_capacity,
+    netem_limit=net_cfg.link_netem_limit,
+    txqueuelen=net_cfg.link_txqueuelen,
+)
+```
+
+`0` keeps the kernel default for either bound. `txqueuelen` is applied when the
+link is first set up; `netem_limit` is re-applied on every QoS update.
 
 TopologyManager routes all HIL ground station operations through `hil_manager`
 automatically. The launcher (GoNetEmLauncher) is unaware of
