@@ -278,3 +278,90 @@ class TestLinkCapacity:
         link = MagicMock()
         link.peer1_capacity = 0
         assert manager._link_capacity_kbps(link) == manager._gnd_capacity_kbps
+
+
+# queue length
+
+
+class TestQueueLength:
+    def _manager(self, netem_limit=1000, txqueuelen=1000):
+        return HILManager(
+            gnd_hardware_map={"Gnd0": "eth1"},
+            gnd_capacity_kbps=50_000,
+            netem_limit=netem_limit,
+            txqueuelen=txqueuelen,
+        )
+
+    def test_defaults_are_1000_packets(self):
+        manager = self._manager()
+
+        assert manager._netem_limit == 1000
+        assert manager._txqueuelen == 1000
+
+    def test_apply_qos_sets_netem_limit_and_txqueuelen(self):
+        manager = self._manager(netem_limit=5000, txqueuelen=8000)
+
+        with patch(
+            "satgonetem.launchers.hil_manager._run_tc_batch"
+        ) as mock_tc, patch(
+            "satgonetem.launchers.hil_manager._run_ip_batch"
+        ) as mock_ip:
+            manager._apply_qos(
+                sat_name="Sat0", sat_pid=1234, gnd_id=0, delay_ms=10, rate_kbps=1000
+            )
+
+        _, tc_cmds = mock_tc.call_args[0]
+        netem_cmd = next(cmd for cmd in tc_cmds if "netem" in cmd)
+        assert netem_cmd.endswith("limit 5000")
+
+        _, ip_cmds = mock_ip.call_args[0]
+        assert ip_cmds == ["link set dev eth0 txqueuelen 8000"]
+        assert mock_ip.call_args[0][0] == 1234
+
+    def test_apply_qos_omits_queue_settings_when_zero(self):
+        manager = self._manager(netem_limit=0, txqueuelen=0)
+
+        with patch(
+            "satgonetem.launchers.hil_manager._run_tc_batch"
+        ) as mock_tc, patch(
+            "satgonetem.launchers.hil_manager._run_ip_batch"
+        ) as mock_ip:
+            manager._apply_qos(
+                sat_name="Sat0", sat_pid=1234, gnd_id=0, delay_ms=10, rate_kbps=1000
+            )
+
+        mock_ip.assert_not_called()
+        netem_cmd = next(
+            cmd for cmd in mock_tc.call_args[0][1] if "netem" in cmd
+        )
+        assert netem_cmd == "qdisc add dev eth0 root handle 1: netem delay 10ms"
+
+    def test_apply_qos_continues_when_txqueuelen_fails(self):
+        manager = self._manager(txqueuelen=8000)
+
+        with patch(
+            "satgonetem.launchers.hil_manager._run_ip_batch",
+            side_effect=RuntimeError("nope"),
+        ), patch(
+            "satgonetem.launchers.hil_manager._run_tc_batch"
+        ) as mock_tc:
+            manager._apply_qos(
+                sat_name="Sat0", sat_pid=1234, gnd_id=0, delay_ms=10, rate_kbps=1000
+            )
+
+        mock_tc.assert_called_once()
+
+    def test_update_link_includes_netem_limit(self, manager):
+        link = _make_link(
+            "Sat0", "Gnd0", "GroundStationLink", delay=25, src_pid=9999
+        )
+        manager._netem_limit = 5000
+
+        with patch("satgonetem.launchers.hil_manager._run_tc_batch") as mock_tc:
+            manager.update_link(link)
+
+        netem_cmd = next(
+            cmd for cmd in mock_tc.call_args[0][1] if "netem" in cmd
+        )
+        assert netem_cmd.endswith("limit 5000")
+

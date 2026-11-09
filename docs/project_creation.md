@@ -497,6 +497,8 @@ net_cfg = NetworkConfig(
     isl_link_capacity=100000,
     gnd_link_capacity=50000,
     ground_object_link_capacity=50000,
+    link_netem_limit=2000,
+    link_txqueuelen=2000,
     routing="static",
     satellite_image="jariassuarez/sgnt:satellite",
     network_launcher="GONETEM",
@@ -515,12 +517,21 @@ topology._apply_network_config(net_cfg)
 | `gnd_link_capacity` | int | `100000` | Ground-station link capacity in kbps |
 | `isl_link_capacity` | int | `100000` | Inter-satellite link capacity in kbps |
 | `ground_object_link_capacity` | int | `100000` | Ground-object-to-ground-object link capacity in kbps |
+| `link_netem_limit` | int | `1000` | netem queue limit of emulated links, in packets (`0` keeps the GoNetEm server default) |
+| `link_txqueuelen` | int | `1000` | Transmit queue length of emulated link interfaces, in packets (`0` keeps the GoNetEm server default) |
 | `protocol` | str | `"ipv4"` | Network-layer protocol |
 | `routing` | str | `"static"` | Default routing method |
 | `satellite_image` | str | `"jariassuarez/sgnt:satellite"` | Docker image for satellite containers |
 | `network_launcher` | str | `"GONETEM"` | Emulation backend |
 | `gonetem_server` | str | `"localhost:10110"` | GoNetem gRPC server address |
 | `use_budget` | bool | `False` | Enable link-budget-based capacity calculation |
+
+`link_netem_limit` bounds the packets the netem qdisc can hold, i.e. the modelled
+link buffer, while `link_txqueuelen` sets the transmit queue of the interfaces
+that terminate the link. Neither is the TBF byte limit, which is derived from the
+link rate and delay. A link whose configured capacity and delay imply a large
+bandwidth-delay product can fill the default 1000-packet queue before the TBF
+limit binds; raise `link_netem_limit` for those links.
 
 ---
 

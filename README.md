@@ -286,6 +286,8 @@ Key parameters on `TopologyManager`:
 | `routing` | `"static"` | Routing method name |
 | `isl_link_capacity` | - | Inter-satellite link capacity in kbps |
 | `gnd_link_capacity` | - | Ground-space link capacity in kbps |
+| `link_netem_limit` | 1000 | netem queue limit of emulated links, in packets |
+| `link_txqueuelen` | 1000 | Transmit queue length of emulated link interfaces, in packets |
 | `satellite_image` | - | Docker image used for satellite containers |
 | `network_launcher` | `"DIRECT"` | `"GONETEM"` to use legacy gRPC backend |
 | `ground_station_pool` | `10.0.0.0/10` | Pool subdivided into ground-station `/20` blocks |

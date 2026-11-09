@@ -24,11 +24,17 @@ class NetworkLauncher(ABC):
         isl_capacity_kbps: int = 100_000,
         gnd_capacity_kbps: int = 100_000,
         ground_object_capacity_kbps: int = 100_000,
+        netem_limit: int = 1000,
+        txqueuelen: int = 1000,
     ) -> None:
         self.project_name = project_name
         self.isl_capacity_kbps = isl_capacity_kbps
         self.gnd_capacity_kbps = gnd_capacity_kbps
         self.ground_object_capacity_kbps = ground_object_capacity_kbps
+        # Queue length of the emulated links, in packets. 0 means "let the
+        # backend use its own default".
+        self.netem_limit = netem_limit
+        self.txqueuelen = txqueuelen
 
     # Lifecycle
 

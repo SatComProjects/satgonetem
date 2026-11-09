@@ -16,6 +16,8 @@ class DummyTopology(NetworkLifecycleMixin):
         self.isl_link_capacity = 100_000
         self.gnd_link_capacity = 100_000
         self.ground_object_link_capacity = 100_000
+        self.link_netem_limit = 2048
+        self.link_txqueuelen = 4096
         self.status = False
         self.gonetem_status = False
         self.launcher = None
@@ -72,9 +74,11 @@ def test_start_gonetem_passes_only_non_hil_nodes_and_active_links():
     with patch(
         "satgonetem.launchers.gonetem_launcher.GoNetEmLauncher",
         return_value=fake_launcher,
-    ):
+    ) as mock_launcher_cls:
         topology.start_gonetem()
 
+    assert mock_launcher_cls.call_args.kwargs["netem_limit"] == 2048
+    assert mock_launcher_cls.call_args.kwargs["txqueuelen"] == 4096
     fake_launcher.start_containers.assert_called_once_with(
         [sat, gnd],
         MAX_WORKERS,

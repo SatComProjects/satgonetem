@@ -205,6 +205,11 @@ message LinkConfig {
         int32 rate = 6;
         float buffer = 7;
         int32 burst = 8;
+        // netem queue limit in packets. 0 keeps the server default (1000).
+        uint32 limit = 9;
+        // interface transmit queue length in packets. 0 keeps the server
+        // default (1000).
+        uint32 txqueuelen = 10;
     }
 
     string peer1 = 1;

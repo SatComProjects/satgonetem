@@ -57,11 +57,27 @@
     "update_time": 1,
     "gnd_link_capacity": 100000,
     "isl_link_capacity": 100000,
+    "ground_object_link_capacity": 100000,
+    "link_netem_limit": 1000,
+    "link_txqueuelen": 1000,
     "protocol": "ipv4",
     "routing": "static",
     "satellite_image": "jariassuarez/sgnt:satellite",
     "network_launcher": "GONETEM",
-    "gonetem_server": "localhost:10110"
+    "gonetem_server": "localhost:10110",
+    "use_budget": false,
+    "ground_station_pool": "10.0.0.0/10",
+    "satellite_pool": "10.128.0.0/9",
+    "user_terminal_pool": "10.64.0.0/10",
+    "ground_station_prefix_len": 20,
+    "satellite_prefix_len": 27,
+    "user_terminal_prefix_len": 20,
+    "controller_veth_host": "veth-host",
+    "controller_veth_peer": "veth-controller",
+    "controller_host_ip": "248.0.0.2",
+    "controller_subnet_prefix": 16,
+    "controller_bridge_name": "Controller",
+    "controller_node_iface_pattern": "eth{node_id}"
   },
   "ground_files": {
     "/tmp/ground_stations.txt": {
