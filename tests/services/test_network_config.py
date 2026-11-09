@@ -1,6 +1,8 @@
 """Tests for the link queue-length settings of NetworkConfig."""
 
 import json
+from dataclasses import fields
+from pathlib import Path
 
 import pytest
 
@@ -11,6 +13,9 @@ from satgonetem.services.topology_satcom import (
 )
 
 TEST_TOPOLOGY = "topology_files/test_topology.json"
+SAMPLE_TOPOLOGIES = sorted(
+    str(path) for path in Path("topology_files").glob("*_topology.json")
+)
 
 
 @pytest.fixture(scope="module")
@@ -119,3 +124,18 @@ class TestPersistence:
 
         assert config.link_netem_limit == 1000
         assert config.link_txqueuelen == 1000
+
+
+class TestSampleTopologies:
+    def test_sample_topologies_are_discovered(self):
+        assert SAMPLE_TOPOLOGIES
+
+    @pytest.mark.parametrize("path", SAMPLE_TOPOLOGIES)
+    def test_pins_every_network_config_field(self, path):
+        payload = json.loads(Path(path).read_text())["network_config"]
+
+        assert set(payload) == {field.name for field in fields(NetworkConfig)}
+
+        config = NetworkConfig(**payload)
+        assert 0 <= config.link_netem_limit <= MAX_LINK_QUEUE_PACKETS
+        assert 0 <= config.link_txqueuelen <= MAX_LINK_QUEUE_PACKETS
