@@ -17,6 +17,7 @@ SatGoNetem bridges orbital mechanics and Linux network emulation. It computes sa
 - [`docs/models.md`](docs/models.md) — Node, satellite, ground station, interface, link, routing, and MPLS models
 - [`docs/services.md`](docs/services.md) — `NetworkConfig`, mixin composition, initialization order, tick pipeline, locking
 - [`docs/addressing.md`](docs/addressing.md) — IPv4 pools, node blocks, loopbacks, and link allocation
+- [`docs/addressing_plan.md`](docs/addressing_plan.md) — `Ipv4AddressPlan` API, validation, and slot reuse
 
 **Backends and protocol**
 
