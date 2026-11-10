@@ -250,3 +250,9 @@ class LatencyDaemon(RoutingDaemon):
 
 TopologyManager.register_routing_daemon("latency", LatencyDaemon)
 ```
+
+## Related documentation
+
+- [TopologyManager Internals](services.md) — routing-daemon lifecycle and graph preferences
+- [Data Model Layer](models.md) — `RoutingEntry`, `MPLSConfig`, and SR entries
+- [GoNetEm gRPC Protocol](proto.md) — `RouteInstall` and `NodeRun` fallback

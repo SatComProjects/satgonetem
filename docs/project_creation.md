@@ -667,3 +667,10 @@ ut_obj = GroundObjectProperty(
 
 The shell's `orbital_connectivity_property.maximum_user_terminal_range` and
 `maximum_connected_user_terminal` fields control how satellites treat user terminal links.
+
+## Related documentation
+
+- [Utilities and Project Building](utils.md) — `project_builder` API reference
+- [Custom Project Creation](custom_project.md) — TLE-only and mixed projects
+- [Data Model Layer](models.md) — objects produced by the topology manager
+- [TopologyManager Internals](services.md) — initialization and tick sequence

@@ -159,3 +159,9 @@ Tests mock all kernel and subprocess calls; no root or hardware needed:
 ```bash
 pytest tests/launchers/test_hil_manager.py -v
 ```
+
+## Related documentation
+
+- [Network Launchers](launchers.md) — how HIL nodes and links are excluded from the software launch
+- [TopologyManager Internals](services.md) — lifecycle and link-operation integration
+- [Data Model Layer](models.md) — `Link` and `GroundStation` objects used by HIL

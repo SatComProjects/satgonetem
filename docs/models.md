@@ -169,10 +169,12 @@ Adds:
 | `start_net_logger(path)` | Start `net_logger` on every interface, detached, writing `<path>/<node>_<iface>.log` |
 | `default_qos_is_on`, `program_specific_qos_is_on`, `qos_configuration_count` | Legacy QoS bookkeeping used by the TBF helper |
 
-`sync_position_from_satcom()` stores altitude in kilometres. If the value
-from sat_com is below 100 it is assumed to be in kilometres already and is
-multiplied by 1000; this guards against mixed-unit movement models. Missing
-coordinates log a warning and leave the previous position in place.
+`sync_position_from_satcom()` normalizes altitude to kilometres by dividing
+the sat_com value by 1000. If that result is below 100, the original value is
+used unchanged instead. In practice, orbital positions reported in metres
+become kilometres (`781089` → `781`), while ground-station positions already
+reported in kilometres (`0.034`) are preserved. Missing coordinates log a
+warning and leave the previous position in place.
 
 ## `GroundStation`
 
