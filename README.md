@@ -6,13 +6,35 @@ SatGoNetem bridges orbital mechanics and Linux network emulation. It computes sa
 
 ## Documentation
 
-- [`docs/topology_manager_api.md`](docs/topology_manager_api.md) — Full `TopologyManager` API reference
+**Getting started**
+
+- [`docs/project_creation.md`](docs/project_creation.md) — End-to-end constellation design guide
+- [`docs/custom_project.md`](docs/custom_project.md) — TLE-only and mixed custom projects outside Walker shell generation
+- [`docs/topology_manager_api.md`](docs/topology_manager_api.md) — `TopologyManager` public API reference
+
+**Core internals**
+
+- [`docs/models.md`](docs/models.md) — Node, satellite, ground station, interface, link, routing, and MPLS models
+- [`docs/services.md`](docs/services.md) — `NetworkConfig`, mixin composition, initialization order, tick pipeline, locking
+- [`docs/addressing.md`](docs/addressing.md) — IPv4 pools, node blocks, loopbacks, and link allocation
+- [`docs/addressing_plan.md`](docs/addressing_plan.md) — `Ipv4AddressPlan` API, validation, and slot reuse
+
+**Backends and protocol**
+
+- [`docs/launchers.md`](docs/launchers.md) — `NetworkLauncher` contract, GoNetEm backend, generated project format, QoS
+- [`docs/hil_manager.md`](docs/hil_manager.md) — Hardware-in-the-loop integration
+- [`docs/controller.md`](docs/controller.md) — Out-of-band controller/management plane
+- [`docs/proto.md`](docs/proto.md) — GoNetEm gRPC service, messages, and compatibility
+
+**Networking and measurement**
+
 - [`docs/routing.md`](docs/routing.md) — Routing daemon architecture and custom daemon registration
 - [`docs/traffic.md`](docs/traffic.md) — Ping, iperf3, hping3 tools and `FlowScheduler`
-- [`docs/project_creation.md`](docs/project_creation.md) — End-to-end constellation design guide
-- [`docs/hil_manager.md`](docs/hil_manager.md) — Hardware-in-the-loop integration
 - [`docs/link_budget.md`](docs/link_budget.md) — Link budget calculations and parameters
-- [`docs/addressing.md`](docs/addressing.md) — IPv4 pools, node blocks, loopbacks, and link allocation
+
+**Support**
+
+- [`docs/utils.md`](docs/utils.md) — Project builder, coverage/IP helpers, connection strategies, compatibility patch
 
 ## Features
 
@@ -72,7 +94,7 @@ gonetem-console pull
 
 `make install-*` builds `gonetem-server` and `gonetem-console`, installs them under `/usr/local/bin`, installs the default configuration at `/etc/gonetem/config.yaml` (including the `jariassuarez/sgnt` satellite and ground-station images), and starts `gonetem.service`. `gonetem-console pull` fetches every Docker image that configuration references.
 
-The server listens on `localhost:10110` by default, which matches the `gonetem_server` default in `NetworkConfig`. To use this backend, set `network_launcher="GONETEM"` when constructing `TopologyManager`.
+The server listens on `localhost:10110` by default, which matches the `gonetem_server` default in `NetworkConfig`. `TopologyManager.start_gonetem()` constructs the GoNetEm launcher automatically; `network_launcher="GONETEM"` is recorded in `NetworkConfig` and serialized with the project. See [`docs/launchers.md`](docs/launchers.md) for the launcher contract and lifecycle.
 
 ## Quick Start
 
@@ -86,8 +108,8 @@ from satgonetem.services.topology_satcom import TopologyManager
 project = create_test_project()
 topology = TopologyManager.from_satcom(project)
 
-topology.set_ip_addresses()
 topology.start_gonetem()         # starts containers and wires the network
+topology.set_ip_addresses()      # push the planned IPv4 addresses into containers
 topology.init_routing("static")  # Dijkstra shortest-path routing
 topology.start()                 # begins simulation loop (topology updates every tick)
 ```
@@ -188,7 +210,6 @@ topology.stop_gonetem()  # remove containers, veth pairs, and qdiscs
 satgonetem/
   models/        Node, Satellite, GroundStation, Link, Interface
                  MPLS entries, routing entries, sat_com Pydantic models
-  dynamics/      DynamicsModel (abstract)
   launchers/     NetworkLauncher (abstract) + GoNetEmLauncher (gRPC)
                  HILManager (hardware-in-the-loop)
   routing/       RoutingDaemon (abstract) + static, OSPF, ISIS-SR, SR-MPLS
@@ -197,16 +218,17 @@ satgonetem/
   addressing/    Deterministic IPv4 pools, node blocks, loopbacks, and /31 links
   services/      TopologyManager (central orchestrator)
                  mixins: topology sync, link ops, routing mgr, interface mgr,
-                         network lifecycle, traffic testing, simulation loop, diagnostics
+                         network lifecycle, traffic testing, simulation loop,
+                         diagnostics, controller
   utils/         project_builder, IP helpers, custom connection strategies
-  proto/         gRPC definitions for GoNetem backend
+  proto/         gRPC definitions for the GoNetEm backend
 ```
 
 **TopologyManager** (`satgonetem/services/topology_satcom.py`) is the main entry point. It is composed of mixins under `services/mixins/` that each handle a specific concern: syncing topology data from the orbital simulator, managing Docker containers and virtual interfaces, applying `tc` qdiscs, configuring routing daemons, running traffic tests, and driving the simulation tick loop.
 
 **Delay model:** `delay_ms = distance_km / 299792.458 * 1000` (propagation at speed of light).
 
-**QoS stack per link:** `netem` (propagation delay) + `TBF` (rate limiting), applied via batched `tc` commands using pyroute2.
+**QoS stack per link:** `netem` (propagation delay) + `TBF` (rate limiting), configured by GoNetEm. The Python client batches per-tick changes through `LinkUpdateMany` (512 links per call) and falls back to per-link updates on older servers.
 
 ## IPv4 Addressing
 
@@ -284,18 +306,23 @@ Key parameters on `TopologyManager`:
 |-----------|---------|-------------|
 | `update_time` | 5 | Simulation tick interval in seconds |
 | `routing` | `"static"` | Routing method name |
-| `isl_link_capacity` | - | Inter-satellite link capacity in kbps |
-| `gnd_link_capacity` | - | Ground-space link capacity in kbps |
-| `link_netem_limit` | 1000 | netem queue limit of emulated links, in packets |
-| `link_txqueuelen` | 1000 | Transmit queue length of emulated link interfaces, in packets |
-| `satellite_image` | - | Docker image used for satellite containers |
-| `network_launcher` | `"DIRECT"` | `"GONETEM"` to use legacy gRPC backend |
+| `isl_link_capacity` | 100000 | Inter-satellite link capacity in kbps |
+| `gnd_link_capacity` | 100000 | Ground-space link capacity in kbps |
+| `ground_object_link_capacity` | 100000 | Ground-object link capacity in kbps |
+| `link_netem_limit` | 1000 | netem queue limit of emulated links, in packets (`0` = server default) |
+| `link_txqueuelen` | 1000 | Transmit queue length of emulated link interfaces, in packets (`0` = server default) |
+| `satellite_image` | `"jariassuarez/sgnt:satellite"` | Docker image used for satellite containers |
+| `network_launcher` | `"GONETEM"` | Recorded launcher backend identifier; GoNetEm is the implemented backend |
+| `gonetem_server` | `"localhost:10110"` | GoNetEm gRPC server address |
+| `use_budget` | `False` | Compute ground-station link capacity from the link budget |
 | `ground_station_pool` | `10.0.0.0/10` | Pool subdivided into ground-station `/20` blocks |
 | `satellite_pool` | `10.128.0.0/9` | Pool subdivided into satellite blocks |
 | `user_terminal_pool` | `10.64.0.0/10` | Pool subdivided into user-terminal `/20` blocks |
 | `ground_station_prefix_len` | 20 | Prefix length of each ground-station block |
 | `satellite_prefix_len` | 27 | Prefix length of each satellite block |
 | `user_terminal_prefix_len` | 20 | Prefix length of each user-terminal block |
+
+See [`docs/services.md`](docs/services.md#networkconfig) for every `NetworkConfig` field.
 
 ## Testing
 

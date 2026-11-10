@@ -333,3 +333,9 @@ pytest tests/link_budget/ -v
 pytest tests/models/test_link.py -v
 pytest tests/services/test_topology_satcom.py -v
 ```
+
+## Related documentation
+
+- [Data Model Layer](models.md) — `Link.update_link_capacities()` and antenna fields
+- [TopologyManager Internals](services.md) — `set_link_budget_config()` and `set_antenna()`
+- [Network Launchers](launchers.md) — how per-direction capacities reach the backend

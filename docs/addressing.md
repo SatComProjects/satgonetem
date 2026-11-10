@@ -105,3 +105,9 @@ The optional controller plane is an out-of-band management network and is
 independent of the data-plane pools above. It retains its own `248.0.0.0/16`
 mapping and 13-bit node field in `ControllerMixin.build_controller_ip()`; the
 data-plane satellite capacity is not limited by it.
+
+## Related documentation
+
+- [Data Model Layer](models.md) — `Interface`, `Node.address_block`, and link models
+- [TopologyManager Internals](services.md) — when the address plan is built and applied
+- [Controller Plane](controller.md) — the separate out-of-band addressing scheme

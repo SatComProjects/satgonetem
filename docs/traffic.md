@@ -423,3 +423,9 @@ if errors:
 | `join(timeout=None)` | `None` | Block until the scheduler finishes. |
 | `errors()` | `list[Exception]` | Exceptions from failed flows. Raises `RuntimeError` if still running. |
 | `results(flow)` | `AnyResult` | Result of a specific flow. Raises `RuntimeError` if still running or if `save_results=False`. Raises `KeyError` if the flow failed or was not scheduled. |
+
+## Related documentation
+
+- [TopologyManager Internals](services.md) — `TrafficTestingMixin` fan-out and teardown
+- [Data Model Layer](models.md) — node and link objects passed to traffic tools
+- [Utilities and Project Building](utils.md) — coverage helpers for experiment sizing
