@@ -23,7 +23,6 @@ from sat_com_constellation.models import WalkerConstellationProperty
 from sat_com_application.simulation_manager import SimulationManager
 from sat_com_model.exceptions import GroundObjectDomainNotFoundError
 from sat_com_model.models import (
-    create_satellite,
     create_ground_station,
     GroundObject as SatComGroundObject,
     GroundObjectDomain,
@@ -236,7 +235,9 @@ def create_custom_satellite(
         time_manager=simulation_manager.time_manager,
     )
     sat_name: str = satellite_model.satellite_name
-    new_sat = create_satellite(sat_name, object_id, domain)
+    # Built directly rather than with sat_com's create_satellite: sat_com_topology 5 inserted a required `shell`
+    # parameter before `domain`. A TLE-only satellite belongs to no shell (shell stays None in 5, absent in 4).
+    new_sat = SatComSatellite(satellite_name=sat_name, object_id=object_id, domain=domain)
     new_sat.set_movement_model(satellite_model)
     simulation_manager.add_satellite(new_sat)
     simulation_manager.update_ground_station_links()
@@ -427,15 +428,21 @@ def _find_ground_object_by_name(
 def _get_orbital_elements(
     sat: SatComSatellite, time_manager
 ) -> tuple[float, float, float] | None:
-    """Extract RAAN, orbital phase and altitude from a satellite's SGP4 model.
+    """Extract RAAN, orbital phase and altitude from a satellite's orbital model.
 
-    RAAN is taken directly from the TLE epoch elements.  Orbital phase is the
-    argument of latitude (degrees) computed from the *propagated* TEME position,
-    so it reflects the satellite's actual geometric location along its orbital
-    track.  Altitude is read from the movement model's geodetic position.
+    For SGP4 models RAAN and inclination are taken directly from the TLE epoch
+    elements (``nodeo``/``inclo``).  Models such as pyorbital's ``Orbital`` do
+    not expose those attributes, so the orbital-plane orientation is derived
+    from the propagated TEME state instead: ``h = r x v``,
+    ``inclination = acos(h_z / |h|)`` and ``RAAN = atan2(h_x, -h_y)``.
+
+    Orbital phase is the argument of latitude (degrees) computed from the
+    *propagated* TEME position, so it reflects the satellite's actual geometric
+    location along its orbital track.  Altitude is read from the movement
+    model's geodetic position.
 
     Args:
-        sat: A Satellite with a PyOrbitalModel movement model.
+        sat: A Satellite with a movement model that propagates a TEME state.
         time_manager: The simulation's TimeManager (provides current UTC).
 
     Returns:
@@ -445,16 +452,42 @@ def _get_orbital_elements(
     import math
 
     mm = sat.get_movement_model()
-    orb = getattr(mm, "orbital_object", None)
-    if orb is None:
+    if mm is None:
         return None
 
-    raan = math.degrees(orb.nodeo)
-    inc = math.radians(math.degrees(orb.inclo))
+    orb = getattr(mm, "orbital_object", None)
+    if orb is not None and hasattr(orb, "nodeo") and hasattr(orb, "inclo"):
+        # Satrec stores both angles in radians; keep RAAN in [0, 360).
+        raan = math.degrees(orb.nodeo) % 360.0
+        inc = float(orb.inclo)
+        r_teme = mm.get_position_earth_general_inertial()
+    else:
+        # pyorbital's Orbital has no TLE element attributes.  Derive the
+        # orbital-plane orientation from the propagated state vector.
+        get_position = getattr(mm, "get_position_earth_general_inertial", None)
+        if get_position is None:
+            return None
+
+        r_teme = get_position()
+        get_velocity = getattr(mm, "get_velocity_earth_general_inertial", None)
+        if get_velocity is None:
+            return None
+        v_teme = get_velocity()
+        x, y, z = r_teme
+        vx, vy, vz = v_teme
+        h_x = y * vz - z * vy
+        h_y = z * vx - x * vz
+        h_z = x * vy - y * vx
+        h_norm = math.sqrt(h_x * h_x + h_y * h_y + h_z * h_z)
+        if h_norm == 0.0:
+            return None
+
+        inc = math.acos(max(-1.0, min(1.0, h_z / h_norm)))
+        raan = math.degrees(math.atan2(h_x, -h_y)) % 360.0
+
     raan_rad = math.radians(raan)
 
     # Use the movement model's propagated position (NOT manual sgp4)
-    r_teme, _v_teme = mm.get_position_earth_general_inertial()
     x, y, z = r_teme
 
     # Orbital-plane unit vectors
@@ -471,7 +504,10 @@ def _get_orbital_elements(
     phase = math.degrees(math.atan2(ry, rx)) % 360.0
 
     # Altitude from geodetic position (metres → km)
-    alt_m = mm.get_longitude_latitude_altitude().altitude
+    get_geodetic = getattr(mm, "get_longitude_latitude_altitude", None)
+    if get_geodetic is None:
+        return None
+    alt_m = get_geodetic().altitude
     altitude = alt_m / 1000.0
 
     return raan, phase, altitude
@@ -674,8 +710,8 @@ def add_mesh_links(
 
                 # Skip if the 3D distance is excessive (e.g. planes are far
                 # apart in RAAN because intermediate planes are missing).
-                r_a = sat_a.get_movement_model().get_position_earth_general_inertial()[0]
-                r_b = sat_b.get_movement_model().get_position_earth_general_inertial()[0]
+                r_a = sat_a.get_movement_model().get_position_earth_general_inertial()
+                r_b = sat_b.get_movement_model().get_position_earth_general_inertial()
                 dist = math.sqrt(
                     (r_a[0] - r_b[0]) ** 2
                     + (r_a[1] - r_b[1]) ** 2

@@ -1,0 +1,114 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  PYTHONUNBUFFERED: "1"
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+      - name: Set up uv and Python
+        uses: astral-sh/setup-uv@v10.4.0
+        with:
+          version: "0.13.9"
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - name: Verify lockfile is up to date
+        run: uv lock --check
+      - name: Install development environment
+        run: uv sync --frozen --extra dev
+      - name: Lint with ruff
+        run: uv run --frozen --extra dev ruff check satgonetem tests
+
+  test:
+    name: Test (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+      - name: Set up uv and Python
+        uses: astral-sh/setup-uv@v10.4.0
+        with:
+          version: "0.13.9"
+          python-version: ${{ matrix.python-version }}
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - name: Install dependencies
+        run: uv sync --frozen --extra dev
+      - name: Run tests with coverage
+        if: matrix.python-version == '3.12'
+        run: >-
+          uv run --frozen --extra dev pytest -q
+          --cov=satgonetem
+          --cov-report=term-missing
+          --cov-report=xml
+      - name: Run tests
+        if: matrix.python-version != '3.12'
+        run: uv run --frozen --extra dev pytest -q
+      - name: Upload coverage report
+        if: matrix.python-version == '3.12'
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-xml
+          path: coverage.xml
+          retention-days: 7
+
+  package:
+    name: Build package
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+      - name: Set up uv and Python
+        uses: astral-sh/setup-uv@v10.4.0
+        with:
+          version: "0.13.9"
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - name: Build sdist and wheel
+        run: uv build --out-dir dist
+      - name: Validate distribution metadata
+        run: uvx twine@7.0.0 check dist/*
+      - name: Smoke-test the wheel
+        run: |
+          uv venv --python 3.12 "$RUNNER_TEMP/wheel-venv"
+          uv pip install --python "$RUNNER_TEMP/wheel-venv/bin/python" dist/*.whl
+          "$RUNNER_TEMP/wheel-venv/bin/python" - <<'PY'
+          import satgonetem
+          import satgonetem.models.satellite
+          import satgonetem.proto.netem_pb2
+          import satgonetem.services.topology_satcom
+
+          print(f"wheel install OK: satgonetem {satgonetem.__version__}")
+          PY
+      - name: Upload distributions
+        uses: actions/upload-artifact@v7
+        with:
+          name: dist
+          path: dist/
+          retention-days: 7

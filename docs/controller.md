@@ -192,3 +192,9 @@ tm.cleanup_controller_connection()
 # 7. Stop GoNetEm and the simulation.
 tm.stop_gonetem()
 ```
+
+## Related documentation
+
+- [TopologyManager Internals](services.md) — `ControllerMixin` in the mixin composition
+- [IPv4 Addressing](addressing.md) — data-plane plan, independent of the controller plane
+- [Network Launchers](launchers.md) — `controller=True` in the generated GoNetEm project

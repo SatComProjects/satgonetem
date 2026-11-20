@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="satgonetem-core",
-    version="0.1.0",
+    version="0.2.2",
     description="SatGoNetem Core - Satellite Network Emulation Tool",
     long_description=(
         open("README.md").read() if __import__("os").path.exists("README.md") else ""
@@ -31,7 +31,7 @@ setup(
         "psutil>=7.0.0",
         "pandas>=2.3.0",
         "astropy>=6.1.7",
-        "sat_com_topology @ git+https://github.com/SatComProjects/satComTopology.git",
+        "sat_com_topology @ git+https://github.com/SatComProjects/satComTopology.git@v5.0.3",
     ],
     classifiers=[
         "Development Status :: 3 - Alpha",

@@ -3,6 +3,8 @@
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from satgonetem.services.mixins.network_lifecycle import NetworkLifecycleMixin
 from satgonetem.utils.constants import MAX_WORKERS
 
@@ -14,6 +16,8 @@ class DummyTopology(NetworkLifecycleMixin):
         self.isl_link_capacity = 100_000
         self.gnd_link_capacity = 100_000
         self.ground_object_link_capacity = 100_000
+        self.link_netem_limit = 2048
+        self.link_txqueuelen = 4096
         self.status = False
         self.gonetem_status = False
         self.launcher = None
@@ -70,9 +74,11 @@ def test_start_gonetem_passes_only_non_hil_nodes_and_active_links():
     with patch(
         "satgonetem.launchers.gonetem_launcher.GoNetEmLauncher",
         return_value=fake_launcher,
-    ):
+    ) as mock_launcher_cls:
         topology.start_gonetem()
 
+    assert mock_launcher_cls.call_args.kwargs["netem_limit"] == 2048
+    assert mock_launcher_cls.call_args.kwargs["txqueuelen"] == 4096
     fake_launcher.start_containers.assert_called_once_with(
         [sat, gnd],
         MAX_WORKERS,
@@ -115,3 +121,40 @@ def test_stop_gonetem_continues_when_flow_stop_fails():
 
     assert topology._active_flows == []
     assert topology.gonetem_status is False
+
+
+def test_stop_gonetem_resets_state_when_close_project_fails():
+    topology = DummyTopology()
+    topology.gonetem_status = True
+    topology.routing_initiated = True
+    topology.routing_method = "static"
+
+    class FailingLauncher:
+        def close_project(self):
+            raise RuntimeError("ProjectClose failed")
+
+    topology.launcher = FailingLauncher()
+
+    with pytest.raises(RuntimeError, match="ProjectClose failed"):
+        topology.stop_gonetem()
+
+    assert topology.gonetem_status is False
+    assert topology.launcher is None
+    assert topology.routing_initiated is False
+    assert topology.routing_method is None
+
+
+def test_stop_gonetem_closes_project_when_hil_teardown_fails():
+    topology = DummyTopology()
+    topology.gonetem_status = True
+    topology.hil_manager = MagicMock()
+    topology.hil_manager.teardown_all.side_effect = RuntimeError("HIL teardown failed")
+    launcher = MagicMock()
+    topology.launcher = launcher
+
+    with pytest.raises(RuntimeError, match="HIL teardown failed"):
+        topology.stop_gonetem()
+
+    launcher.close_project.assert_called_once()
+    assert topology.gonetem_status is False
+    assert topology.launcher is None

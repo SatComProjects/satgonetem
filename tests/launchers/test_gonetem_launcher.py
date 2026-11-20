@@ -6,7 +6,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from satgonetem.launchers.gonetem_launcher import GoNetEmLauncher, _tbf_qos
+from satgonetem.launchers.gonetem_launcher import (
+    LINK_UPDATE_CHUNK_SIZE,
+    GoNetEmLauncher,
+    _tbf_qos,
+)
+from satgonetem.proto import netem_pb2
 
 
 def _completed(command, returncode=0, stdout="", stderr=""):
@@ -423,6 +428,39 @@ def test_write_links_uses_corrected_tbf_values(topology_with_hil):
     assert "buffer: 2.6112" in yaml
 
 
+def test_write_links_uses_default_queue_length(topology_with_hil):
+    topology_manager, sat, gnd, _hil_gnd, _sat_to_gnd, _sat_to_hil = (
+        topology_with_hil
+    )
+    launcher = GoNetEmLauncher(topology_manager, "localhost:10110", "test")
+
+    yaml = launcher.get_gonetem_topology(nodes=[sat, gnd])
+
+    # Defaults preserving the server behaviour: 1000 packets on both bounds,
+    # emitted once per direction.
+    assert yaml.count("limit: 1000") == 2
+    assert yaml.count("txqueuelen: 1000") == 2
+
+
+def test_write_links_uses_configured_queue_length(topology_with_hil):
+    topology_manager, sat, gnd, _hil_gnd, _sat_to_gnd, _sat_to_hil = (
+        topology_with_hil
+    )
+    launcher = GoNetEmLauncher(
+        topology_manager,
+        "localhost:10110",
+        "test",
+        netem_limit=5000,
+        txqueuelen=8000,
+    )
+
+    yaml = launcher.get_gonetem_topology(nodes=[sat, gnd])
+
+    assert "limit: 5000" in yaml
+    assert "txqueuelen: 8000" in yaml
+    assert "limit: 1000" not in yaml
+
+
 def test_link_request_includes_corrected_tbf_values(launcher):
     link = SimpleNamespace(
         source=SimpleNamespace(name="Sat0", id=0),
@@ -440,3 +478,101 @@ def test_link_request_includes_corrected_tbf_values(launcher):
     assert request.link.peer1qos.burst == 2014
     assert request.link.peer1qos.buffer == pytest.approx(2.6112)
     assert request.link.peer2qos.burst == 2014
+
+
+def test_link_request_includes_configured_queue_length(launcher):
+    launcher.netem_limit = 5000
+    launcher.txqueuelen = 8000
+    link = SimpleNamespace(
+        source=SimpleNamespace(name="Sat0", id=0),
+        target=SimpleNamespace(name="Gnd0", id=1),
+        delay=10,
+        loss=0,
+        jitter=0,
+        type="GroundStationLink",
+        peer1_capacity=1000,
+        peer2_capacity=1000,
+    )
+
+    request = launcher._link_request(link)
+
+    for qos in (request.link.peer1qos, request.link.peer2qos):
+        assert qos.limit == 5000
+        assert qos.txqueuelen == 8000
+
+
+def _link_update_response(request):
+    response = netem_pb2.LinkUpdateManyResponse(
+        status=netem_pb2.Status(code=netem_pb2.OK)
+    )
+    for link_cfg in request.links:
+        response.results.add(
+            status=netem_pb2.Status(code=netem_pb2.OK),
+            peer1=link_cfg.peer1,
+            peer2=link_cfg.peer2,
+        )
+    response.updated = len(request.links)
+    return response
+
+
+def test_update_links_chunks_and_merges_responses(launcher):
+    links = [
+        FakeLink(
+            SimpleNamespace(id=i, name=f"Sat{i}"),
+            SimpleNamespace(id=i + 1, name=f"Sat{i + 1}"),
+        )
+        for i in range(LINK_UPDATE_CHUNK_SIZE + 1)
+    ]
+    launcher._client.LinkUpdateMany.side_effect = _link_update_response
+
+    response = launcher.update_links(links)
+
+    requests = [
+        call.args[0] for call in launcher._client.LinkUpdateMany.call_args_list
+    ]
+    assert [len(request.links) for request in requests] == [
+        LINK_UPDATE_CHUNK_SIZE,
+        1,
+    ]
+    assert all(request.prjId == "abc123" for request in requests)
+    assert all(request.sync is False for request in requests)
+    assert len(response.results) == len(links)
+    assert response.updated == len(links)
+    assert response.status.code == netem_pb2.OK
+
+
+def test_update_links_returns_empty_response_for_empty_burst(launcher):
+    response = launcher.update_links([])
+
+    launcher._client.LinkUpdateMany.assert_not_called()
+    assert len(response.results) == 0
+    assert response.updated == 0
+    assert response.status.code == netem_pb2.OK
+
+
+def test_update_links_requires_open_project(launcher):
+    launcher._client = None
+
+    with pytest.raises(RuntimeError, match="before project is open"):
+        launcher.update_links([])
+
+
+def test_update_links_rejects_missing_results(launcher):
+    links = [
+        FakeLink(
+            SimpleNamespace(id=i, name=f"Sat{i}"),
+            SimpleNamespace(id=i + 1, name=f"Sat{i + 1}"),
+        )
+        for i in range(2)
+    ]
+    launcher._client.LinkUpdateMany.return_value = (
+        netem_pb2.LinkUpdateManyResponse(
+            status=netem_pb2.Status(code=netem_pb2.OK)
+        )
+    )
+    launcher._client.LinkUpdateMany.return_value.results.add(
+        status=netem_pb2.Status(code=netem_pb2.OK)
+    )
+
+    with pytest.raises(RuntimeError, match="1 result"):
+        launcher.update_links(links)

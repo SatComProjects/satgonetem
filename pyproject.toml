@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "satgonetem"
-version = "0.2.0"
+version = "0.2.2"
 description = "SatGoNetem - Satellite Network Emulation Tool"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -42,7 +42,7 @@ dependencies = [
     "astropy>=6.1.7",
     "pyroute2>=0.7.0",
     "yaspin>=3.0.0",
-    "sat_com_topology @ git+https://github.com/SatComProjects/satComTopology.git",
+    "sat_com_topology @ git+https://github.com/SatComProjects/satComTopology.git@v5.0.3",
     "pytest>=9.0.3",
     "igraph>=1.0.0",
     "itur>=0.4.0",
@@ -58,6 +58,7 @@ dev = [
     "black>=23.0",
     "flake8>=6.0",
     "mypy>=1.0",
+    "ruff==0.17.6",
 ]
 
 [project.urls]
@@ -74,6 +75,14 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
+
+[tool.ruff]
+target-version = "py310"
+
+[tool.ruff.lint]
+# Ratchet: this is the subset the codebase passes today. Widen it (e.g. E4, E7,
+# F401, F841) as the existing findings are fixed, so CI never regresses.
+select = ["E9", "F63", "F7", "F82"]
 
 [tool.uv]
 required-version = ">=0.11.0"

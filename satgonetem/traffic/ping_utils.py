@@ -339,7 +339,8 @@ class PingFlow:
             dst_ip = self.destination.loopback.ipv4
             bind_ip = self.source.loopback.ipv4
             command = self.config.build_command(dst_ip, bind_ip)
-            raw = self.source.execute_command(command)
+            # ping exits 1 when every probe is lost; the summary is still valid.
+            raw = self.source.execute_command(command, ok_exit_codes=(0, 1))
             if not isinstance(raw, str):
                 raise RuntimeError(
                     f"ping from {self.source.name} to {self.destination.name} "
@@ -385,7 +386,8 @@ def run_ping(
     bind_ip = source.loopback.ipv4
     command = config.build_command(dst_ip, bind_ip)
 
-    raw = source.execute_command(command)
+    # ping exits 1 when every probe is lost; the summary is still valid.
+    raw = source.execute_command(command, ok_exit_codes=(0, 1))
     if not isinstance(raw, str):
         raise RuntimeError(
             f"ping from {source.name} to {destination.name} returned no output; "

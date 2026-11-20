@@ -5,6 +5,8 @@ from __future__ import annotations
 import logging
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
+from satgonetem.addressing import Ipv4AddressPlan, NodeKind
 from satgonetem.utils.constants import MAX_WORKERS
 
 from typing import TYPE_CHECKING
@@ -17,7 +19,7 @@ if TYPE_CHECKING:
 
 
 class InterfaceMgrMixin:
-    """InterfaceMgr functionality."""
+    """Build interfaces and apply the topology-wide IPv4 address plan."""
 
     def get_all_links_usage(self):
         """Return usage for all links (mapped), not only congested.
@@ -33,34 +35,87 @@ class InterfaceMgrMixin:
             return []
         return self.monitor_links()
 
+    def _initialize_address_plan(self) -> None:
+        """Build the topology-wide IPv4 plan and assign node/loopback addresses.
+
+        Nodes are registered in sorted-ID order per kind, so the plan is
+        reproducible for a given topology.  Links are pre-allocated in a
+        canonical order so initial addresses do not depend on dictionary
+        insertion order.
+        """
+        plan = Ipv4AddressPlan(
+            ground_station_pool=self.ground_station_pool,
+            satellite_pool=self.satellite_pool,
+            user_terminal_pool=self.user_terminal_pool,
+            ground_station_prefix_len=self.ground_station_prefix_len,
+            satellite_prefix_len=self.satellite_prefix_len,
+            user_terminal_prefix_len=self.user_terminal_prefix_len,
+        )
+
+        def register(node: Node, kind: NodeKind) -> None:
+            address = plan.register_node(node.id, kind)
+            node.address_block = address.block
+            node.loopback.set_ipv4(str(address.loopback.ip), 32)
+
+        for satellite in sorted(self.satellites.values(), key=lambda n: n.id):
+            register(satellite, NodeKind.SATELLITE)
+        for ground_station in sorted(self.ground_stations.values(), key=lambda n: n.id):
+            register(ground_station, NodeKind.GROUND_STATION)
+
+        # User terminals are not instantiated in this version, but the plan
+        # already supports them.  Register them if a future model provides
+        # them on the manager.
+        for user_terminal in sorted(
+            getattr(self, "user_terminals", {}).values(), key=lambda n: n.id
+        ):
+            register(user_terminal, NodeKind.USER_TERMINAL)
+
+        for link in sorted(self.links.values(), key=self._address_link_sort_key):
+            plan.allocate_link(
+                self._link_key(link), link.source.id, link.target.id
+            )
+
+        self.address_plan = plan
+
+    @staticmethod
+    def _link_key(link: Link) -> frozenset[str]:
+        """Return the key used by ``self.links`` for this link."""
+        return frozenset((link.source.name, link.target.name))
+
+    @staticmethod
+    def _address_link_sort_key(link: Link) -> tuple[int, int]:
+        """Canonical order for initial link-slot allocation."""
+        return tuple(sorted((link.source.id, link.target.id)))
+
     def _add_loopback_interfaces_to_list(self):
-        """
-        Method to add loopback interfaces to the list of interfaces
-        """
+        """Add loopback interfaces to the global interface list."""
         for node in list(self.satellites.values()) + list(
             self.ground_stations.values()
         ):
             node.loopback.name = f"lo_{node.name}"
-            node.loopback.set_ipv4_address()
+            if not node.loopback.ipv4:
+                raise RuntimeError(
+                    f"Loopback address for {node.name} was not assigned by the "
+                    "IPv4 address plan"
+                )
             self.interfaces.append(node.loopback)
 
     def _assign_interfaces_to_nodes(self) -> None:
-        """
-        Method to assign interfaces to nodes
-        """
-        links = self.links.values()
-
-        for link in links:
+        """Create and configure interfaces for every link."""
+        for link in self.links.values():
             self._build_interfaces_from_link(link)
 
     def _build_interfaces_from_link(
         self, link: Link, set_ip: bool = True, sync_to_node: bool = True
     ) -> None:
-        # Get source and destination
+        """Create the two interfaces for a link and apply their planned /31."""
+        if link.peer_interfaces:
+            # Idempotent: a link that already has interfaces must not create a
+            # second pair with the same kernel names.
+            return
+
         source = link.source
         target = link.target
-
-        # print(source, target, type)
 
         int1 = source.create_interface(f"{source.name}.{str(target.id)}")
         int2 = target.create_interface(f"{target.name}.{str(source.id)}")
@@ -91,28 +146,28 @@ class InterfaceMgrMixin:
         int1.is_active = link.is_active
         int2.is_active = link.is_active
 
-        link.peer_interfaces.extend([int1, int2])  # Add interfaces to the link
-
-        self.interfaces.extend([int1, int2])  # Add interfaces to the global list
+        link.peer_interfaces.extend([int1, int2])
+        self.interfaces.extend([int1, int2])
         self.interface_version = getattr(self, "interface_version", 0) + 1
 
-        if not self.get_status():
+        if not set_ip:
             return
 
-        if set_ip:
-            int1.set_ipv4_address()
-            int2.set_ipv4_address()
+        if self.address_plan is None:
+            raise RuntimeError(
+                "IPv4 address plan is not initialized; call "
+                "_initialize_address_plan() before creating link interfaces"
+            )
 
-        if sync_to_node and set_ip:
+        address = self.address_plan.allocate_link(
+            self._link_key(link), source.id, target.id
+        )
+        int1.set_ipv4(str(address.source.ip), address.prefix_len)
+        int2.set_ipv4(str(address.target.ip), address.prefix_len)
+
+        if sync_to_node and self.get_status():
             source.set_ipv4_to_containers(interface=int1, set_lo=False)
             target.set_ipv4_to_containers(interface=int2, set_lo=False)
-
-    def _set_ips_to_nodes(self) -> None:
-        """
-        Method to set IPs to nodes
-        """
-        for interface in self.interfaces:
-            interface.set_ipv4_address()
 
     def set_ipv4s_for_all_nodes(
         self,
@@ -121,8 +176,11 @@ class InterfaceMgrMixin:
         satellites: bool = True,
         ground_stations: bool = True,
     ) -> None:
-        """
-        Assign IPv4s to every satellite and ground station as fast as possible with a spinner.
+        """Apply every node's planned IPv4 addresses inside its container.
+
+        One batched ``ip`` command is issued per node and nodes are processed
+        in parallel.  The method raises only after all nodes have been
+        attempted so a single transport failure does not hide the others.
         """
         nodes = []
         if satellites:
@@ -143,9 +201,7 @@ class InterfaceMgrMixin:
             max_workers = min(MAX_WORKERS, total_nodes)
 
         submitted = 0
-        errors = 0
-
-        # Start the spinner with a distinct color for network config
+        failures: list[tuple[str, Exception]] = []
 
         with ThreadPoolExecutor(max_workers=max_workers) as pool:
             futures = {
@@ -160,36 +216,42 @@ class InterfaceMgrMixin:
                 submitted += 1
                 try:
                     fut.result()
-                except Exception as e:
-                    errors += 1
+                except Exception as exc:  # noqa: BLE001 - aggregate per node
+                    failures.append((node.name, exc))
                     logging.exception(
-                        f"Failed to dispatch IPv4 assignment on {node.name}: {e}"
+                        "Failed to dispatch IPv4 assignment on %s: %s",
+                        node.name,
+                        exc,
                     )
 
                 logging.debug(
-                    f"IP Assignment: {submitted}/{total_nodes} (Errors: {errors})"
+                    "IP Assignment: %s/%s (Errors: %s)",
+                    submitted,
+                    total_nodes,
+                    len(failures),
                 )
 
         toc = time.perf_counter()
 
         logging.info(
-            f"IPv4 assignment dispatched for {submitted - errors}/{submitted} nodes "
-            f"in {toc - tic:.3f}s (max_workers={max_workers})."
+            "IPv4 assignment dispatched for %s/%s nodes in %.3fs "
+            "(max_workers=%s, errors=%s).",
+            submitted - len(failures),
+            submitted,
+            toc - tic,
+            max_workers,
+            len(failures),
         )
 
+        if failures:
+            names = ", ".join(name for name, _ in failures)
+            raise RuntimeError(
+                f"IPv4 assignment failed on {len(failures)} node(s): {names}"
+            )
+
     def _get_interface_to_peer(self, node: Node, peer_id: int) -> Optional[Interface]:
-        """
-        Get the interface on a node that connects to a specific peer.
-
-        Args:
-            node: Source node
-            peer_id: ID of the peer node
-
-        Returns:
-            Interface connecting to peer, or None if not found
-        """
+        """Return the interface on *node* connected to *peer_id*, if any."""
         for iface in node.interfaces:
-            # Interface name format: NodeName.PeerID
             try:
                 iface_peer_id = int(iface.name.split(".")[1])
                 if iface_peer_id == peer_id:

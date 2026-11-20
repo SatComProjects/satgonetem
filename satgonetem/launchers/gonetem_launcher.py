@@ -42,6 +42,11 @@ def _tbf_qos(rate_kbps: int, delay_ms: int) -> tuple[int, float]:
     return burst, buffer_factor
 
 
+# LinkUpdateMany is one RPC per burst; keep requests small enough that a
+# single response stays bounded and retries are cheap.
+LINK_UPDATE_CHUNK_SIZE = 512
+
+
 class GoNetEmLauncher(NetworkLauncher):
     """Launch and manage a network topology through a GoNetem gRPC server."""
 
@@ -54,12 +59,16 @@ class GoNetEmLauncher(NetworkLauncher):
         gnd_capacity_kbps: int = 100_000,
         ground_object_capacity_kbps: int = 100_000,
         temp_path: str = "/tmp/",
+        netem_limit: int = 1000,
+        txqueuelen: int = 1000,
     ) -> None:
         super().__init__(
             project_name,
             isl_capacity_kbps,
             gnd_capacity_kbps,
             ground_object_capacity_kbps,
+            netem_limit,
+            txqueuelen,
         )
         self._topology_manager = topology_manager
         self._server_address = server_address
@@ -190,8 +199,7 @@ class GoNetEmLauncher(NetworkLauncher):
             result += f" {prefix}{gs.id}:\n  type: {gs_type}\n  image: {image}\n  volumes:\n  - /tmp:/tmp\n"
         return result
 
-    @staticmethod
-    def _write_links(links) -> str:
+    def _write_links(self, links) -> str:
         result = ""
         for link in links:
             if not getattr(link, "is_active", True):
@@ -199,11 +207,12 @@ class GoNetEmLauncher(NetworkLauncher):
             delay = max(int(link.delay), 1)
             rate = link.get_capacity()
             burst, buffer = _tbf_qos(rate, delay)
+            queue = f"limit: {self.netem_limit}, txqueuelen: {self.txqueuelen}"
             result += (
                 f" - {{peer1: {link.source.name}.{link.target.id},"
                 f" peer2: {link.target.name}.{link.source.id},"
-                f" peer1qos: {{ rate: {rate}, buffer: {buffer}, jitter: 0, delay: {delay}, burst: {burst}}},"
-                f" peer2qos: {{ rate: {rate}, buffer: {buffer}, jitter: 0, delay: {delay}, burst: {burst}}}}}"
+                f" peer1qos: {{ rate: {rate}, buffer: {buffer}, jitter: 0, delay: {delay}, burst: {burst}, {queue}}},"
+                f" peer2qos: {{ rate: {rate}, buffer: {buffer}, jitter: 0, delay: {delay}, burst: {burst}, {queue}}}}}"
                 f" #Latency of {delay}ms \n"
             )
         return result
@@ -265,6 +274,8 @@ class GoNetEmLauncher(NetworkLauncher):
             jitter=jitter,
             buffer=buffer1,
             burst=burst1,
+            limit=self.netem_limit,
+            txqueuelen=self.txqueuelen,
         )
         qos2 = netem_pb2.LinkConfig.QoSConfig(
             delay=delay_ms,
@@ -273,6 +284,8 @@ class GoNetEmLauncher(NetworkLauncher):
             jitter=jitter,
             buffer=buffer2,
             burst=burst2,
+            limit=self.netem_limit,
+            txqueuelen=self.txqueuelen,
         )
         link_cfg = netem_pb2.LinkConfig(
             peer1=f"{link.source.name}.{link.target.id}",
@@ -328,12 +341,18 @@ class GoNetEmLauncher(NetworkLauncher):
             client = self._get_client()
 
             try:
-                version = client.ServerGetVersion(empty_pb2.Empty()).version
+                version_resp = client.ServerGetVersion(empty_pb2.Empty())
             except Exception as exc:
                 raise RuntimeError(
                     f"GoNetEmLauncher: cannot reach server "
                     f"{self._server_address}: {exc}"
                 ) from exc
+            if version_resp.status.code == netem_pb2.StatusCode.ERROR:
+                raise RuntimeError(
+                    f"GoNetEmLauncher: ServerGetVersion failed: "
+                    f"{version_resp.status.error}"
+                )
+            version = version_resp.version
 
             logging.info(
                 "GoNetEmLauncher: connected to GoNetem %s at %s",
@@ -351,7 +370,13 @@ class GoNetEmLauncher(NetworkLauncher):
                 open_req = netem_pb2.OpenRequest(
                     name=self.project_name, data=fd.read()
                 )
-            project_id = getattr(client.ProjectOpen(open_req), "id", "")
+            open_resp = client.ProjectOpen(open_req)
+            if open_resp.status.code == netem_pb2.StatusCode.ERROR:
+                raise RuntimeError(
+                    f"GoNetEmLauncher: ProjectOpen failed: "
+                    f"{open_resp.status.error}"
+                )
+            project_id = getattr(open_resp, "id", "")
             if not project_id:
                 raise RuntimeError(
                     "GoNetEmLauncher: ProjectOpen returned an empty project id"
@@ -548,6 +573,65 @@ class GoNetEmLauncher(NetworkLauncher):
                 link.target.name,
                 exc,
             )
+
+    def update_links(self, links) -> netem_pb2.LinkUpdateManyResponse:
+        """Update a burst of links with chunked LinkUpdateMany calls.
+
+        Args:
+            links: Links whose delay/rate/QoS should be refreshed.
+
+        Returns:
+            A single response with results in request order. When the burst is
+            larger than :data:`LINK_UPDATE_CHUNK_SIZE`, per-chunk responses are
+            concatenated and their ``updated`` counters are summed.
+
+        Raises:
+            RuntimeError: If the project is not open or a non-gRPC transport
+                failure occurs.
+            grpc.RpcError: Propagated unchanged so callers can detect an old
+                server via ``UNIMPLEMENTED`` or fail on other transport errors.
+        """
+        if self._client is None or self._request is None:
+            raise RuntimeError(
+                "GoNetEmLauncher: update_links called before project is open"
+            )
+
+        links = list(links)
+        merged = netem_pb2.LinkUpdateManyResponse(
+            status=netem_pb2.Status(code=netem_pb2.OK)
+        )
+        if not links:
+            return merged
+
+        for start in range(0, len(links), LINK_UPDATE_CHUNK_SIZE):
+            chunk = links[start : start + LINK_UPDATE_CHUNK_SIZE]
+            request = netem_pb2.LinkUpdateManyRequest(
+                prjId=self._request.id,
+                links=[self._link_request(link).link for link in chunk],
+                sync=False,
+            )
+            try:
+                response = self._client.LinkUpdateMany(request)
+            except grpc.RpcError:
+                # Preserve the status code for the caller's fallback logic.
+                raise
+            except Exception as exc:
+                raise RuntimeError(
+                    "GoNetEmLauncher: LinkUpdateMany failed for "
+                    f"{len(chunk)} link(s): {exc}"
+                ) from exc
+
+            if len(response.results) != len(chunk):
+                raise RuntimeError(
+                    "GoNetEmLauncher: LinkUpdateMany returned "
+                    f"{len(response.results)} result(s) for {len(chunk)} link(s)"
+                )
+
+            merged.status.CopyFrom(response.status)
+            merged.results.extend(response.results)
+            merged.updated += response.updated
+
+        return merged
 
     def add_link(self, link) -> None:
         if self._client is None or self._request is None:

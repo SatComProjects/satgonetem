@@ -1,0 +1,87 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to publish, e.g. v0.2.1"
+        required: true
+        type: string
+
+concurrency:
+  group: release-${{ github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build distributions
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out the release tag
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+      - name: Set up uv and Python
+        uses: astral-sh/setup-uv@v10.4.0
+        with:
+          version: "0.13.9"
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - name: Verify tag matches package version
+        env:
+          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          version="$(uv version --short)"
+          if [ "$RELEASE_TAG" != "v$version" ]; then
+            echo "::error::Release tag '$RELEASE_TAG' does not match pyproject version 'v$version'"
+            exit 1
+          fi
+          echo "Releasing v$version"
+      - name: Build sdist and wheel
+        run: uv build --out-dir dist
+      - name: Validate distribution metadata
+        run: uvx twine@7.0.0 check dist/*
+      - name: Upload distributions
+        uses: actions/upload-artifact@v7
+        with:
+          name: dist
+          path: dist/
+          retention-days: 7
+
+  github-release:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Download distributions
+        uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          files: dist/*
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          prerelease: ${{ contains(github.event.inputs.tag || github.ref_name, '-') }}
+
+# PyPI publishing is intentionally not wired up: pyproject.toml depends on
+# sat_com_topology through a direct Git URL, and PyPI rejects distributions whose
+# Requires-Dist contains a direct reference (HTTP 400). Once satComTopology is
+# published to PyPI and the dependency becomes a name-based requirement, add a
+# job here that downloads the "dist" artifact and calls
+# pypa/gh-action-pypi-publish with `id-token: write` and
+# `environment: pypi` (PyPI Trusted Publishing).
+

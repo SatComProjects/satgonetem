@@ -1,6 +1,11 @@
 """Tests for the Node base model."""
 
 
+import base64
+from unittest.mock import MagicMock
+
+import pytest
+
 from satgonetem.models.node import Node
 from satgonetem.models.interface import Interface
 
@@ -146,3 +151,70 @@ class TestNodeHashNode:
         n2 = Node("Sat0")
         n2.position = {"latitude": 10.0, "longitude": 20.0, "altitude": 550.0}
         assert n1.hash_node() == n2.hash_node()
+
+
+class TestNodeExecuteCommand:
+    """Tests for Node.execute_command exit-code handling."""
+
+    def _node_with_exit_code(self, exit_code: int) -> Node:
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+
+        node = Node("Sat0")
+        node.project_id = "prj"
+        node.grpc_client = MagicMock()
+        node.grpc_client.NodeRun.return_value = SimpleNamespace(
+            status=SimpleNamespace(code=0),
+            stdout=b"output",
+            stderr=b"",
+            exitCode=exit_code,
+        )
+        return node
+
+    def test_rejects_unexpected_exit_code_by_default(self):
+        import pytest
+
+        node = self._node_with_exit_code(1)
+        with pytest.raises(RuntimeError, match="exit 1"):
+            node.execute_command("false")
+
+    def test_accepts_explicit_exit_code(self):
+        node = self._node_with_exit_code(1)
+        assert node.execute_command("ping", ok_exit_codes=(0, 1)) == "output"
+
+
+class TestNodeSetIpv4ToContainers:
+    """Tests for batched container address commands."""
+
+    @staticmethod
+    def _decode_batch(command) -> str:
+        shell = command[-1]
+        encoded = shell.split("echo ", 1)[1].split(" |", 1)[0]
+        return base64.b64decode(encoded).decode()
+
+    def test_uses_replace_and_interface_prefix(self):
+        node = Node("Sat0")
+        node.execute_command = MagicMock()
+        iface = Interface(name="Sat0.1")
+        iface.set_ipv4("10.128.0.4", 31)
+        node.interfaces.append(iface)
+        node.loopback.set_ipv4("10.128.0.1", 32)
+
+        node.set_ipv4_to_containers(interface=None, set_lo=True)
+
+        command = node.execute_command.call_args.kwargs["command"]
+        payload = self._decode_batch(command)
+        assert "addr replace 10.128.0.4/31 dev eth1" in payload
+        assert "addr replace 10.128.0.1/32 dev lo" in payload
+        assert "addr add" not in payload
+
+    def test_rejects_unsupported_prefix(self):
+        node = Node("Sat0")
+        node.execute_command = MagicMock()
+        iface = Interface(name="Sat0.1")
+        iface.ipv4 = "10.128.0.4"
+        iface.prefix_len = 30
+        node.interfaces.append(iface)
+
+        with pytest.raises(ValueError, match="unsupported IPv4 prefix"):
+            node.set_ipv4_to_containers(interface=None, set_lo=False)

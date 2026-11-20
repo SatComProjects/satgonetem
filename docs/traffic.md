@@ -201,7 +201,7 @@ config = Hping3Config(
     count=100,             # packet count (-c)
     size=0,                # extra payload bytes (-d)
     ttl=None,              # IP TTL (--ttl)
-    rate_type="interval",  # "interval", "fast", "faster", or "flood"
+    rate_type="interval",  # "interval", "fast", or "faster" ("flood" is rejected: it ignores count)
     interval="u10000",     # used when rate_type="interval" (-i); u prefix = microseconds
     flags=["S"],           # TCP flags: "S" SYN, "A" ACK, "F" FIN, "R" RST, "P" PUSH, "U" URG
     spoof_src=None,        # explicit spoof IP (-a); falls back to node loopback when None
@@ -423,3 +423,9 @@ if errors:
 | `join(timeout=None)` | `None` | Block until the scheduler finishes. |
 | `errors()` | `list[Exception]` | Exceptions from failed flows. Raises `RuntimeError` if still running. |
 | `results(flow)` | `AnyResult` | Result of a specific flow. Raises `RuntimeError` if still running or if `save_results=False`. Raises `KeyError` if the flow failed or was not scheduled. |
+
+## Related documentation
+
+- [TopologyManager Internals](services.md) — `TrafficTestingMixin` fan-out and teardown
+- [Data Model Layer](models.md) — node and link objects passed to traffic tools
+- [Utilities and Project Building](utils.md) — coverage helpers for experiment sizing

@@ -68,6 +68,28 @@ def _run_tc_batch(pid: int, commands: list[str]) -> None:
         raise RuntimeError(r.stderr.strip())
 
 
+def _run_ip_batch(pid: int, commands: list[str]) -> None:
+    """Run ip in batch mode inside the network namespace of pid.
+
+    Args:
+        pid: Kernel PID of the target container process.
+        commands: List of ip commands to execute in batch mode.
+
+    Raises:
+        RuntimeError: If ip exits with a non-zero return code.
+    """
+    batch_input = "\n".join(commands) + "\n"
+    r = subprocess.run(
+        ["nsenter", f"--net=/proc/{pid}/ns/net", "ip", "-batch", "-"],
+        input=batch_input,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if r.returncode != 0:
+        raise RuntimeError(r.stderr.strip())
+
+
 class HILManager:
     """
     Standalone Hardware-in-the-Loop manager.
@@ -89,6 +111,10 @@ class HILManager:
             to physical hardware interface names (e.g. {"Gnd0": "eth1"}).
         _gnd_capacity_kbps (int): Default link capacity for ground station
             links in kbps.
+        _netem_limit (int): netem queue limit in packets applied to the
+            SAT-side interfaces. 0 keeps the kernel default.
+        _txqueuelen (int): Transmit queue length in packets applied to the
+            SAT-side interfaces. 0 keeps the kernel default.
         _hil_bridges (dict[str, str]): Active bridge name per ground station
             name (e.g. {"Gnd0": "brhil0"}).
         _hil_veths (dict[str, str]): Active host-namespace veth name per
@@ -99,6 +125,8 @@ class HILManager:
         self,
         gnd_hardware_map: dict[str, str],
         gnd_capacity_kbps: int = 100_000,
+        netem_limit: int = 1000,
+        txqueuelen: int = 1000,
     ) -> None:
         """
         Initialise the HIL manager.
@@ -109,9 +137,15 @@ class HILManager:
                 Example: {"Gnd0": "eth1", "Gnd1": "enp3s0"}.
             gnd_capacity_kbps: Default SAT-side link capacity in kbps,
                 used when the link object does not carry capacity attributes.
+            netem_limit: netem queue limit in packets for the SAT-side
+                interfaces. 0 keeps the kernel default (1000 packets).
+            txqueuelen: Transmit queue length in packets for the SAT-side
+                interfaces. 0 keeps the kernel default (1000 packets).
         """
         self._gnd_hardware_map: dict[str, str] = gnd_hardware_map
         self._gnd_capacity_kbps: int = gnd_capacity_kbps
+        self._netem_limit: int = netem_limit
+        self._txqueuelen: int = txqueuelen
         self._hil_bridges: dict[str, str] = {}
         self._hil_veths: dict[str, str] = {}
 
@@ -314,12 +348,33 @@ class HILManager:
         delay_ms = max(delay_ms, 1)
         rate_mbit = max(rate_kbps / 1000, 0.001)
         burst_bytes = max(rate_kbps * delay_ms // 8, 1500)
+        netem_limit = (
+            f" limit {self._netem_limit}" if self._netem_limit > 0 else ""
+        )
+
+        if self._txqueuelen > 0:
+            try:
+                _run_ip_batch(
+                    sat_pid,
+                    [
+                        f"link set dev {sat_iface}"
+                        f" txqueuelen {self._txqueuelen}"
+                    ],
+                )
+            except RuntimeError as exc:
+                logging.warning(
+                    "HIL: txqueuelen setup failed on %s in %s: %s",
+                    sat_iface,
+                    sat_name,
+                    exc,
+                )
 
         try:
             _run_tc_batch(
                 sat_pid,
                 [
-                    f"qdisc add dev {sat_iface} root handle 1: netem delay {delay_ms}ms",
+                    f"qdisc add dev {sat_iface} root handle 1: netem"
+                    f" delay {delay_ms}ms{netem_limit}",
                     f"qdisc add dev {sat_iface} parent 1:1 handle 10: tbf"
                     f" rate {rate_mbit:.3f}mbit burst {burst_bytes}b limit {burst_bytes}b",
                 ],
@@ -474,12 +529,16 @@ class HILManager:
         rate_kbps = self._link_capacity_kbps(link)
         rate_mbit = max(rate_kbps / 1000, 0.001)
         burst_bytes = max(rate_kbps * delay_ms // 8, 1500)
+        netem_limit = (
+            f" limit {self._netem_limit}" if self._netem_limit > 0 else ""
+        )
 
         try:
             _run_tc_batch(
                 sat_pid,
                 [
-                    f"qdisc change dev {sat_iface} root handle 1: netem delay {delay_ms}ms",
+                    f"qdisc change dev {sat_iface} root handle 1: netem"
+                    f" delay {delay_ms}ms{netem_limit}",
                     f"qdisc change dev {sat_iface} parent 1:1 handle 10: tbf"
                     f" rate {rate_mbit:.3f}mbit burst {burst_bytes}b limit {burst_bytes}b",
                 ],

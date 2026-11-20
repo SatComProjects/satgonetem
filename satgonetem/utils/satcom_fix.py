@@ -106,6 +106,9 @@ class PyOrbitalModel(MovementModel):
     last_spatial_position: Optional[SpatialPosition] = None
     last_time_position_calculated: Optional[datetime.datetime] = None
 
+    _last_teme_time: Optional[datetime.datetime] = None
+    _last_teme_state: Optional[Tuple[tuple, tuple]] = None
+
     def __init__(self, tle: dict, time_manager: TimeManager):
         """
         Initialize the orbital model from a TLE dictionary.
@@ -139,8 +142,7 @@ class PyOrbitalModel(MovementModel):
         Returns:
             bool: True when the TEME z-component of velocity is positive.
         """
-        r_teme, v_teme = self.get_position_earth_general_inertial()
-        return v_teme[2] > 0
+        return self.get_velocity_earth_general_inertial()[2] > 0
 
     def _compute_position_at(self, t: datetime.datetime) -> SpatialPosition:
         """
@@ -258,24 +260,43 @@ class PyOrbitalModel(MovementModel):
         t_target = t_now + datetime.timedelta(seconds=delta_t)
         return self._compute_position_at(t_target)
 
-    def get_position_earth_general_inertial(self) -> Tuple[tuple, tuple]:
+    def get_datetime(self) -> datetime.datetime:
         """
-        Return TEME-frame position and velocity at the clock's current UTC time.
+        Return the clock's current time (required by sat_com_topology 5's MovementModel).
+
+        Returns:
+            datetime.datetime: The current simulation or wall-clock time.
+        """
+        return self.clock.get_current_time()
+
+    def _teme_state(self, delta_t: float = 0.0) -> Tuple[tuple, tuple]:
+        """
+        Return TEME-frame position and velocity at the clock's current UTC time plus delta_t.
+
+        The current-time state (delta_t == 0) is cached, so that a position and a velocity
+        requested for the same instant cost a single SGP4 propagation.
+
+        Args:
+            delta_t: Seconds to add to the current clock time. May be negative.
 
         Returns:
             Tuple of (r_teme, v_teme), each a 3-tuple (x, y, z).
             Position in kilometers; velocity in kilometers per second.
 
         Raises:
-            RuntimeError: If SGP4/SDP4 propagation fails.
+            RuntimeError: If the clock returns None or SGP4/SDP4 propagation fails.
         """
         t = self.clock.get_current_time()
         if t is None:
             raise RuntimeError("Clock returned None for current time")
-        if t.tzinfo is None or t.utcoffset() is None:
-            t_utc = t
+        if delta_t == 0.0 and self._last_teme_time == t and self._last_teme_state is not None:
+            return self._last_teme_state
+
+        t_target = t + datetime.timedelta(seconds=delta_t) if delta_t else t
+        if t_target.tzinfo is None or t_target.utcoffset() is None:
+            t_utc = t_target
         else:
-            t_utc = t.astimezone(timezone.utc)
+            t_utc = t_target.astimezone(timezone.utc)
 
         jd, fr = jday(
             t_utc.year,
@@ -291,8 +312,45 @@ class PyOrbitalModel(MovementModel):
             msg = SGP4_ERRORS.get(error_code, "Unknown SGP4 error")
             raise RuntimeError(f"SGP4/SDP4 propagation error {error_code}: {msg}")
 
+        if delta_t == 0.0:
+            self._last_teme_time = t
+            self._last_teme_state = (r_teme, v_teme)
         return r_teme, v_teme
-    
+
+    def get_position_earth_general_inertial(self, delta_t: float = 0.0) -> tuple:
+        """
+        Return the TEME-frame position at the clock's current UTC time plus delta_t.
+
+        Position only, as MovementModel declares it (sat_com_topology 4 and 5); the velocity
+        is get_velocity_earth_general_inertial.
+
+        Args:
+            delta_t: Seconds to add to the current clock time. May be negative.
+
+        Returns:
+            3-tuple (x, y, z) in kilometers.
+
+        Raises:
+            RuntimeError: If SGP4/SDP4 propagation fails.
+        """
+        return self._teme_state(delta_t)[0]
+
+    def get_velocity_earth_general_inertial(self, delta_t: float = 0.0) -> tuple:
+        """
+        Return the TEME-frame velocity at the clock's current UTC time plus delta_t
+        (required by sat_com_topology 5's MovementModel).
+
+        Args:
+            delta_t: Seconds to add to the current clock time. May be negative.
+
+        Returns:
+            3-tuple (vx, vy, vz) in kilometers per second.
+
+        Raises:
+            RuntimeError: If SGP4/SDP4 propagation fails.
+        """
+        return self._teme_state(delta_t)[1]
+
 
 class TwoLineElement(BaseModel):
     """Two-line element set for a single satellite.
@@ -358,23 +416,23 @@ def _haversine_ground_distance_km(position_1, position_2) -> float:
     return 2 * EARTH_RADIUS_KM * math.asin(math.sqrt(min(1.0, a)))
 
 
-def _ground_distance_km(self, position_1, position_2) -> float:
-    return _haversine_ground_distance_km(position_1, position_2)
+def _ground_distance_km(self, spatial_position_1, spatial_position_2) -> float:
+    return _haversine_ground_distance_km(spatial_position_1, spatial_position_2)
 
 
-def _ground_distance_meters(self, position_1, position_2) -> float:
-    return _haversine_ground_distance_km(position_1, position_2) * 1000.0
+def _ground_distance_meters(self, spatial_position_1, spatial_position_2) -> float:
+    return _haversine_ground_distance_km(spatial_position_1, spatial_position_2) * 1000.0
 
 
-def _3d_distance_meters(self, position_1, position_2) -> float:
-    ground_m = _haversine_ground_distance_km(position_1, position_2) * 1000.0
-    alt_diff_m = (position_1.altitude or 0) - (position_2.altitude or 0)
+def _3d_distance_meters(self, spatial_position_1, spatial_position_2) -> float:
+    ground_m = _haversine_ground_distance_km(spatial_position_1, spatial_position_2) * 1000.0
+    alt_diff_m = (spatial_position_1.altitude or 0) - (spatial_position_2.altitude or 0)
     return math.sqrt(ground_m**2 + alt_diff_m**2)
 
 
-def _3d_distance_km(self, position_1, position_2) -> float:
-    ground_km = _haversine_ground_distance_km(position_1, position_2)
-    alt_diff_km = ((position_1.altitude or 0) - (position_2.altitude or 0)) / 1000.0
+def _3d_distance_km(self, spatial_position_1, spatial_position_2) -> float:
+    ground_km = _haversine_ground_distance_km(spatial_position_1, spatial_position_2)
+    alt_diff_km = ((spatial_position_1.altitude or 0) - (spatial_position_2.altitude or 0)) / 1000.0
     return math.sqrt(ground_km**2 + alt_diff_km**2)
 
 

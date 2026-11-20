@@ -198,18 +198,20 @@ def generate_iperf2_plots(
     else:
         if summary_data:
             total_lost = summary_data["lost_packets"]
-            total_mb = summary_data["bytes"] / 1_000_000
             avg_loss = summary_data["lost_percent"]
             avg_jitter = summary_data["jitter_ms"]
         else:
             total_lost = df["lost_packets"].sum()
-            total_mb = df["bytes"].sum() / 1_000_000
             avg_loss = df["lost_percent"].mean()
             avg_jitter = df["jitter_ms"].mean()
         print(f"Total Lost Packets:      {total_lost}")
         print(f"Packet Loss %:           {avg_loss:.2f}%")
         print(f"Average Jitter:          {avg_jitter:.2f} ms")
-    # Total data
+    # Total data (UDP summary rows are kept out of df and used when present)
+    if protocol == "UDP" and summary_data:
+        total_mb = summary_data["bytes"] / 1_000_000
+    else:
+        total_mb = df["bytes"].sum() / 1_000_000
     print(f"Total Data Transferred:  {total_mb:.2f} MB")
     print("=" * 60)
     print(f"Plots saved to: {out_dir}")

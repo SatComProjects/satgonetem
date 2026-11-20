@@ -57,6 +57,12 @@ from satgonetem.services.mixins.diagnostics import DiagnosticsMixin
 from satgonetem.services.mixins.controller import ControllerMixin
 
 
+# Upper bound for the netem queue limit and the interface txqueuelen, in
+# packets. It mirrors the GoNetEm server's maxQueuePackets so a configuration
+# accepted here is never rejected by the server.
+MAX_LINK_QUEUE_PACKETS = 1_000_000
+
+
 @dataclass
 class NetworkConfig:
     """Network configuration parameters for TopologyManager.
@@ -72,6 +78,12 @@ class NetworkConfig:
         gnd_link_capacity: Capacity in kbps for ground-station links.
         isl_link_capacity: Capacity in kbps for inter-satellite links.
         ground_object_link_capacity: Capacity in kbps for ground-object-to-ground-object links.
+        link_netem_limit: netem queue limit in packets for emulated links.
+            0 keeps the GoNetEm server default (1000 packets). This bounds the
+            packets held by the netem qdisc, i.e. the modelled link buffer.
+        link_txqueuelen: Transmit queue length in packets of the interfaces
+            terminating an emulated link. 0 keeps the GoNetEm server default
+            (1000 packets).
         protocol: Network-layer protocol string (e.g. "ipv4").
         routing: Default routing method (e.g. "static", "dynamic-ospf").
         satellite_image: Docker image tag used for satellite containers.
@@ -84,6 +96,12 @@ class NetworkConfig:
         controller_bridge_name: Name of the OVS bridge inside the controller container.
         controller_node_iface_pattern: Python format string for node controller interfaces.
             Must contain ``{node_id}``.
+        ground_station_pool: Data-plane pool subdivided into ground-station blocks.
+        satellite_pool: Data-plane pool subdivided into satellite blocks.
+        user_terminal_pool: Data-plane pool subdivided into user-terminal blocks.
+        ground_station_prefix_len: Prefix length of each ground-station block.
+        satellite_prefix_len: Prefix length of each satellite block.
+        user_terminal_prefix_len: Prefix length of each user-terminal block.
     """
 
     project_name: Optional[str] = None
@@ -91,12 +109,23 @@ class NetworkConfig:
     gnd_link_capacity: int = 100000
     isl_link_capacity: int = 100000
     ground_object_link_capacity: int = 100000
+    link_netem_limit: int = 1000
+    link_txqueuelen: int = 1000
     protocol: str = "ipv4"
     routing: str = "static"
     satellite_image: str = "jariassuarez/sgnt:satellite"
     network_launcher: str = "GONETEM"
     gonetem_server: str = "localhost:10110"
     use_budget: bool = False
+
+    # Data-plane IPv4 addressing.  The defaults tile 10.0.0.0/8:
+    # ground stations /10, user terminals /10, satellites /9.
+    ground_station_pool: str = "10.0.0.0/10"
+    satellite_pool: str = "10.128.0.0/9"
+    user_terminal_pool: str = "10.64.0.0/10"
+    ground_station_prefix_len: int = 20
+    satellite_prefix_len: int = 27
+    user_terminal_prefix_len: int = 20
 
     # Controller connection settings
     controller_veth_host: str = "veth-host"
@@ -105,6 +134,26 @@ class NetworkConfig:
     controller_subnet_prefix: int = 16
     controller_bridge_name: str = "Controller"
     controller_node_iface_pattern: str = "eth{node_id}"
+
+    def __post_init__(self) -> None:
+        """Validate the queue-length fields.
+
+        Raises:
+            TypeError: If a queue-length field is not an integer.
+            ValueError: If a queue-length field is outside
+                ``[0, MAX_LINK_QUEUE_PACKETS]``.
+        """
+        for name in ("link_netem_limit", "link_txqueuelen"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise TypeError(
+                    f"NetworkConfig.{name} must be an int, got {value!r}"
+                )
+            if value < 0 or value > MAX_LINK_QUEUE_PACKETS:
+                raise ValueError(
+                    f"NetworkConfig.{name} must be between 0 and "
+                    f"{MAX_LINK_QUEUE_PACKETS} packets, got {value}"
+                )
 
 
 class TopologyManager(
@@ -350,12 +399,20 @@ class TopologyManager(
                 gnd_link_capacity=self.gnd_link_capacity,
                 isl_link_capacity=self.isl_link_capacity,
                 ground_object_link_capacity=self.ground_object_link_capacity,
+                link_netem_limit=self.link_netem_limit,
+                link_txqueuelen=self.link_txqueuelen,
                 protocol=self.protocol,
                 routing=self.routing,
                 satellite_image=self.satellite_image,
                 network_launcher=self.network_launcher,
                 gonetem_server=self.gonetem_server,
                 use_budget=self.use_budget,
+                ground_station_pool=self.ground_station_pool,
+                satellite_pool=self.satellite_pool,
+                user_terminal_pool=self.user_terminal_pool,
+                ground_station_prefix_len=self.ground_station_prefix_len,
+                satellite_prefix_len=self.satellite_prefix_len,
+                user_terminal_prefix_len=self.user_terminal_prefix_len,
             )
 
         if self.simulation_property is not None:
@@ -591,6 +648,9 @@ class TopologyManager(
         # Active network launcher (GoNetEm)
         self.launcher: Optional[NetworkLauncher] = None
 
+        # Topology-wide IPv4 plan, built during init().
+        self.address_plan = None
+
         # Optional HIL manager. Set this before calling start_gonetem() to
         # replace specific ground stations with host-bridged hardware.
         self.hil_manager = None
@@ -636,6 +696,15 @@ class TopologyManager(
         self.update_factor: float = 1.0
         self._stop_evt: threading.Event = threading.Event()
         self._sim_thread: Optional[threading.Thread] = None
+        self._lifecycle_lock: threading.Lock = threading.Lock()
+        # Most recent exception raised by a simulation loop tick (None when no
+        # tick has failed). Read via SimulationLoopMixin.get_last_simulation_error.
+        self.last_simulation_error: Optional[BaseException] = None
+        # Serializes loop ticks and API-driven topology mutations (next_step,
+        # move_to_time, simulate_link_failure). Reentrant because API entry
+        # points nest update_simulation; deliberately separate from
+        # _lifecycle_lock, which stop() holds while joining the loop thread.
+        self._simulation_lock: threading.RLock = threading.RLock()
 
         # Active routing daemon - set during init_routing() based on routing method
         self.routing_daemon: Optional[RoutingDaemon] = None
@@ -671,12 +740,20 @@ class TopologyManager(
         self.gnd_link_capacity = config.gnd_link_capacity
         self.isl_link_capacity = config.isl_link_capacity
         self.ground_object_link_capacity = config.ground_object_link_capacity
+        self.link_netem_limit = config.link_netem_limit
+        self.link_txqueuelen = config.link_txqueuelen
         self.protocol = config.protocol
         self.routing = config.routing
         self.satellite_image = config.satellite_image
         self.network_launcher = config.network_launcher
         self.gonetem_server = config.gonetem_server
         self.use_budget = config.use_budget
+        self.ground_station_pool = config.ground_station_pool
+        self.satellite_pool = config.satellite_pool
+        self.user_terminal_pool = config.user_terminal_pool
+        self.ground_station_prefix_len = config.ground_station_prefix_len
+        self.satellite_prefix_len = config.satellite_prefix_len
+        self.user_terminal_prefix_len = config.user_terminal_prefix_len
         self.controller_veth_host = config.controller_veth_host
         self.controller_veth_peer = config.controller_veth_peer
         self.controller_host_ip = config.controller_host_ip
@@ -688,29 +765,28 @@ class TopologyManager(
         """No-op: configuration is supplied at construction time via from_satcom()."""
 
     def _setup_update_actions(self) -> None:
-        """Register the standard per-tick update callbacks on the simulation manager.
+        """Keep sat_com_topology's default per-tick update.
 
-        Clears any existing tick actions and registers the three core updates:
-        configuration propagation, ground station link refresh, and user
-        terminal link refresh.
+        When the simulation is loaded, SimulationManager.set_time_manager() registers
+        the simulation's own update as the time manager's tick action. It runs the
+        update protocol: by default satellites, ground stations, user terminals and
+        every link type, inter-satellite links included (see
+        SimulationManager.get_default_update_protocol). Nothing is registered here;
+        this only checks that a tick action exists.
 
         Raises:
-            ValueError: If self.simulation_manager is None.
+            ValueError: If self.simulation_manager is None, or if its time manager
+                has no tick action (the simulation would never update).
         """
         if not hasattr(self, "simulation_manager") or self.simulation_manager is None:
             raise ValueError("Simulation manager is not set")
 
-        self.simulation_manager.time_manager.on_tick_actions.clear()
-
-        self.simulation_manager.time_manager.register_action(
-            self.simulation_manager.configuration.update
-        )
-        self.simulation_manager.time_manager.register_action(
-            self.simulation_manager.update_ground_station_links
-        )
-        self.simulation_manager.time_manager.register_action(
-            self.simulation_manager.update_user_terminal_links
-        )
+        if not self.simulation_manager.time_manager.on_tick_actions:
+            raise ValueError(
+                "The time manager has no tick action: load the simulation through "
+                "sat_com_topology (SimulationManager.set_time_manager) so its "
+                "default update runs on each tick"
+            )
 
     def get_gonetem_status(self) -> bool:
         """Return whether GoNetEm has been started."""
@@ -884,7 +960,6 @@ class TopologyManager(
 
         nx_adapter = self.nx_adapter
         graph = nx_adapter.create_full_networkx_graph(
-            export_link_length=True,
             export_object_position=True,
             enable_export_flows_data=False,
         )
@@ -906,7 +981,13 @@ class TopologyManager(
             if data.get("disabled", False):
                 return False
             link = wrapper_link(u, v)
-            return link is None or link.is_active
+            if link is None:
+                return True
+            # sat_com_topology 5 keeps the disabled flag on the link object;
+            # the exported edge data only carries the model dump on request.
+            return link.is_active and not getattr(
+                link.satcom_object, "disabled", False
+            )
 
         graph.remove_edges_from(
             [
@@ -925,7 +1006,7 @@ class TopologyManager(
                 ):
                     graph[u][v]["weight"] = 0.5
             elif self.preference in ["latency_prefer_ISLs", "latency_no_preference"]:
-                graph[u][v]["weight"] = graph[u][v].get("distance", 1)
+                graph[u][v]["weight"] = graph[u][v].get("distance_km", 1)
                 if (
                     self.preference == "latency_prefer_ISLs"
                     and graph[u][v].get("type") == "InterSatelliteLink"

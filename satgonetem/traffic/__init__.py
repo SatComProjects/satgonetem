@@ -12,6 +12,8 @@ from satgonetem.traffic.iperf3_utils import (
     Iperf3Results,
     run_iperf3_flow,
     FlowStatus,
+    get_iperf3_port_range,
+    set_iperf3_port_range,
 )
 from satgonetem.traffic.ping_utils import (
     PingConfig,
@@ -34,6 +36,8 @@ __all__ = [
     "Iperf3Flow",
     "Iperf3Results",
     "run_iperf3_flow",
+    "get_iperf3_port_range",
+    "set_iperf3_port_range",
     "PingConfig",
     "PingFlow",
     "PingResults",

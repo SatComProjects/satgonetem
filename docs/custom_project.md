@@ -561,3 +561,10 @@ topology = TopologyManager.from_file("my_custom_project.json")
 | `fetch_satellites_data` | Fetch a list of satellite TLEs from a URL. |
 | `read_satellites_data` | Read a list of satellite TLEs from a local file. |
 
+## Related documentation
+
+- [Utilities and Project Building](utils.md) — builder helpers used in the examples
+- [Project Creation](project_creation.md) — Walker-shell and declarative projects
+- [Data Model Layer](models.md) — node/link wrappers around sat_com objects
+- [Routing](routing.md) — how custom links become routes
+

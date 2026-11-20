@@ -1,24 +1,49 @@
 # SatGoNetem
 
+[![CI](https://github.com/SatComProjects/satgonetem/actions/workflows/ci.yml/badge.svg)](https://github.com/SatComProjects/satgonetem/actions/workflows/ci.yml)
+
 **Satellite Network Emulation Tool** - A Python framework for emulating dynamic satellite constellations (LEO, MEO, GEO) as live virtual networks with real-time topology updates, pluggable routing, and traffic measurement.
 
 SatGoNetem bridges orbital mechanics and Linux network emulation. It computes satellite positions using SGP4 propagation (or walker constellation patterns), spawns Docker containers for each node, wires them together with virtual ethernet pairs, and applies `tc netem`/TBF qdiscs to model propagation delay and link capacity. As orbits evolve, the emulated topology updates accordingly.
 
 ## Documentation
 
-- [`docs/topology_manager_api.md`](docs/topology_manager_api.md) — Full `TopologyManager` API reference
+**Getting started**
+
+- [`docs/project_creation.md`](docs/project_creation.md) — End-to-end constellation design guide
+- [`docs/custom_project.md`](docs/custom_project.md) — TLE-only and mixed custom projects outside Walker shell generation
+- [`docs/topology_manager_api.md`](docs/topology_manager_api.md) — `TopologyManager` public API reference
+
+**Core internals**
+
+- [`docs/models.md`](docs/models.md) — Node, satellite, ground station, interface, link, routing, and MPLS models
+- [`docs/services.md`](docs/services.md) — `NetworkConfig`, mixin composition, initialization order, tick pipeline, locking
+- [`docs/addressing.md`](docs/addressing.md) — IPv4 pools, node blocks, loopbacks, and link allocation
+- [`docs/addressing_plan.md`](docs/addressing_plan.md) — `Ipv4AddressPlan` API, validation, and slot reuse
+
+**Backends and protocol**
+
+- [`docs/launchers.md`](docs/launchers.md) — `NetworkLauncher` contract, GoNetEm backend, generated project format, QoS
+- [`docs/hil_manager.md`](docs/hil_manager.md) — Hardware-in-the-loop integration
+- [`docs/controller.md`](docs/controller.md) — Out-of-band controller/management plane
+- [`docs/proto.md`](docs/proto.md) — GoNetEm gRPC service, messages, and compatibility
+
+**Networking and measurement**
+
 - [`docs/routing.md`](docs/routing.md) — Routing daemon architecture and custom daemon registration
 - [`docs/traffic.md`](docs/traffic.md) — Ping, iperf3, hping3 tools and `FlowScheduler`
-- [`docs/project_creation.md`](docs/project_creation.md) — End-to-end constellation design guide
-- [`docs/hil_manager.md`](docs/hil_manager.md) — Hardware-in-the-loop integration
 - [`docs/link_budget.md`](docs/link_budget.md) — Link budget calculations and parameters
+
+**Support**
+
+- [`docs/utils.md`](docs/utils.md) — Project builder, coverage/IP helpers, connection strategies, compatibility patch
 
 ## Features
 
 - Real-time satellite constellation simulation (LEO/MEO/GEO, walker and TLE-based)
 - Docker container-per-node with kernel-level netem delay and rate shaping
 - Hardware-in-the-loop (HIL) support for bridging physical ground station equipment
-- Pluggable routing backends: static (Dijkstra), OSPF (Bird2), IS-IS SR (FRR), SR-MPLS
+- Pluggable routing backends: static (Dijkstra), OSPF (Bird2), IS-IS SR (patched Bird2), SR-MPLS
 - Built-in traffic tools: ping, iperf3, hping3 with structured result parsing
 - Batch traffic scheduling via `FlowScheduler`
 - Python API for constellation design and programmatic control
@@ -40,10 +65,11 @@ pip install git+https://github.com/satcomprojects/satgonetem
 The primary external dependency is `sat_com_topology`:
 
 ```
-git+https://github.com/SatComProjects/satComTopology.git
+git+https://github.com/SatComProjects/satComTopology.git@v5.0.3
 ```
 
-Access to that repository is required at install time.
+The repository is public; pip fetches it from GitHub at install time, so an
+internet connection is required.
 
 For Link Budget extras:
 ```bash
@@ -56,57 +82,22 @@ For development extras (linting, type checking, coverage):
 pip install -e ".[dev]"
 ```
 
-### GoNetem
+### GoNetEm
 
-The `GoNetEmLauncher` backend delegates network operations to a running `gonetem-server` daemon via gRPC.
+The `GoNetEmLauncher` backend delegates network operations to a running `gonetem-server` daemon via gRPC. SatGoNetEm is developed against the [SatComProjects fork of GoNetEm](https://github.com/SatComProjects/gonetem).
 
-Clone and build from source:
+Clone and install from source:
 
 ```bash
-git clone https://github.com/mroy31/gonetem
+git clone https://github.com/SatComProjects/gonetem
 cd gonetem
-make build-amd64   # or armv7 / arm64
-```
-
-If using the stock gonetem version, make sure to copy the configuration file to use SGNT's custom docker images:
-```
-sudo cp resources/gonetem_config/config.yaml /etc/gonetem/config.yaml
-
-sudo service gonetem restart # If running
-
-docker pull jariassuarez/sgnt:satellite
-docker pull jariassuarez/sgnt:ground-station
-```
-
-The compiled binaries are placed in `bin/`. Pull the Docker images GoNetem uses internally:
-
-```bash
-./bin/gonetem-console pull
-```
-
-
-
-Start the server (requires root):
-
-```bash
-sudo ./bin/gonetem-server
-```
-
-The server listens on `localhost:10110` by default, which matches the `gonetem_server` default in `NetworkConfig`. To use this backend, set `network_launcher="GONETEM"` when constructing `TopologyManager`.
-
-or a modified, satgonetem-optimized version:
-```bash
-git clone https://github.com/jariassuarez/gonetem
-cd gonetem
-make install-amd64   # or armv7 / arm64
-
+sudo make install-amd64   # or install-arm64
 gonetem-console pull
-docker pull jariassuarez/sgnt:satellite
-docker pull jariassuarez/sgnt:ground-station
-
 ```
 
+`make install-*` builds `gonetem-server` and `gonetem-console`, installs them under `/usr/local/bin`, installs the default configuration at `/etc/gonetem/config.yaml` (including the `jariassuarez/sgnt` satellite and ground-station images), and starts `gonetem.service`. `gonetem-console pull` fetches every Docker image that configuration references.
 
+The server listens on `localhost:10110` by default, which matches the `gonetem_server` default in `NetworkConfig`. `TopologyManager.start_gonetem()` constructs the GoNetEm launcher automatically; `network_launcher="GONETEM"` is recorded in `NetworkConfig` and serialized with the project. See [`docs/launchers.md`](docs/launchers.md) for the launcher contract and lifecycle.
 
 ## Quick Start
 
@@ -120,8 +111,8 @@ from satgonetem.services.topology_satcom import TopologyManager
 project = create_test_project()
 topology = TopologyManager.from_satcom(project)
 
-topology.set_ip_addresses()
 topology.start_gonetem()         # starts containers and wires the network
+topology.set_ip_addresses()      # push the planned IPv4 addresses into containers
 topology.init_routing("static")  # Dijkstra shortest-path routing
 topology.start()                 # begins simulation loop (topology updates every tick)
 ```
@@ -222,24 +213,50 @@ topology.stop_gonetem()  # remove containers, veth pairs, and qdiscs
 satgonetem/
   models/        Node, Satellite, GroundStation, Link, Interface
                  MPLS entries, routing entries, sat_com Pydantic models
-  dynamics/      DynamicsModel (abstract)
   launchers/     NetworkLauncher (abstract) + GoNetEmLauncher (gRPC)
                  HILManager (hardware-in-the-loop)
   routing/       RoutingDaemon (abstract) + static, OSPF, ISIS-SR, SR-MPLS
   traffic/       Ping, iperf2, iperf3, hping3 traffic tools and FlowScheduler
   link_budget/   Antenna, transmitter, receiver, propagation, MODCOD, geometry
+  addressing/    Deterministic IPv4 pools, node blocks, loopbacks, and /31 links
   services/      TopologyManager (central orchestrator)
                  mixins: topology sync, link ops, routing mgr, interface mgr,
-                         network lifecycle, traffic testing, simulation loop, diagnostics
-  utils/         project_builder, IP utilities, custom connection strategies
-  proto/         gRPC definitions for GoNetem backend
+                         network lifecycle, traffic testing, simulation loop,
+                         diagnostics, controller
+  utils/         project_builder, IP helpers, custom connection strategies
+  proto/         gRPC definitions for the GoNetEm backend
 ```
 
 **TopologyManager** (`satgonetem/services/topology_satcom.py`) is the main entry point. It is composed of mixins under `services/mixins/` that each handle a specific concern: syncing topology data from the orbital simulator, managing Docker containers and virtual interfaces, applying `tc` qdiscs, configuring routing daemons, running traffic tests, and driving the simulation tick loop.
 
 **Delay model:** `delay_ms = distance_km / 299792.458 * 1000` (propagation at speed of light).
 
-**QoS stack per link:** `netem` (propagation delay) + `TBF` (rate limiting), applied via batched `tc` commands using pyroute2.
+**QoS stack per link:** `netem` (propagation delay) + `TBF` (rate limiting), configured by GoNetEm. The Python client batches per-tick changes through `LinkUpdateMany` (512 links per call) and falls back to per-link updates on older servers.
+
+## IPv4 Addressing
+
+Addresses come from a deterministic, private `10.0.0.0/8` plan by default:
+
+| Purpose | Pool | Per-node block | Capacity |
+|---------|------|----------------|----------|
+| Ground stations | `10.0.0.0/10` | `/20` | 1,024 |
+| User terminals | `10.64.0.0/10` | `/20` | 1,024 |
+| Satellites | `10.128.0.0/9` | `/27` | 262,144 |
+
+Each node has a stable `/32` loopback at `<block>.0.1`; traffic and static routes target that loopback, not an interface. Every point-to-point link gets a `/31` starting at `<block>.0.4`. Ground stations and user terminals own their links; satellite links are owned by the lower satellite ID. See [`docs/addressing.md`](docs/addressing.md) for the link-ownership rules and configuration.
+
+The pools are configurable via `NetworkConfig`:
+
+```python
+config = NetworkConfig(
+    ground_station_pool="10.0.0.0/10",
+    satellite_pool="10.128.0.0/9",
+    user_terminal_pool="10.64.0.0/10",
+    ground_station_prefix_len=20,
+    satellite_prefix_len=27,
+    user_terminal_prefix_len=20,
+)
+```
 
 ## Routing Methods
 
@@ -247,8 +264,13 @@ satgonetem/
 |--------|-------|-------------|
 | `static` | StaticRoutingDaemon | Dijkstra over NetworkX graph, `ip route` applied per node |
 | `dynamic-ospf` | OSPFDaemon | Bird2 daemon, per-node config templated via Jinja2 |
-| `dynamic-isis` | ISISBirdSRDaemon | Bird2 IS-IS with SR-MPLS |
+| `dynamic-isis` | ISISBirdSRDaemon | Bird2 IS-IS with SR-MPLS; needs a Bird build with IS-IS/MPLS |
 | `sr-mpls` | SRMPLSDaemon | Segment Routing with MPLS labels |
+
+`dynamic-isis` requires a Bird build with the IS-IS and MPLS protocols. The
+shipped `jariassuarez/sgnt:satellite` and `:ground-station` images ship stock
+Bird 2.x, which has neither; the daemon now fails fast with an actionable
+error instead of writing an unusable configuration.
 
 Custom routing daemons can be registered before initialization:
 
@@ -287,10 +309,23 @@ Key parameters on `TopologyManager`:
 |-----------|---------|-------------|
 | `update_time` | 5 | Simulation tick interval in seconds |
 | `routing` | `"static"` | Routing method name |
-| `isl_link_capacity` | - | Inter-satellite link capacity in kbps |
-| `gnd_link_capacity` | - | Ground-space link capacity in kbps |
-| `satellite_image` | - | Docker image used for satellite containers |
-| `network_launcher` | `"DIRECT"` | `"GONETEM"` to use legacy gRPC backend |
+| `isl_link_capacity` | 100000 | Inter-satellite link capacity in kbps |
+| `gnd_link_capacity` | 100000 | Ground-space link capacity in kbps |
+| `ground_object_link_capacity` | 100000 | Ground-object link capacity in kbps |
+| `link_netem_limit` | 1000 | netem queue limit of emulated links, in packets (`0` = server default) |
+| `link_txqueuelen` | 1000 | Transmit queue length of emulated link interfaces, in packets (`0` = server default) |
+| `satellite_image` | `"jariassuarez/sgnt:satellite"` | Docker image used for satellite containers |
+| `network_launcher` | `"GONETEM"` | Recorded launcher backend identifier; GoNetEm is the implemented backend |
+| `gonetem_server` | `"localhost:10110"` | GoNetEm gRPC server address |
+| `use_budget` | `False` | Compute ground-station link capacity from the link budget |
+| `ground_station_pool` | `10.0.0.0/10` | Pool subdivided into ground-station `/20` blocks |
+| `satellite_pool` | `10.128.0.0/9` | Pool subdivided into satellite blocks |
+| `user_terminal_pool` | `10.64.0.0/10` | Pool subdivided into user-terminal `/20` blocks |
+| `ground_station_prefix_len` | 20 | Prefix length of each ground-station block |
+| `satellite_prefix_len` | 27 | Prefix length of each satellite block |
+| `user_terminal_prefix_len` | 20 | Prefix length of each user-terminal block |
+
+See [`docs/services.md`](docs/services.md#networkconfig) for every `NetworkConfig` field.
 
 ## Testing
 
@@ -299,6 +334,77 @@ pytest tests/ -v
 ```
 
 Tests cover models, routing daemons, traffic result parsing, launchers, and project builder utilities. Tests that exercise Docker or network operations require a suitable host environment.
+
+Scale and live connectivity checks:
+
+```bash
+# Address-plan scale: 900 satellites, 5 GS, 20 UTs, 2,900 unique /31 links
+python scripts/verify_900_satellites.py
+
+# Live three-node topology: GSL + ISL, static routing, bidirectional pings
+python scripts/verify_connectivity.py
+
+# Same, when GoNetEm NodeRun cannot exec into containers in the environment
+python scripts/verify_connectivity.py --transport docker
+```
+
+## Continuous integration and releases
+
+Two GitHub Actions workflows live in [`.github/workflows/`](.github/workflows/):
+
+| Workflow | Trigger | What it runs |
+| --- | --- | --- |
+| [`ci.yml`](.github/workflows/ci.yml) | Push to `main` or `develop`, every pull request, manual dispatch | Ruff lint, lockfile check, unit tests on Python 3.10–3.14, sdist/wheel build, metadata validation, wheel install smoke test |
+| [`release.yml`](.github/workflows/release.yml) | Push of a `v*` tag, manual dispatch | Checks the tag matches `pyproject.toml`, builds the distributions, and publishes a GitHub Release with the sdist and wheel attached |
+
+All jobs run on `ubuntu-latest` with [`uv`](https://docs.astral.sh/uv/) and the
+committed `uv.lock`. No repository secrets are required: the test suite mocks
+Docker and network operations, and `sat_com_topology` is public.
+
+Run the same checks locally:
+
+```bash
+uv sync --extra dev                      # install the locked development environment
+uv lock --check                          # pyproject.toml and uv.lock agree
+uv run --extra dev ruff check satgonetem tests
+uv run --extra dev pytest -q
+uv build --out-dir dist                  # sdist + wheel
+uvx twine@7.0.0 check dist/*
+```
+
+### Enabling required checks
+
+In **Settings → Branches → Branch protection rules**, require these status checks
+on `main` and `develop`: `Lint`, `Test (Python 3.10)` through
+`Test (Python 3.14)`, and `Build package`.
+
+### Releasing
+
+1. Bump `version` in `pyproject.toml` and merge it through a green CI run.
+2. Tag the release commit and push the tag:
+
+   ```bash
+   git tag -a v0.2.2 -m "SatGoNetem 0.2.2"
+   git push origin v0.2.2
+   ```
+
+3. `release.yml` verifies that the tag matches `pyproject.toml`, builds `dist/`,
+   and publishes a GitHub Release with generated notes and the artifacts attached.
+4. Install a release directly from GitHub:
+
+   ```bash
+   pip install "satgonetem @ git+https://github.com/SatComProjects/satgonetem@v0.2.2"
+   ```
+
+`release.yml` does not publish to PyPI. `pyproject.toml` depends on
+`sat_com_topology` through a direct Git URL, and PyPI rejects distributions whose
+`Requires-Dist` contains a direct reference. To publish to PyPI later, first
+publish `satComTopology` to PyPI and change the dependency to a versioned
+requirement such as `sat_com_topology>=5.0.3`, then add a Trusted Publishing job
+(`id-token: write`, `environment: pypi`).
+
+Dependency and action updates are opened weekly by Dependabot
+([`.github/dependabot.yml`](.github/dependabot.yml)).
 
 ## Citation
 

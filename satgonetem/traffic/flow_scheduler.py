@@ -32,6 +32,11 @@ if TYPE_CHECKING:
 AnyFlow = Union["Iperf3Flow", "Hping3Flow", "PingFlow"]
 AnyResult = Union["Iperf3Results", "Hping3Results", "PingResults"]
 
+# How long to wait for a flow thread to exit after stop() has been called on
+# timeout. stop() itself performs a bounded join, so this is a final safety
+# net before the worker is released.
+_STOP_JOIN_TIMEOUT_SEC = 5.0
+
 
 class FlowSchedulerStatus(enum.Enum):
     """Lifecycle state of a FlowScheduler.
@@ -83,7 +88,8 @@ def _execute_flow(
         on_start: Optional callback invoked when flow execution starts.
         on_done: Optional callback invoked when flow execution finishes.
         join_timeout_sec: Maximum seconds to wait for the flow thread to
-            complete. When exceeded, raises TimeoutError.
+            complete. None waits indefinitely. When exceeded, the flow is
+            stopped and joined again before TimeoutError is raised.
 
     Returns:
         The parsed results from the flow (Iperf3Results, Hping3Results, or
@@ -91,7 +97,7 @@ def _execute_flow(
 
     Raises:
         TimeoutError: If the flow thread does not complete within
-            join_timeout_sec.
+            join_timeout_sec, even after the flow has been stopped.
     """
     label = _flow_label(flow)
     if debug:
@@ -104,6 +110,15 @@ def _execute_flow(
         if flow._thread is not None:
             flow._thread.join(timeout=join_timeout_sec)
             if flow._thread.is_alive():
+                # Stop the abandoned flow before raising so its tool process
+                # (iperf3/hping3/ping) and thread do not outlive the
+                # scheduler's accounting or exceed max_workers.
+                try:
+                    flow.stop()
+                except Exception as stop_exc:
+                    if debug:
+                        print(f"[flow] STOP FAIL {label}: {stop_exc}")
+                flow._thread.join(timeout=_STOP_JOIN_TIMEOUT_SEC)
                 raise TimeoutError(f"Flow timed out after {join_timeout_sec}s: {label}")
         if debug:
             print(f"[flow] DONE  {label}")
@@ -141,7 +156,7 @@ class FlowScheduler:
         flows: Sequence[AnyFlow],
         max_workers: int = 100,
         debug: bool = False,
-        flow_timeout_sec: float | None = 180.0,
+        flow_timeout_sec: float | None = None,
         save_results: bool = True,
     ) -> None:
         """
@@ -151,8 +166,10 @@ class FlowScheduler:
             debug: If True, print a line to stdout when each flow starts
                 and finishes, plus snapshots of currently active flows.
             flow_timeout_sec: Maximum seconds to wait for each flow to
-                complete before marking it failed. Set to None to disable
-                timeout. Defaults to 180.0.
+                complete before marking it failed. When exceeded, the flow is
+                stopped and joined again before the error is recorded. Set to
+                None to disable the timeout. Defaults to None so long-running
+                valid tests (e.g. a 300 s iperf3 run) are not truncated.
             save_results: If False, the scheduler will not keep a reference
                 to each successful flow's result. This dramatically reduces
                 memory usage when running hundreds of thousands or millions

@@ -15,6 +15,7 @@ are handled by the mixin classes in satgonetem.models.mixins.
 from __future__ import annotations
 
 import base64
+import ipaddress
 import logging
 import shlex
 
@@ -55,6 +56,8 @@ class Node:
 
         self.position: dict[str, float] = {}
         self.antenna: Antenna | None = None
+        # Address block assigned by the topology-wide IPv4 plan.
+        self.address_block: ipaddress.IPv4Network | None = None
 
         # We create a loopback interface for the node
         self.loopback = Interface("lo", iface_type="lo")
@@ -83,7 +86,10 @@ class Node:
         return list(command)
 
     def execute_command_docker(
-        self, command: str | list[str], detach: bool = False
+        self,
+        command: str | list[str],
+        detach: bool = False,
+        ok_exit_codes: tuple[int, ...] = (0,),
     ) -> str:
         """
         Backup of the original docker-based command execution.
@@ -101,7 +107,7 @@ class Node:
 
         Raises:
             RuntimeError: If the container is not initialized, the command
-                string is malformed, or the command exits with a non-zero
+                string is malformed, or the command exits with an unexpected
                 status.
         """
         if not self.container:
@@ -117,7 +123,7 @@ class Node:
             return ""
         decoded = output.decode("utf-8").strip() if output else ""
         self.command_output = decoded
-        if exit_code != 0:
+        if exit_code not in ok_exit_codes:
             raise RuntimeError(
                 f"Command failed in {self.name} (exit {exit_code}): {decoded}"
             )
@@ -239,7 +245,13 @@ class Node:
 
 
 
-    def execute_command(self, command: str | list[str], detach: bool = False, use_docker_cli: bool = False) -> str:
+    def execute_command(
+        self,
+        command: str | list[str],
+        detach: bool = False,
+        use_docker_cli: bool = False,
+        ok_exit_codes: tuple[int, ...] = (0,),
+    ) -> str:
         """
         Execute a command on the node.
 
@@ -251,6 +263,9 @@ class Node:
             command: The shell command to execute.
             detach: If True, run the command in the background and return
                 immediately.  Detached execution always uses docker.
+            use_docker_cli: Skip gRPC and run the command through Docker.
+            ok_exit_codes: Exit codes that are not errors. Tools such as ping
+                and hping3 return 1 for a normal run with no replies.
 
         Returns:
             The command's stdout as a stripped string. Returns an empty string
@@ -258,10 +273,10 @@ class Node:
 
         Raises:
             RuntimeError: If the node is not ready, the command string is
-                malformed, or the command exits with a non-zero status.
+                malformed, or the command exits with an unexpected status.
         """
         if use_docker_cli: #Skip directly to docker
-            return self.execute_command_docker(command, detach)
+            return self.execute_command_docker(command, detach, ok_exit_codes)
         if self.grpc_client and not detach:
             import grpc
             from satgonetem.proto import netem_pb2
@@ -276,64 +291,69 @@ class Node:
                 response = self.grpc_client.NodeRun(request)
             except grpc.RpcError as exc:
                 if exc.code() == grpc.StatusCode.UNIMPLEMENTED:
-                    logging.warning(
-                        "NodeRun not implemented by GoNetem server for %s; "
-                        "falling back to docker execution",
-                        self.name,
+                    return self.execute_command_docker(
+                        command, detach, ok_exit_codes
                     )
-                    return self.execute_command_docker(command, detach)
                 raise
             if response.status.code == netem_pb2.StatusCode.ERROR:
                 raise RuntimeError(
                     f"NodeRun failed for {self.name}: {response.status.error}"
                 )
             decoded = response.stdout.decode("utf-8").strip() if response.stdout else ""
+            decoded_err = response.stderr.decode("utf-8").strip() if response.stderr else ""
             self.command_output = decoded
-            if response.exitCode != 0:
+            if response.exitCode not in ok_exit_codes:
+                detail = decoded
+                if decoded_err:
+                    detail = f"{decoded}\nstderr: {decoded_err}" if decoded else decoded_err
                 raise RuntimeError(
-                    f"Command failed in {self.name} (exit {response.exitCode}): {decoded}"
+                    f"Command failed in {self.name} (exit {response.exitCode}): {detail}"
                 )
             return decoded
 
-        return self.execute_command_docker(command, detach)
+        return self.execute_command_docker(command, detach, ok_exit_codes)
 
     def set_ipv4_to_containers(
         self,
-        interface: Interface,
+        interface: Interface | None,
         set_lo: bool = True,
     ) -> None:
+        """Apply this node's planned IPv4 addresses in one batched command.
+
+        The prefix comes from each :class:`Interface`; it is no longer assumed
+        to be ``/31`` here.  ``addr replace`` keeps repeated setup calls
+        idempotent and updates an address if a link is recreated.
+
+        Args:
+            interface: One interface to push, or ``None`` for all node
+                interfaces.
+            set_lo: Also apply the node loopback address.
         """
-        Set IPv4 addresses on all interfaces inside the container in one fast shot.
+        lines: list[str] = []
 
-        Performance improvements:
-        - No temp files: pipe a single base64-encoded batch to `ip -force -batch -`.
-        - Use `addr replace` to make ops idempotent (no "File exists" errors).
-        - Single shell process per node (lower process exec overhead).
+        int_list = [interface] if interface is not None else self.interfaces
 
-        Side effects and concurrency model remain the same (detach=True).
-        """
-        # Build batch lines
-        lines = []
-
-        int_list = [interface] if interface else self.interfaces
-
-        for interface in int_list:
-            ip = getattr(interface, "ipv4", None)
+        for iface in int_list:
+            ip = getattr(iface, "ipv4", None)
             if not ip:
                 continue
-            dev = interface.get_iname()
-            # /31 per your original code
-            lines.append(f"addr add {ip}/31 dev {dev}")
+            if iface.prefix_len not in (31, 32):
+                raise ValueError(
+                    f"{self.name} interface {iface.name} has unsupported IPv4 "
+                    f"prefix /{iface.prefix_len}; expected /31 or /32"
+                )
+            lines.append(
+                f"addr replace {ip}/{iface.prefix_len} dev {iface.get_iname()}"
+            )
 
         if (
             set_lo
-            and hasattr(self, "loopback")
+            and getattr(self, "loopback", None) is not None
             and getattr(self.loopback, "ipv4", None)
         ):
-            lines.append(f"addr add {self.loopback.ipv4}/32 dev lo")
+            lines.append(f"addr replace {self.loopback.ipv4}/32 dev lo")
 
         if not lines:
-            # Nothing to do
             return None
 
         payload = "\n".join(lines)
