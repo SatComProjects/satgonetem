@@ -1,5 +1,7 @@
 # SatGoNetem
 
+[![CI](https://github.com/SatComProjects/satgonetem/actions/workflows/ci.yml/badge.svg)](https://github.com/SatComProjects/satgonetem/actions/workflows/ci.yml)
+
 **Satellite Network Emulation Tool** - A Python framework for emulating dynamic satellite constellations (LEO, MEO, GEO) as live virtual networks with real-time topology updates, pluggable routing, and traffic measurement.
 
 SatGoNetem bridges orbital mechanics and Linux network emulation. It computes satellite positions using SGP4 propagation (or walker constellation patterns), spawns Docker containers for each node, wires them together with virtual ethernet pairs, and applies `tc netem`/TBF qdiscs to model propagation delay and link capacity. As orbits evolve, the emulated topology updates accordingly.
@@ -66,7 +68,8 @@ The primary external dependency is `sat_com_topology`:
 git+https://github.com/SatComProjects/satComTopology.git@v5.0.3
 ```
 
-Access to that repository is required at install time.
+The repository is public; pip fetches it from GitHub at install time, so an
+internet connection is required.
 
 For Link Budget extras:
 ```bash
@@ -344,6 +347,64 @@ python scripts/verify_connectivity.py
 # Same, when GoNetEm NodeRun cannot exec into containers in the environment
 python scripts/verify_connectivity.py --transport docker
 ```
+
+## Continuous integration and releases
+
+Two GitHub Actions workflows live in [`.github/workflows/`](.github/workflows/):
+
+| Workflow | Trigger | What it runs |
+| --- | --- | --- |
+| [`ci.yml`](.github/workflows/ci.yml) | Push to `main` or `develop`, every pull request, manual dispatch | Ruff lint, lockfile check, unit tests on Python 3.10–3.14, sdist/wheel build, metadata validation, wheel install smoke test |
+| [`release.yml`](.github/workflows/release.yml) | Push of a `v*` tag, manual dispatch | Checks the tag matches `pyproject.toml`, builds the distributions, and publishes a GitHub Release with the sdist and wheel attached |
+
+All jobs run on `ubuntu-latest` with [`uv`](https://docs.astral.sh/uv/) and the
+committed `uv.lock`. No repository secrets are required: the test suite mocks
+Docker and network operations, and `sat_com_topology` is public.
+
+Run the same checks locally:
+
+```bash
+uv sync --extra dev                      # install the locked development environment
+uv lock --check                          # pyproject.toml and uv.lock agree
+uv run --extra dev ruff check satgonetem tests
+uv run --extra dev pytest -q
+uv build --out-dir dist                  # sdist + wheel
+uvx twine@7.0.0 check dist/*
+```
+
+### Enabling required checks
+
+In **Settings → Branches → Branch protection rules**, require these status checks
+on `main` and `develop`: `Lint`, `Test (Python 3.10)` through
+`Test (Python 3.14)`, and `Build package`.
+
+### Releasing
+
+1. Bump `version` in `pyproject.toml` and merge it through a green CI run.
+2. Tag the release commit and push the tag:
+
+   ```bash
+   git tag -a v0.2.2 -m "SatGoNetem 0.2.2"
+   git push origin v0.2.2
+   ```
+
+3. `release.yml` verifies that the tag matches `pyproject.toml`, builds `dist/`,
+   and publishes a GitHub Release with generated notes and the artifacts attached.
+4. Install a release directly from GitHub:
+
+   ```bash
+   pip install "satgonetem @ git+https://github.com/SatComProjects/satgonetem@v0.2.2"
+   ```
+
+`release.yml` does not publish to PyPI. `pyproject.toml` depends on
+`sat_com_topology` through a direct Git URL, and PyPI rejects distributions whose
+`Requires-Dist` contains a direct reference. To publish to PyPI later, first
+publish `satComTopology` to PyPI and change the dependency to a versioned
+requirement such as `sat_com_topology>=5.0.3`, then add a Trusted Publishing job
+(`id-token: write`, `environment: pypi`).
+
+Dependency and action updates are opened weekly by Dependabot
+([`.github/dependabot.yml`](.github/dependabot.yml)).
 
 ## Citation
 

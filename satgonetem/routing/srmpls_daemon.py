@@ -25,6 +25,7 @@ from satgonetem.models.ground_station import GroundStation
 if TYPE_CHECKING:
     from satgonetem.models.link import Link
     from satgonetem.models.node import Node
+    from satgonetem.services.topology_satcom import TopologyManager
 
 
 def _route_delete_command(route_command: str) -> str:
@@ -355,7 +356,7 @@ class SRMPLSDaemon(RoutingDaemon):
       configuration is installed once at init and never touched again.
     """
 
-    def __init__(self, topology: "TopologyManager") -> None:  # type: ignore[name-defined]
+    def __init__(self, topology: "TopologyManager") -> None:
         """
         Args:
             topology: The TopologyManager instance that owns this daemon.

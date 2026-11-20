@@ -26,6 +26,8 @@ from typing import TYPE_CHECKING, Optional
 if TYPE_CHECKING:
     from datetime import datetime
 
+    from satgonetem.models.link import Link
+
 
 def ensure_simulation_lock(owner: object) -> threading.RLock:
     """Return ``owner``'s simulation lock, creating one lazily when absent.

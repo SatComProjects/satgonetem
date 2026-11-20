@@ -11,7 +11,6 @@ build/
 .eggs/
 wheels/
 *.whl
-uv.lock
 
 # Virtual environments
 .venv/
@@ -42,6 +41,7 @@ Thumbs.db
 # pytest / coverage
 .pytest_cache/
 .coverage
+coverage.xml
 htmlcov/
 .tox/
 
