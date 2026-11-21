@@ -42,7 +42,7 @@ every change, including refactors. Phased specifications live in
   (failing test and command), the implementation summary, validation commands
   and results, architectural tradeoffs, and unverified assumptions.
 - Required CI checks (`Lint`, `Type check`, `Test` on 3.10–3.14, coverage at
-  least 62%, and `Build package`) must pass before merge on `develop`. `main`
+  least 65%, and `Build package`) must pass before merge on `develop`. `main`
   adds `Type check` when the Phase 0 workflow is promoted. Do not bypass or
   disable a gate to land a change.
 
@@ -152,6 +152,10 @@ cycles, and do not import services or launchers from models.
 - Tests mirror the package layout: `tests/<package>/test_<module>.py`.
 - Prefer deterministic unit tests. Mock at external boundaries (Docker, gRPC,
   subprocess, network), not at internal domain logic.
+- Use `tests/support/` for shared builders and fakes; do not add duplicate
+  harness code.
+- The default suite excludes `slow` and `benchmark` tests; run them explicitly
+  with `-m "slow or benchmark"`.
 - Integration tests that require Docker, root, or live networking must state
   the prerequisite and fail clearly when it is absent. Do not silently skip.
 - Test behavior and contracts, not implementation details or call sequences
@@ -169,7 +173,7 @@ uv run --frozen --extra dev ruff check satgonetem tests       # lint
 uv run --frozen --extra dev mypy                              # scoped type check
 uv run --frozen --extra dev pytest -q                         # full suite
 uv run --frozen --extra dev pytest tests/services/test_link_ops.py -q  # targeted
-uv run --frozen --extra dev pytest -q --cov=satgonetem --cov-report=term-missing --cov-fail-under=62
+uv run --frozen --extra dev pytest -q --cov=satgonetem --cov-report=term-missing --cov-fail-under=65
 uv lock --check                                               # dependencies changed
 ```
 

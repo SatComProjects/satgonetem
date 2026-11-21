@@ -339,7 +339,17 @@ See [`docs/services.md`](docs/services.md#networkconfig) for every `NetworkConfi
 pytest tests/ -v
 ```
 
-Tests cover models, routing daemons, traffic result parsing, launchers, and project builder utilities. Tests that exercise Docker or network operations require a suitable host environment.
+The default suite excludes `slow` and `benchmark` tests. Run the extended set
+explicitly:
+
+```bash
+pytest tests/ -q -m "slow or benchmark"
+```
+
+Tests cover models, routing daemons, traffic result parsing, launchers, and
+project builder utilities. Unit tests use shared fixtures and fakes from
+`tests/support/` and do not require Docker, root, or live networking; the
+manual checks below exercise real emulation.
 
 Scale and live connectivity checks:
 
@@ -360,7 +370,7 @@ Two GitHub Actions workflows live in [`.github/workflows/`](.github/workflows/):
 
 | Workflow | Trigger | What it runs |
 | --- | --- | --- |
-| [`ci.yml`](.github/workflows/ci.yml) | Push to `main` or `develop`, every pull request, manual dispatch | Ruff lint, scoped mypy, lockfile check, unit tests on Python 3.10–3.14 with a 62% coverage floor, sdist/wheel build, metadata validation, wheel install smoke test |
+| [`ci.yml`](.github/workflows/ci.yml) | Push to `main` or `develop`, every pull request, manual dispatch | Ruff lint, scoped mypy, lockfile check, unit tests on Python 3.10–3.14 with a 65% coverage floor, sdist/wheel build, metadata validation, wheel install smoke test |
 | [`release.yml`](.github/workflows/release.yml) | Push of a `v*` tag, manual dispatch | Lint, scoped mypy, tests and coverage, checks the tag matches `pyproject.toml`, builds the distributions, and publishes a GitHub Release with the sdist and wheel attached |
 
 All jobs run on `ubuntu-latest` with [`uv`](https://docs.astral.sh/uv/) and the
@@ -374,7 +384,7 @@ uv sync --extra dev                      # install the locked development enviro
 uv lock --check                          # pyproject.toml and uv.lock agree
 uv run --extra dev ruff check satgonetem tests
 uv run --extra dev mypy
-uv run --extra dev pytest -q --cov=satgonetem --cov-fail-under=62
+uv run --extra dev pytest -q --cov=satgonetem --cov-fail-under=65
 uv build --out-dir dist                  # sdist + wheel
 uvx twine@7.0.0 check dist/*
 ```

@@ -1,6 +1,7 @@
 """Tests for TopologyManager public methods."""
 
 import random
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -39,7 +40,12 @@ def gnd_node():
 @pytest.fixture
 def topology_manager():
     """Return a fully initialised TopologyManager from the test topology."""
-    return TopologyManager.from_file("topology_files/test_topology.json")
+    return TopologyManager.from_file(
+        str(
+            Path(__file__).resolve().parents[2]
+            / "topology_files/test_topology.json"
+        )
+    )
 
 
 class TestSetLinkBudgetConfig:
@@ -171,7 +177,9 @@ class TestGetCurrentGraph:
 class TestSimulateLinkFailure:
     """Tests for TopologyManager.simulate_link_failure()."""
 
-    TEST_TOPOLOGY_PATH = "topology_files/test_topology.json"
+    TEST_TOPOLOGY_PATH = str(
+        Path(__file__).resolve().parents[2] / "topology_files/test_topology.json"
+    )
 
     def _links_by_type(self, topology_manager):
         """Return available ISL and ground-station links from the manager."""

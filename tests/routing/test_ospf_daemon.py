@@ -1,6 +1,6 @@
 """Tests for OSPFDaemon and its Bird config helpers."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -60,8 +60,7 @@ class TestOSPFDaemonInit:
         node = make_node("Sat0")
         topology.get_satellites.return_value = [node]
 
-        with patch("satgonetem.routing.ospf_daemon.open", create=True):
-            result = daemon.init()
+        result = daemon.init()
 
         assert result is True
 
@@ -70,8 +69,7 @@ class TestOSPFDaemonInit:
         node.execute_command.side_effect = RuntimeError("container error")
         topology.get_satellites.return_value = [node]
 
-        with patch("satgonetem.routing.ospf_daemon.open", create=True):
-            result = daemon.init()
+        result = daemon.init()
 
         assert result is False
 
@@ -81,8 +79,7 @@ class TestOSPFDaemonInit:
         topology.get_satellites.return_value = [sat]
         topology.get_ground_stations.return_value = [gs]
 
-        with patch("satgonetem.routing.ospf_daemon.open", create=True):
-            daemon.init()
+        daemon.init()
 
         assert sat.execute_command.called
         assert gs.execute_command.called
@@ -91,14 +88,12 @@ class TestOSPFDaemonInit:
         topology.get_satellites.return_value = []
         topology.get_ground_stations.return_value = []
 
-        with patch("satgonetem.routing.ospf_daemon.open", create=True):
-            result = daemon.init(max_workers=8)
+        result = daemon.init(max_workers=8)
 
         assert result is True
 
     def test_empty_topology_returns_true(self, daemon, topology):
-        with patch("satgonetem.routing.ospf_daemon.open", create=True):
-            result = daemon.init()
+        result = daemon.init()
 
         assert result is True
 
@@ -125,8 +120,7 @@ class TestOSPFDaemonUpdate:
         link.target = gs
         topology.status = True
 
-        with patch("satgonetem.routing.ospf_daemon.open", create=True):
-            daemon.update(new_links=[link])
+        daemon.update(new_links=[link])
 
         assert sat.execute_command.called
         assert gs.execute_command.called
@@ -142,8 +136,7 @@ class TestOSPFDaemonUpdate:
         link2.target = gs
         topology.status = True
 
-        with patch("satgonetem.routing.ospf_daemon.open", create=True):
-            daemon.update(new_links=[link1, link2])
+        daemon.update(new_links=[link1, link2])
 
         # sat appears in both links but should only be init'd once
         assert sat.execute_command.call_count == gs.execute_command.call_count

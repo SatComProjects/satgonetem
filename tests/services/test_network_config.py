@@ -12,9 +12,14 @@ from satgonetem.services.topology_satcom import (
     TopologyManager,
 )
 
-TEST_TOPOLOGY = "topology_files/test_topology.json"
+TEST_TOPOLOGY = str(
+    Path(__file__).resolve().parents[2] / "topology_files/test_topology.json"
+)
 SAMPLE_TOPOLOGIES = sorted(
-    str(path) for path in Path("topology_files").glob("*_topology.json")
+    str(path)
+    for path in (
+        Path(__file__).resolve().parents[2] / "topology_files"
+    ).glob("*_topology.json")
 )
 
 
