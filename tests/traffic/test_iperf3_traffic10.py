@@ -100,10 +100,13 @@ def test_cleanup_failure_does_not_prevent_done_result():
             raise RuntimeError("cleanup rm failed on source")
         return ""
 
-    def destination_command(cmd, detach=False):
+    def destination_command(cmd, **_kwargs):
         if cmd.startswith("rm -f"):
             raise RuntimeError("cleanup rm failed on destination")
-        return ""
+        # Report the server as listening so the readiness wait returns
+        # immediately; time.sleep is patched, which would otherwise turn the
+        # bounded poll into a busy 2 s spin.
+        return "LISTEN 0 5 10.0.0.2:5201 0.0.0.0:*"
 
     src.execute_command.side_effect = source_command
     dst.execute_command.side_effect = destination_command
@@ -131,7 +134,9 @@ def test_client_setup_failure_sets_error_and_kills_detached_server():
         return ""
 
     src.execute_command.side_effect = source_command
-    dst.execute_command.return_value = ""
+    # Report the server as listening so the readiness wait returns immediately;
+    # time.sleep is patched, which would otherwise turn it into a 2 s busy spin.
+    dst.execute_command.return_value = "LISTEN 0 5 10.0.0.2:5201 0.0.0.0:*"
 
     flow = Iperf3Flow(src, dst, Iperf3Config(duration=1, port=5201))
 
