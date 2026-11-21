@@ -41,8 +41,10 @@ every change, including refactors. Phased specifications live in
 - A pull request description states: the specification, the RED evidence
   (failing test and command), the implementation summary, validation commands
   and results, architectural tradeoffs, and unverified assumptions.
-- Required CI checks (`Lint`, `Test` on 3.10–3.14, `Build package`) must pass
-  before merge. Do not bypass or disable a gate to land a change.
+- Required CI checks (`Lint`, `Type check`, `Test` on 3.10–3.14, coverage at
+  least 62%, and `Build package`) must pass before merge on `develop`. `main`
+  adds `Type check` when the Phase 0 workflow is promoted. Do not bypass or
+  disable a gate to land a change.
 
 ## Six-stage workflow
 
@@ -164,9 +166,10 @@ Run from the repository root with the locked environment:
 ```bash
 uv sync --frozen --extra dev                                  # install
 uv run --frozen --extra dev ruff check satgonetem tests       # lint
+uv run --frozen --extra dev mypy                              # scoped type check
 uv run --frozen --extra dev pytest -q                         # full suite
 uv run --frozen --extra dev pytest tests/services/test_link_ops.py -q  # targeted
-uv run --frozen --extra dev pytest -q --cov=satgonetem --cov-report=term-missing
+uv run --frozen --extra dev pytest -q --cov=satgonetem --cov-report=term-missing --cov-fail-under=62
 uv lock --check                                               # dependencies changed
 ```
 
