@@ -14,6 +14,7 @@ def _make_flow(name: str, delay: float = 0.0) -> MagicMock:
     flow.source.name = name
     flow.destination.name = "dst"
     flow._thread = None
+    flow.is_alive.return_value = False
     return flow
 
 
@@ -45,7 +46,7 @@ class TestFlowSchedulerSaveResults:
         with pytest.raises(RuntimeError, match="save_results=False"):
             scheduler.results(flow)
         assert scheduler.errors() == []
-        assert flow._result is None
+        flow.discard_result.assert_called_once_with()
 
     def test_save_results_false_still_records_errors(self):
         flow = _make_flow("flow0")

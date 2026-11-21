@@ -82,6 +82,16 @@ class _FakeFlow:
         self.stop_calls += 1
         self._stop_event.set()
 
+    def join(self, timeout: float | None = None) -> None:
+        if self._thread is not None:
+            self._thread.join(timeout=timeout)
+
+    def is_alive(self) -> bool:
+        return self._thread is not None and self._thread.is_alive()
+
+    def discard_result(self) -> None:
+        self._result = None
+
     def results(self) -> str:
         return self._result
 
@@ -132,6 +142,16 @@ class _NoTruncationFlow:
 
     def stop(self) -> None:
         self.stop_called = True
+
+    def join(self, timeout: float | None = None) -> None:
+        if self._thread is not None:
+            self._thread.join(timeout=timeout)
+
+    def is_alive(self) -> bool:
+        return self._thread is not None and self._thread.is_alive()
+
+    def discard_result(self) -> None:
+        self._result = None
 
     def results(self) -> str:
         return self._result

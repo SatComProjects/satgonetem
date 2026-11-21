@@ -78,7 +78,7 @@ def test_missing_destination_loopback_sets_error_and_tries_server_kill():
 
     flow = Iperf3Flow(src, dst, Iperf3Config(duration=1))
 
-    with patch("satgonetem.traffic.iperf3_utils.time.sleep"):
+    with patch("satgonetem.traffic.iperf3_flow.time.sleep"):
         flow.start()
         status = _join(flow)
 
@@ -110,7 +110,7 @@ def test_cleanup_failure_does_not_prevent_done_result():
 
     flow = Iperf3Flow(src, dst, Iperf3Config(duration=1))
 
-    with patch("satgonetem.traffic.iperf3_utils.time.sleep"):
+    with patch("satgonetem.traffic.iperf3_flow.time.sleep"):
         flow.start()
         status = _join(flow)
 
@@ -135,7 +135,7 @@ def test_client_setup_failure_sets_error_and_kills_detached_server():
 
     flow = Iperf3Flow(src, dst, Iperf3Config(duration=1, port=5201))
 
-    with patch("satgonetem.traffic.iperf3_utils.time.sleep"):
+    with patch("satgonetem.traffic.iperf3_flow.time.sleep"):
         flow.start()
         status = _join(flow)
 

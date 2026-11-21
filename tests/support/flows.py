@@ -56,6 +56,17 @@ class RecordingFlow:
         self.stopped = True
         self._stop_event.set()
 
+    def join(self, timeout: float | None = None) -> None:
+        if self._thread is not None:
+            self._thread.join(timeout=timeout)
+
+    def is_alive(self) -> bool:
+        return self._thread is not None and self._thread.is_alive()
+
+    def discard_result(self) -> None:
+        with self._lock:
+            self._result = None
+
     def results(self) -> Any:
         if self._error is not None:
             raise self._error
