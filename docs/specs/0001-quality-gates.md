@@ -105,6 +105,5 @@ Expected: all commands exit 0; CI shows all required checks.
   `Build package`; coverage is enforced at 62%.
 - Release workflow verifies lint, types, and tests before building.
 - Repository rulesets require pull requests on `develop` and `main`.
-  `develop` requires `Lint`, `Type check`, `Test (Python 3.10–3.14)`, and
-  `Build package`; `main` requires the same existing checks and adds
-  `Type check` when the Phase 0 workflow is promoted from `develop`.
+  Both require `Lint`, `Type check`, `Test (Python 3.10–3.14)`,
+  `Security audit`, and `Build package` (see Spec 0008).

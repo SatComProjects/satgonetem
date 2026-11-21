@@ -65,9 +65,8 @@ uv run --frozen --extra dev pytest -q --cov=satgonetem --cov-fail-under=75
   visible; the rest of the package is clean.
 - Coverage floor raised to 75% globally; current coverage is ~80%.
 - Security job runs `pip-audit`, high-severity `bandit`, and `actionlint`.
-- `develop` requires `Lint`, `Type check`, tests, `Security audit`, and
-  `Build package`. `main` keeps the pre-existing checks (including
-  `Security audit` only once its workflow is promoted).
+- `develop` and `main` require `Lint`, `Type check`, tests, `Security audit`,
+  and `Build package`.
 - `black`, `flake8`, and their transitive tooling were removed from dev
   dependencies; ruff is the single formatter/linter.
 - Final suite: 1224 passed, 1 skipped, 9 deselected, 79.99% coverage; live
