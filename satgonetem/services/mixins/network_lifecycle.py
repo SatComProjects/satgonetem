@@ -28,7 +28,7 @@ class NetworkLifecycleMixin:
             None: If the emulator is already running (no-op).
         """
         if self.get_gonetem_status():
-            return
+            return None
 
         from satgonetem.launchers.registry import create_launcher
 
@@ -79,8 +79,7 @@ class NetworkLifecycleMixin:
                 launcher.force_close_project()
             except Exception as cleanup_exc:
                 logging.error(
-                    "Failed to force-close GoNetEm project after startup "
-                    "failure: %s",
+                    "Failed to force-close GoNetEm project after startup failure: %s",
                     cleanup_exc,
                 )
             self.launcher = None
@@ -217,9 +216,7 @@ class NetworkLifecycleMixin:
             try:
                 self._stop_active_flows()
             except Exception as exc:
-                logging.error(
-                    "Failed to stop traffic flows during force stop: %s", exc
-                )
+                logging.error("Failed to stop traffic flows during force stop: %s", exc)
 
             if self.hil_manager is not None:
                 try:

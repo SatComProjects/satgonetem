@@ -13,6 +13,7 @@ Usage:
 
 from __future__ import annotations
 
+import contextlib
 import fcntl
 import os
 import queue
@@ -88,10 +89,8 @@ def main() -> None:
         tty.setraw(fd)
 
         def restore_tty():
-            try:
+            with contextlib.suppress(termios.error):
                 termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
-            except termios.error:
-                pass
 
         try:
             stream = stub.NodeExec(request_generator())
@@ -121,10 +120,10 @@ def main() -> None:
             def recv_loop() -> None:
                 try:
                     for response in stream:
-                        if response.code == netem_pb2.ExecSrvMsg.STDOUT:
-                            sys.stdout.buffer.write(response.data)
-                            sys.stdout.buffer.flush()
-                        elif response.code == netem_pb2.ExecSrvMsg.STDERR:
+                        if (
+                            response.code == netem_pb2.ExecSrvMsg.STDOUT
+                            or response.code == netem_pb2.ExecSrvMsg.STDERR
+                        ):
                             sys.stdout.buffer.write(response.data)
                             sys.stdout.buffer.flush()
                         elif response.code in (
@@ -168,12 +167,14 @@ def main() -> None:
     except Exception as exc:
         _log_error(f"[satgonetem bridge] Error: {exc}")
         import traceback
+
         _log_error(traceback.format_exc())
         _log_error("Press Enter to close...")
         try:
             input()
         except Exception:
             import time
+
             time.sleep(5)
 
 

@@ -35,9 +35,7 @@ def test_log_error_writes_message_to_stderr_and_log_file(monkeypatch, capsys):
     captured = capsys.readouterr()
     assert captured.out == ""
     assert captured.err == "bridge failure\r\n"
-    log_file.assert_called_once_with(
-        f"/tmp/satgonetem_bridge_{os.getpid()}.log", "a"
-    )
+    log_file.assert_called_once_with(f"/tmp/satgonetem_bridge_{os.getpid()}.log", "a")
     log_file().write.assert_called_once_with("bridge failure\n")
 
 
@@ -56,9 +54,7 @@ def test_log_error_still_writes_stderr_when_log_file_cannot_be_opened(
     assert captured.err == "visible anyway\r\n"
 
 
-def test_main_prints_usage_to_stderr_and_exits_without_arguments(
-    monkeypatch, capsys
-):
+def test_main_prints_usage_to_stderr_and_exits_without_arguments(monkeypatch, capsys):
     monkeypatch.setattr(sys, "argv", ["node_terminal_bridge"])
 
     with pytest.raises(SystemExit) as excinfo:

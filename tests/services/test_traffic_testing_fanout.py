@@ -22,7 +22,7 @@ class _TrafficHost(TrafficTestingMixin, DummyTopology):
 class _RecordingFlow:
     """Flow double recording construction arguments and start() calls."""
 
-    instances: list["_RecordingFlow"] = []
+    instances: list[_RecordingFlow] = []
 
     def __init__(self, source, destination, config) -> None:
         self.source = source

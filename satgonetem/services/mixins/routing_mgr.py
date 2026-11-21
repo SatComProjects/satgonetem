@@ -14,15 +14,13 @@ from satgonetem.routing.registry import available_methods, create_daemon
 from satgonetem.utils.constants import MAX_WORKERS
 
 if TYPE_CHECKING:
-    from typing import List
-
     from satgonetem.models.node import Node
 
 
 class RoutingManagerMixin:
     """RoutingManager functionality."""
 
-    def get_path_between_nodes(self, source: Node, target: Node) -> List[Node]:
+    def get_path_between_nodes(self, source: Node, target: Node) -> list[Node]:
         """
         Get the path between two nodes using the specified preference.
         """
@@ -52,8 +50,6 @@ class RoutingManagerMixin:
         except nx.NetworkXNoPath:
             logging.warning(f"No path found between {source.id} and {target.id}")
             return []
-
-    from satgonetem.utils.utils import time_
 
     def init_routing(
         self, max_workers: int = MAX_WORKERS, routing_method: str = ""
@@ -134,7 +130,7 @@ class RoutingManagerMixin:
 
         return time.perf_counter() - tic
 
-    def get_allowed_routing_methods(self) -> List[str]:
+    def get_allowed_routing_methods(self) -> list[str]:
         """Return a list of allowed routing methods."""
         return available_methods(getattr(self, "_daemon_registry", None))
 

@@ -108,7 +108,5 @@ class Satellite(Node, QoSCapableMixin):
         for interface in self.interfaces:
             iname = interface.get_iname()
             destination = path + f"/{self.name}_{iname}.log"
-            command = (
-                f"net_logger --interface {iname} " f"--log {destination} --interval 1"
-            )
+            command = f"net_logger --interface {iname} --log {destination} --interval 1"
             self.execute_command(command, detach=True)

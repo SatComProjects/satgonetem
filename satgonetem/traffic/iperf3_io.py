@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import shlex
 import time
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any
 
 from satgonetem.traffic.iperf3_ports import (
     _IPERF3_SERVER_READY_POLL_INTERVAL,
@@ -17,8 +17,8 @@ if TYPE_CHECKING:
 
 
 def _is_iperf3_server_listening(
-    destination: "Node", listen_ip: str, port: int
-) -> Optional[bool]:
+    destination: Node, listen_ip: str, port: int
+) -> bool | None:
     """Check whether an iperf3 server is listening on *listen_ip*:*port*.
 
     Uses the kernel listener table when available and falls back to a
@@ -35,9 +35,7 @@ def _is_iperf3_server_listening(
         f"|| pgrep -f {shlex.quote(process_pattern)} 2>/dev/null"
     )
     try:
-        output = destination.execute_command(
-            check_cmd, ok_exit_codes=(0, 1)
-        )
+        output = destination.execute_command(check_cmd, ok_exit_codes=(0, 1))
     except TypeError:
         # Nodes with a reduced execute_command signature.
         try:
@@ -52,7 +50,7 @@ def _is_iperf3_server_listening(
 
 
 def _wait_for_iperf3_server(
-    destination: "Node",
+    destination: Node,
     listen_ip: str,
     port: int,
     timeout: float = _IPERF3_SERVER_READY_TIMEOUT,
@@ -69,9 +67,7 @@ def _wait_for_iperf3_server(
     """
     deadline = time.monotonic() + timeout
     while True:
-        listening = _is_iperf3_server_listening(
-            destination, listen_ip, port
-        )
+        listening = _is_iperf3_server_listening(destination, listen_ip, port)
         if listening is True:
             return True
         if listening is None:
@@ -82,7 +78,7 @@ def _wait_for_iperf3_server(
         time.sleep(poll_interval)
 
 
-def _extract_iperf3_json(text: Any) -> Optional[str]:
+def _extract_iperf3_json(text: Any) -> str | None:
     """Return the JSON object in an iperf3 output file, or None.
 
     iperf3 writes everything to the redirected stream: warnings before the
@@ -95,7 +91,7 @@ def _extract_iperf3_json(text: Any) -> Optional[str]:
     return text[start : end + 1] if 0 <= start < end else None
 
 
-def _text_outside_iperf3_json(text: Any) -> Optional[str]:
+def _text_outside_iperf3_json(text: Any) -> str | None:
     """Return what iperf3 printed around its JSON object, or None."""
     if not isinstance(text, str):
         return None

@@ -129,7 +129,7 @@ def test_strategy_sorts_none_estimate_as_max_time_without_type_error():
     satellites = [Satellite(satellite_name=f"Sat{index}") for index in range(3)]
     visible_satellites = [
         VisibleSatellite(satellite=satellite, elevation_above_horizon=elevation)
-        for satellite, elevation in zip(satellites, [60.0, 45.0, 30.0])
+        for satellite, elevation in zip(satellites, [60.0, 45.0, 30.0], strict=False)
     ]
     estimates = {"Sat0": None, "Sat1": 120.0, "Sat2": 30.0}
 
@@ -167,9 +167,7 @@ def test_estimator_returns_finite_float_when_no_future_crossing_exists():
     """Radially receding satellite: both quadratic roots are negative."""
     when = datetime.datetime(2024, 1, 1, 12, 0, 0)
     ground_object = _make_ground_object()
-    position_ecef_km = np.array(
-        [WGS84_SEMI_MAJOR_AXIS_M / 1000.0 + 700.0, 0.0, 0.0]
-    )
+    position_ecef_km = np.array([WGS84_SEMI_MAJOR_AXIS_M / 1000.0 + 700.0, 0.0, 0.0])
     velocity_ecef_km_s = np.array([1.0, 0.0, 0.0])  # straight up, away from Earth
     satellite = _make_satellite_with_ecef_state(
         when, position_ecef_km, velocity_ecef_km_s

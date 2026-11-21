@@ -18,9 +18,7 @@ from satgonetem.utils.project_ground_objects import GroundObjectFile, GroundStat
 _DATE_FORMAT = "%d/%m/%Y %H:%M:%S"
 
 
-def _resolve_simulation_dates(
-    start_date: str, end_date: str
-) -> tuple[str, str]:
+def _resolve_simulation_dates(start_date: str, end_date: str) -> tuple[str, str]:
     """Resolve optional simulation dates.
 
     An omitted end date is always ten minutes after the effective start date,
@@ -89,7 +87,6 @@ def create_test_project(
         data_file = gs_file.write(ground_files_dir)
 
     elif len(ground_stations_file) > 0:
-
         ground_stations = GroundObjectFile.from_csv(
             identifier="Ground Stations", csv_path=ground_stations_file
         ).entries

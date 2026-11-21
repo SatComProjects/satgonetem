@@ -371,8 +371,8 @@ Two GitHub Actions workflows live in [`.github/workflows/`](.github/workflows/):
 
 | Workflow | Trigger | What it runs |
 | --- | --- | --- |
-| [`ci.yml`](.github/workflows/ci.yml) | Push to `main` or `develop`, every pull request, manual dispatch | Ruff lint, scoped mypy, lockfile check, unit tests on Python 3.10–3.14 with a 65% coverage floor, sdist/wheel build, metadata validation, wheel install smoke test |
-| [`release.yml`](.github/workflows/release.yml) | Push of a `v*` tag, manual dispatch | Lint, scoped mypy, tests and coverage, checks the tag matches `pyproject.toml`, builds the distributions, and publishes a GitHub Release with the sdist and wheel attached |
+| [`ci.yml`](.github/workflows/ci.yml) | Push to `main` or `develop`, every pull request, manual dispatch | Ruff lint/format, full mypy, lockfile check, unit tests on Python 3.10–3.14 with a 75% coverage floor, dependency audit, sdist/wheel build, metadata validation, wheel install smoke test |
+| [`release.yml`](.github/workflows/release.yml) | Push of a `v*` tag, manual dispatch | Lint/format, full mypy, tests and coverage, checks the tag matches `pyproject.toml`, builds the distributions, and publishes a GitHub Release with the sdist and wheel attached |
 
 All jobs run on `ubuntu-latest` with [`uv`](https://docs.astral.sh/uv/) and the
 committed `uv.lock`. No repository secrets are required: the test suite mocks
@@ -384,8 +384,10 @@ Run the same checks locally:
 uv sync --extra dev                      # install the locked development environment
 uv lock --check                          # pyproject.toml and uv.lock agree
 uv run --extra dev ruff check satgonetem tests
+uv run --extra dev ruff format --check satgonetem tests
 uv run --extra dev mypy
-uv run --extra dev pytest -q --cov=satgonetem --cov-fail-under=65
+uvx pip-audit@2.9.0 --path .venv/lib/python3.14/site-packages
+uv run --extra dev pytest -q --cov=satgonetem --cov-fail-under=75
 uv build --out-dir dist                  # sdist + wheel
 uvx twine@7.0.0 check dist/*
 ```
@@ -394,8 +396,9 @@ uvx twine@7.0.0 check dist/*
 
 The `develop` and `main` repository rulesets require pull requests. `develop`
 also requires `Lint`, `Type check`, `Test (Python 3.10)` through
-`Test (Python 3.14)`, and `Build package`. `main` requires the same checks
-except `Type check` until the Phase 0 workflow is promoted from `develop`.
+`Test (Python 3.14)`, `Security audit`, and `Build package`. `main` requires the
+pre-existing checks and adds `Type check`/`Security audit` when the Phase 0
+workflow is promoted from `develop`.
 
 ### Releasing
 

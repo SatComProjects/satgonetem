@@ -7,6 +7,7 @@ from satgonetem.traffic.hping3_types import Hping3Config, Hping3Results
 if TYPE_CHECKING:
     from satgonetem.models.node import Node
 
+
 class Hping3Status(enum.Enum):
     """Lifecycle state of an Hping3Flow.
 

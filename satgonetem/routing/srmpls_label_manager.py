@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
 
 MPLS_LABEL_MIN = 16
 MPLS_LABEL_MAX = 1048575
@@ -66,10 +65,10 @@ class SegmentRoutingManager:
 
         self.node_sid_base = node_sid_base
         self.adj_sid_base = adj_sid_base
-        self.node_sids: Dict[int, NodeSID] = {}
-        self.reverse_sid_map: Dict[int, int] = {}
-        self.custom_paths: Dict[Tuple[int, int], List[int]] = {}
-        self._label_stack_cache: Dict[Tuple[int, int], List[int]] = {}
+        self.node_sids: dict[int, NodeSID] = {}
+        self.reverse_sid_map: dict[int, int] = {}
+        self.custom_paths: dict[tuple[int, int], list[int]] = {}
+        self._label_stack_cache: dict[tuple[int, int], list[int]] = {}
 
         logging.info(
             f"SegmentRoutingManager initialized with Node SID base {node_sid_base}"
@@ -106,7 +105,7 @@ class SegmentRoutingManager:
         logging.debug(f"Allocated Node SID {label} for node {node_name or node_id}")
         return sid
 
-    def get_node_sid(self, node_id: int) -> Optional[int]:
+    def get_node_sid(self, node_id: int) -> int | None:
         """Return the Node SID label for a node, or None if not allocated.
 
         Args:
@@ -118,7 +117,7 @@ class SegmentRoutingManager:
         sid = self.node_sids.get(node_id)
         return sid.label if sid else None
 
-    def get_node_for_sid(self, label: int) -> Optional[int]:
+    def get_node_for_sid(self, label: int) -> int | None:
         """Return the node ID for a given Node SID label, or None.
 
         Args:
@@ -129,7 +128,7 @@ class SegmentRoutingManager:
         """
         return self.reverse_sid_map.get(label)
 
-    def set_custom_path(self, source_id: int, dest_id: int, path: List[int]) -> None:
+    def set_custom_path(self, source_id: int, dest_id: int, path: list[int]) -> None:
         """Store a custom path for a source-destination pair.
 
         Args:
@@ -155,7 +154,7 @@ class SegmentRoutingManager:
             f"{' -> '.join(str(n) for n in path)}"
         )
 
-    def get_custom_path(self, source_id: int, dest_id: int) -> Optional[List[int]]:
+    def get_custom_path(self, source_id: int, dest_id: int) -> list[int] | None:
         """Return the custom path for a pair, or None if using default routing.
 
         Args:
@@ -181,8 +180,8 @@ class SegmentRoutingManager:
         return self.custom_paths.pop((source_id, dest_id), None) is not None
 
     def get_label_stack_for_path(
-        self, path: List[int], use_php: bool = True
-    ) -> List[int]:
+        self, path: list[int], use_php: bool = True
+    ) -> list[int]:
         """Generate the label stack for a path.
 
         The source pushes Node SIDs for each transit hop. The stack is ordered
@@ -217,9 +216,9 @@ class SegmentRoutingManager:
         self,
         source_id: int,
         dest_id: int,
-        default_path: Optional[List[int]] = None,
+        default_path: list[int] | None = None,
         use_php: bool = True,
-    ) -> Tuple[List[int], List[int]]:
+    ) -> tuple[list[int], list[int]]:
         """Return the path and label stack for a destination.
 
         Uses the custom path when set, otherwise falls back to default_path.
@@ -250,7 +249,7 @@ class SegmentRoutingManager:
 
         return path, labels
 
-    def get_all_node_sids(self) -> List[NodeSID]:
+    def get_all_node_sids(self) -> list[NodeSID]:
         """Return all allocated Node SIDs.
 
         Returns:
@@ -258,7 +257,7 @@ class SegmentRoutingManager:
         """
         return list(self.node_sids.values())
 
-    def get_statistics(self) -> Dict[str, int]:
+    def get_statistics(self) -> dict[str, int]:
         """Return SR manager statistics.
 
         Returns:

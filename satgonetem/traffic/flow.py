@@ -10,7 +10,7 @@ from __future__ import annotations
 import abc
 import threading
 import time
-from typing import TYPE_CHECKING, Any, Optional, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
     from satgonetem.models.node import Node
@@ -45,8 +45,8 @@ class ThreadedFlow(abc.ABC):
 
     def __init__(
         self,
-        source: "Node",
-        destination: "Node",
+        source: Node,
+        destination: Node,
         config: Any,
         delay: float = 0.0,
     ) -> None:
@@ -57,11 +57,11 @@ class ThreadedFlow(abc.ABC):
 
         self._status = self.STATUS.IDLE
         self._result: Any = None
-        self._error: Optional[Exception] = None
-        self._thread: Optional[threading.Thread] = None
+        self._error: Exception | None = None
+        self._thread: threading.Thread | None = None
         self._lock = threading.Lock()
         self._stop_event = threading.Event()
-        self._last_raw: Optional[str] = None
+        self._last_raw: str | None = None
 
     def start(self) -> None:
         """Start the flow in a background daemon thread."""

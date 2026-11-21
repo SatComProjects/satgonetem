@@ -4,8 +4,9 @@ This module is the primary entry point for constructing and running satcom
 topology projects from Python.
 """
 
+import contextlib
 import logging
-from typing import Any, Dict, List
+from typing import Any
 
 from sat_com_application.simulation_manager import SimulationManager
 from sat_com_builder.configuration_manager import BaseConfigurationManager
@@ -62,7 +63,7 @@ class DictConfigurationManager(BaseConfigurationManager):
 
 
 def create_and_load_simulation(
-    dict_configuration: Dict[str, Any], project_name: str
+    dict_configuration: dict[str, Any], project_name: str
 ) -> SimulationManager:
     """Create and load a simulation from a configuration dictionary.
 
@@ -109,7 +110,9 @@ def create_custom_satellite(
     sat_name: str = satellite_model.satellite_name
     # Built directly rather than with sat_com's create_satellite: sat_com_topology 5 inserted a required `shell`
     # parameter before `domain`. A TLE-only satellite belongs to no shell (shell stays None in 5, absent in 4).
-    new_sat = SatComSatellite(satellite_name=sat_name, object_id=object_id, domain=domain)
+    new_sat = SatComSatellite(
+        satellite_name=sat_name, object_id=object_id, domain=domain
+    )
     new_sat.set_movement_model(satellite_model)
     simulation_manager.add_satellite(new_sat)
     simulation_manager.update_ground_station_links()
@@ -125,7 +128,7 @@ def create_custom_satellite(
 
 
 def add_custom_satellites(
-    simulation_manager: SimulationManager, custom_satellites: List[Dict[str, Any]]
+    simulation_manager: SimulationManager, custom_satellites: list[dict[str, Any]]
 ) -> None:
     """Add all custom satellites to the simulation manager.
 
@@ -187,10 +190,8 @@ def _attach_ground_object_domain(
         return
 
     domain = None
-    try:
+    with contextlib.suppress(GroundObjectDomainNotFoundError):
         domain = simulation_manager.get_ground_object_domain(ground_object.domain)
-    except GroundObjectDomainNotFoundError:
-        pass
 
     # The ownership ``domain`` string may resolve to a generic domain with no
     # connectivity strategy; a ground station needs a ground_station domain.

@@ -8,8 +8,6 @@ Also owns project file generation (get_gonetem_topology / generate_project)
 since it is the only launcher that needs the GoNetem .gnet format.
 """
 
-from typing import Optional
-
 import grpc
 
 import satgonetem.proto.netem_pb2_grpc as netem_grpc
@@ -68,9 +66,9 @@ class GoNetEmLauncher(GoNetEmLifecycleMixin, GoNetEmCleanupMixin, NetworkLaunche
         self._server_address = server_address
         self._temp_path = temp_path
 
-        self._channel: Optional[grpc.Channel] = None
-        self._client: Optional[netem_grpc.NetemStub] = None
-        self._request: Optional[netem_pb2.ProjectRequest] = None
+        self._channel: grpc.Channel | None = None
+        self._client: netem_grpc.NetemStub | None = None
+        self._request: netem_pb2.ProjectRequest | None = None  # type: ignore[name-defined]
         self._client_factory = client_factory or GoNetEmGrpcClientFactory()
         self._connection = None
         self._command_runner = command_runner or default_runner
@@ -84,5 +82,3 @@ class GoNetEmLauncher(GoNetEmLifecycleMixin, GoNetEmCleanupMixin, NetworkLaunche
 
     def generate_project(self, *args, **kwargs) -> str:
         return self._project_builder.generate_project(*args, **kwargs)
-
-

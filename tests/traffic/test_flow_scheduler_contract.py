@@ -78,8 +78,7 @@ def test_constructor_rejects_non_positive_flow_timeout(
         FlowScheduler([_flow("Gnd0")], flow_timeout_sec=flow_timeout_sec)
 
     assert str(excinfo.value) == (
-        "flow_timeout_sec must be > 0 when provided, "
-        f"got {flow_timeout_sec}"
+        f"flow_timeout_sec must be > 0 when provided, got {flow_timeout_sec}"
     )
 
 

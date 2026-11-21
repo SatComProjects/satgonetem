@@ -1,4 +1,4 @@
-from typing import List, Literal, Optional
+from typing import Literal
 
 from pydantic import BaseModel
 
@@ -31,14 +31,14 @@ class WalkerShell(BaseModel):
     type: Literal["delta", "star"]
     constellation_property: ConstellationProperty
     orbital_connectivity_property: OrbitalConnectivityProperty
-    ground_object_white_list: List[str]
+    ground_object_white_list: list[str]
 
 
 class ConnectivityProperties(BaseModel):
     ground_to_space_connections_strategy: str
     elevation_above_horizon: int
     maximum_satellite_range_distance: float
-    shell_white_lists: List[str]
+    shell_white_lists: list[str]
     maximum_connected_satellites: int
 
 
@@ -70,7 +70,7 @@ class NetworkProperties(BaseModel):
     ground_station_link_capacity: int
     routing_method: str  # 'Static', 'Dynamic', 'MPLS'
     protocol: str
-    mpls_config: Optional[MPLSConfiguration] = None
+    mpls_config: MPLSConfiguration | None = None
 
 
 class Configuration(BaseModel):
@@ -79,7 +79,7 @@ class Configuration(BaseModel):
     end_date: str
     movement_model: str
     distance_model: str
-    ground_objects_properties: List[GroundObject]
-    walker_shells: List[WalkerShell]
+    ground_objects_properties: list[GroundObject]
+    walker_shells: list[WalkerShell]
     disable_ground_station_link_preload: bool
     static_ground_station_link_mode: bool

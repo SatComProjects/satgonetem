@@ -1,6 +1,5 @@
 """Tests for the Node base model."""
 
-
 import base64
 from unittest.mock import MagicMock
 

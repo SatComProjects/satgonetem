@@ -20,9 +20,10 @@ import enum
 import threading
 import time
 from collections import deque
+from collections.abc import Callable, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from threading import Lock
-from typing import Any, Callable, Sequence
+from typing import Any
 
 from satgonetem.traffic.flow import Flow
 
@@ -179,7 +180,7 @@ class FlowScheduler:
             raise ValueError(f"max_workers must be >= 1, got {max_workers}")
         if flow_timeout_sec is not None and flow_timeout_sec <= 0:
             raise ValueError(
-                "flow_timeout_sec must be > 0 when provided, " f"got {flow_timeout_sec}"
+                f"flow_timeout_sec must be > 0 when provided, got {flow_timeout_sec}"
             )
         self._flows = sorted(flows, key=lambda f: f.delay)
         self._max_workers = max_workers
@@ -305,7 +306,7 @@ class FlowScheduler:
                     pending.add(future)
 
                 for future in as_completed(pending):
-                    flow: AnyFlow = future._satgonetem_flow
+                    completed_flow: AnyFlow = future._satgonetem_flow
                     pending.discard(future)
                     exc = future.exception()
                     if exc is not None:
@@ -320,11 +321,11 @@ class FlowScheduler:
                     elif self._save_results:
                         completed = future.result()
                         self._results.append(completed)
-                        self._result_map[id(flow)] = completed
+                        self._result_map[id(completed_flow)] = completed
                     else:
                         # Release the memory held by the flow's own result.
                         # The scheduler was asked not to retain it.
-                        flow.discard_result()
+                        completed_flow.discard_result()
 
                 if self._debug:
                     progress_event.set()

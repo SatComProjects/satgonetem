@@ -66,16 +66,13 @@ class _Iperf3PortAllocator:
             for _ in range(span):
                 port = self._next_port
                 self._next_port = (
-                    self._base_port
-                    if port >= self._max_port
-                    else port + 1
+                    self._base_port if port >= self._max_port else port + 1
                 )
                 if port not in self._in_use:
                     self._in_use.add(port)
                     return port
         raise RuntimeError(
-            f"no free iperf3 port in range "
-            f"{self._base_port}-{self._max_port}"
+            f"no free iperf3 port in range {self._base_port}-{self._max_port}"
         )
 
     def release(self, port: int) -> None:

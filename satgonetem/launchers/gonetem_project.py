@@ -5,7 +5,6 @@ from __future__ import annotations
 import os
 import tarfile
 import tempfile
-from typing import Optional
 
 
 def _tbf_qos(rate_kbps: int, delay_ms: int) -> tuple[int, float]:
@@ -26,6 +25,7 @@ def _tbf_qos(rate_kbps: int, delay_ms: int) -> tuple[int, float]:
     buffer_factor = (burst + bdp_bytes) / bdp_bytes
     return burst, buffer_factor
 
+
 class GoNetEmProjectBuilder:
     """Build GoNetEm network.yml content and .gnet archives."""
 
@@ -44,8 +44,8 @@ class GoNetEmProjectBuilder:
         self,
         fallback: bool = False,
         controller: bool = False,
-        nodes: Optional[list] = None,
-        links: Optional[list] = None,
+        nodes: list | None = None,
+        links: list | None = None,
     ) -> str:
         """Build the GoNetem network.yml content from the current topology.
 
@@ -76,10 +76,7 @@ class GoNetEmProjectBuilder:
                 gs for gs in tm.ground_stations.values() if gs.name in allowed_names
             ]
 
-        if links is None:
-            link_nodes = tm.links.values()
-        else:
-            link_nodes = links
+        link_nodes = tm.links.values() if links is None else links
         if allowed_names is not None:
             link_nodes = [
                 link
@@ -95,9 +92,7 @@ class GoNetEmProjectBuilder:
         controller_section = self._write_controller_switch() if controller else ""
         link_section = self._write_links(link_nodes)
         controller_links = (
-            self._write_controller_switch_links(
-                satellite_nodes, ground_station_nodes
-            )
+            self._write_controller_switch_links(satellite_nodes, ground_station_nodes)
             if controller
             else ""
         )
@@ -112,12 +107,24 @@ class GoNetEmProjectBuilder:
             + controller_links
         )
 
-    @staticmethod
-    def _write_controller_switch_links(satellites, ground_stations) -> str:
+    def _controller_iface_suffix(self, node) -> str:
+        """Return the GoNetEm peer suffix for a node controller interface."""
+        pattern = getattr(
+            self._topology_manager, "controller_node_iface_pattern", "eth{node_id}"
+        )
+        iface = pattern.format(node_id=50000 + node.id)
+        if not iface.startswith("eth") or not iface[3:].isdigit():
+            raise ValueError(
+                "controller_node_iface_pattern must format to 'eth<digits>', "
+                f"got {iface!r}"
+            )
+        return iface[3:]
+
+    def _write_controller_switch_links(self, satellites, ground_stations) -> str:
         # Link from every node to the controller switch with high capacity and low latency
         result = ""
         for sat in satellites:
-            eth_id = 50000 + sat.id
+            eth_id = self._controller_iface_suffix(sat)
             burst, buffer = _tbf_qos(1_000_000, 1)
             result += (
                 f" - {{peer1: Controller.{sat.id}, peer2: {sat.name}.{eth_id},"
@@ -125,7 +132,7 @@ class GoNetEmProjectBuilder:
                 f" peer2qos: {{ rate: 1000000, buffer: {buffer}, jitter: 0, delay: 1, burst: {burst}}}}} \n"
             )
         for gs in ground_stations:
-            eth_id = 50000 + gs.id
+            eth_id = self._controller_iface_suffix(gs)
             burst, buffer = _tbf_qos(1_000_000, 1)
             result += (
                 f" - {{peer1: Controller.{gs.id}, peer2: {gs.name}.{eth_id},"
@@ -181,8 +188,8 @@ class GoNetEmProjectBuilder:
         self,
         dest_dir: str,
         controller: bool = False,
-        nodes: Optional[list] = None,
-        links: Optional[list] = None,
+        nodes: list | None = None,
+        links: list | None = None,
     ) -> str:
         """Write a project.gnet archive to *dest_dir* and return its path.
 
@@ -200,8 +207,8 @@ class GoNetEmProjectBuilder:
         )
         with tempfile.TemporaryDirectory() as tmp:
             network_yml = os.path.join(tmp, "network.yml")
-            with open(network_yml, "w") as fd:
-                fd.write(data)
+            with open(network_yml, "w") as network_file:
+                network_file.write(data)
             fd, gnet_path = tempfile.mkstemp(suffix=".gnet", dir=dest_dir)
             os.close(fd)
             with tarfile.open(gnet_path, "w:gz") as tar:

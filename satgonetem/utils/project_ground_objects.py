@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pathlib
 from dataclasses import dataclass
-from typing import Any, Dict, List, Literal
+from typing import Any, Literal
 
 from sat_com_builder.models import GroundConnectivityProperty
 
@@ -49,7 +49,7 @@ class GroundObjectFile:
         entries: Ordered list of GroundStationEntry objects to write.
     """
 
-    def __init__(self, identifier: str, entries: List[GroundStationEntry]) -> None:
+    def __init__(self, identifier: str, entries: list[GroundStationEntry]) -> None:
         self.identifier = identifier
         self.entries = entries
 
@@ -76,7 +76,7 @@ class GroundObjectFile:
         return str(file_path)
 
     @classmethod
-    def from_csv(cls, identifier: str, csv_path: str) -> "GroundObjectFile":
+    def from_csv(cls, identifier: str, csv_path: str) -> GroundObjectFile:
         """Create a GroundObjectFile from a CSV file.
 
         The CSV file should have no header and follow the format:
@@ -91,7 +91,7 @@ class GroundObjectFile:
             ValueError: If any line in the CSV is malformed.
         """
         entries = []
-        with open(csv_path, "r") as f:
+        with open(csv_path) as f:
             for line in f:
                 parts = line.strip().split(",")
                 if len(parts) != 5:
@@ -130,7 +130,7 @@ class GroundObject:
         self.object_type = object_type
         self.connectivity_properties = connectivity_properties
 
-    def to_dict(self, base_dir: str = "/tmp") -> Dict[str, Any]:
+    def to_dict(self, base_dir: str = "/tmp") -> dict[str, Any]:
         """Write the ground object file and return the configuration dict entry.
 
         Args:

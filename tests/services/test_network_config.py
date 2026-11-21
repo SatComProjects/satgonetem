@@ -17,9 +17,9 @@ TEST_TOPOLOGY = str(
 )
 SAMPLE_TOPOLOGIES = sorted(
     str(path)
-    for path in (
-        Path(__file__).resolve().parents[2] / "topology_files"
-    ).glob("*_topology.json")
+    for path in (Path(__file__).resolve().parents[2] / "topology_files").glob(
+        "*_topology.json"
+    )
 )
 
 
@@ -92,9 +92,7 @@ class TestPersistence:
         path = tmp_path / "topology.json"
         topology.to_file(
             str(path),
-            network_config=NetworkConfig(
-                link_netem_limit=2048, link_txqueuelen=4096
-            ),
+            network_config=NetworkConfig(link_netem_limit=2048, link_txqueuelen=4096),
         )
 
         payload = json.loads(path.read_text())["network_config"]
@@ -105,9 +103,7 @@ class TestPersistence:
         path = tmp_path / "topology.json"
         topology.to_file(
             str(path),
-            network_config=NetworkConfig(
-                link_netem_limit=2048, link_txqueuelen=4096
-            ),
+            network_config=NetworkConfig(link_netem_limit=2048, link_txqueuelen=4096),
         )
 
         reloaded = TopologyManager.from_file(str(path))
@@ -138,13 +134,13 @@ class TestControllerInterfacePattern:
         assert config.controller_node_iface_pattern == "eth{node_id}"
 
     def test_accepts_custom_pattern_with_node_id_placeholder(self):
-        config = NetworkConfig(controller_node_iface_pattern="mgmt{node_id}")
+        config = NetworkConfig(controller_node_iface_pattern="eth5{node_id}")
 
-        assert config.controller_node_iface_pattern.format(node_id=50007) == "mgmt50007"
+        assert config.controller_node_iface_pattern.format(node_id=50007) == "eth550007"
 
     @pytest.mark.parametrize(
         "pattern",
-        ["eth0", "mgmt{iface}", "mgmt{node_id", "mgmt{node_id:d}"],
+        ["eth0", "mgmt{iface}", "mgmt{node_id}", "mgmt{node_id:d}"],
     )
     def test_rejects_invalid_patterns(self, pattern):
         with pytest.raises(ValueError, match="controller_node_iface_pattern"):
@@ -175,7 +171,7 @@ class TestNetworkConfigSingleSource:
             controller_host_ip="10.255.0.1",
             controller_subnet_prefix=24,
             controller_bridge_name="MgmtBridge",
-            controller_node_iface_pattern="mgmt{node_id}",
+            controller_node_iface_pattern="eth5{node_id}",
         )
         path = tmp_path / "custom.json"
 
@@ -187,4 +183,4 @@ class TestNetworkConfigSingleSource:
         assert reloaded.controller_host_ip == "10.255.0.1"
         assert reloaded.controller_subnet_prefix == 24
         assert reloaded.controller_bridge_name == "MgmtBridge"
-        assert reloaded.controller_node_iface_pattern == "mgmt{node_id}"
+        assert reloaded.controller_node_iface_pattern == "eth5{node_id}"

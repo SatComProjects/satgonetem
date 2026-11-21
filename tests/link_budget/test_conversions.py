@@ -1,6 +1,5 @@
 """Tests for satgonetem.link_budget.conversions."""
 
-
 import pytest
 
 from satgonetem.link_budget.conversions import db_to_linear, linear_to_db

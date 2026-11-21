@@ -18,9 +18,8 @@ def _daemon() -> SRMPLSDaemon:
     topology.add_ground_station("Gnd0")
     daemon = SRMPLSDaemon(topology)
     daemon._label_manager = SegmentRoutingManager()
-    for node in (
-        list(topology.satellites.values())
-        + list(topology.ground_stations.values())
+    for node in list(topology.satellites.values()) + list(
+        topology.ground_stations.values()
     ):
         daemon._label_manager.allocate_node_sid(node.id, node.name)
     return daemon

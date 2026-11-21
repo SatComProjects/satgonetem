@@ -6,7 +6,8 @@ without constructing a TopologyManager.
 
 from __future__ import annotations
 
-from typing import Any, Iterable
+from collections.abc import Iterable
+from typing import Any
 
 from sat_com_model.models import GroundStation as SatComGroundStation
 from sat_com_model.models import Satellite as SatComSatellite

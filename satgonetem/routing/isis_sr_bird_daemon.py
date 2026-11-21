@@ -5,6 +5,7 @@ declarative Bird2 config directly to each container and manages the Bird
 service lifecycle. MPLS kernel modules and sysctls are configured before
 Bird is started.
 """
+
 from __future__ import annotations
 
 import base64
@@ -27,13 +28,10 @@ ISIS_HELLO_MULTIPLIER = 3
 SR_GLOBAL_BLOCK_LOW = 16000
 SR_GLOBAL_BLOCK_HIGH = 23999
 
-_ISIS_PROBE_CONFIG = (
-    "protocol device {}\n"
-    "protocol mpls { label range 16000 23999; }\n"
-)
+_ISIS_PROBE_CONFIG = "protocol device {}\nprotocol mpls { label range 16000 23999; }\n"
 
 
-def _bird_supports_isis(node: "Node") -> bool:
+def _bird_supports_isis(node: Node) -> bool:
     """Return whether *node*'s Bird build accepts IS-IS and MPLS config.
 
     Stock Bird 2.x ships neither protocol, so only a patched build accepts the
@@ -66,7 +64,7 @@ class ISISBirdSRDaemon(BirdRoutingDaemon):
     When new links are added, rebuilds the config for directly affected nodes.
     """
 
-    def _validate_nodes(self, nodes: list["Node"]) -> bool:
+    def _validate_nodes(self, nodes: list[Node]) -> bool:
         if nodes and not _bird_supports_isis(nodes[0]):
             logging.error(
                 "IS-IS SR requires a Bird build with IS-IS and MPLS support; "
@@ -76,7 +74,7 @@ class ISISBirdSRDaemon(BirdRoutingDaemon):
             return False
         return True
 
-    def _init_node(self, node: "Node") -> None:
+    def _init_node(self, node: Node) -> None:
         """Enable MPLS, assign IPs, build Bird IS-IS SR config, and start Bird."""
         _enable_mpls(node)
         _assign_ips(node)
@@ -84,7 +82,7 @@ class ISISBirdSRDaemon(BirdRoutingDaemon):
         _apply_config(node, config)
 
 
-def _build_isis_sr_config(node: "Node") -> str:
+def _build_isis_sr_config(node: Node) -> str:
     """Build a complete Bird2 IS-IS + SR-MPLS configuration string for one node.
 
     The configuration includes:
@@ -171,7 +169,7 @@ def _build_isis_sr_config(node: "Node") -> str:
     return "\n".join(lines)
 
 
-def _apply_config(node: "Node", config: str) -> None:
+def _apply_config(node: Node, config: str) -> None:
     """Install a Bird IS-IS SR config and start or reload Bird in the container.
 
     Args:

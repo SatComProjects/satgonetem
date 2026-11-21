@@ -1,15 +1,14 @@
 """
 Base routing daemon interface.
 """
+
 from __future__ import annotations
 
 import abc
+from collections.abc import Mapping
 from typing import (
     TYPE_CHECKING,
     Any,
-    List,
-    Mapping,
-    Optional,
     Protocol,
     runtime_checkable,
 )
@@ -27,21 +26,21 @@ class RoutingContext(Protocol):
     the concrete services class.
     """
 
-    satellites: Mapping[int, "Node"]
-    ground_stations: Mapping[int, "Node"]
-    links: Mapping[Any, "Link"]
+    satellites: Mapping[int, Node]
+    ground_stations: Mapping[int, Node]
+    links: Mapping[Any, Link]
     status: bool
     use_file_routes: bool
     project_name: str
     current_time_step: int
 
-    def get_satellites(self) -> List["Node"]: ...
+    def get_satellites(self) -> list[Node]: ...
 
-    def get_ground_stations(self) -> List["Node"]: ...
+    def get_ground_stations(self) -> list[Node]: ...
 
     def get_current_graph(self) -> Any: ...
 
-    def _get_interface_to_peer(self, node: "Node", peer_id: int) -> Any: ...
+    def _get_interface_to_peer(self, node: Node, peer_id: int) -> Any: ...
 
 
 class RoutingDaemon(abc.ABC):
@@ -70,7 +69,7 @@ class RoutingDaemon(abc.ABC):
         """
 
     @abc.abstractmethod
-    def update(self, new_links: "List[Link]", max_workers: int = 4) -> None:
+    def update(self, new_links: list[Link], max_workers: int = 4) -> None:
         """Update routing after topology changes.
 
         Called whenever links are added or removed from the topology.
@@ -81,7 +80,7 @@ class RoutingDaemon(abc.ABC):
         """
 
     @abc.abstractmethod
-    def remove(self, node: "Optional[Node]" = None, max_workers: int = 4) -> None:
+    def remove(self, node: Node | None = None, max_workers: int = 4) -> None:
         """Remove all installed routes.
 
         Args:

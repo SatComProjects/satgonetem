@@ -11,9 +11,7 @@ from satgonetem.services.mixins.topology_sync import TopologySyncMixin
 
 class DummySync(TopologySyncMixin):
     def __init__(self, links_data, links=None):
-        self.simulation_manager = SimpleNamespace(
-            get_all_links=lambda: links_data
-        )
+        self.simulation_manager = SimpleNamespace(get_all_links=lambda: links_data)
         self.links = links or {}
         self.initial_sync = False
 

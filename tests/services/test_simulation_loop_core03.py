@@ -102,9 +102,7 @@ class MutationHarness(SimulationLoopMixin):
         self.routing_daemon = None
         self.tracker = SectionTracker()
         self.update_delay = update_delay
-        self.simulation_manager = _FakeSimulationManager(
-            self.tracker, update_delay / 2
-        )
+        self.simulation_manager = _FakeSimulationManager(self.tracker, update_delay / 2)
 
     def update_simulation(self, advance_timestep: bool = True) -> None:
         with self.tracker.section("update"):
@@ -155,9 +153,7 @@ def test_concurrent_api_mutations_do_not_interleave():
         try:
             barrier.wait(timeout=5.0)
             for i in range(iterations):
-                harness.move_to_time(
-                    harness.start_time + timedelta(seconds=offset + i)
-                )
+                harness.move_to_time(harness.start_time + timedelta(seconds=offset + i))
         except BaseException as exc:  # pragma: no cover - failure path
             record_error(exc)
 

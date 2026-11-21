@@ -40,13 +40,19 @@ jobs:
         run: uv sync --frozen --extra dev
       - name: Lint with ruff
         run: uv run --frozen --extra dev ruff check satgonetem tests
-      - name: Type check scoped packages
+      - name: Check formatting with ruff
+        run: uv run --frozen --extra dev ruff format --check satgonetem tests
+      - name: Type check full package
         run: uv run --frozen --extra dev mypy
+      - name: Audit installed dependencies
+        run: >-
+          uvx pip-audit@2.9.0 --path "$(uv run python -c
+          'import site; print(site.getsitepackages()[0])')"
       - name: Run tests
         run: >-
           uv run --frozen --extra dev pytest -q
           --cov=satgonetem
-          --cov-fail-under=65
+          --cov-fail-under=75
 
   build:
     name: Build distributions

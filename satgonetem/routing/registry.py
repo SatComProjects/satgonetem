@@ -8,7 +8,8 @@ editing the manager.
 
 from __future__ import annotations
 
-from typing import Any, Callable, Mapping, Type
+from collections.abc import Callable, Mapping
+from typing import Any
 
 from satgonetem.routing.base_daemon import RoutingDaemon
 
@@ -17,7 +18,7 @@ DaemonFactory = Callable[[Any], RoutingDaemon]
 _BUILTIN_FACTORIES: dict[str, DaemonFactory] = {}
 
 
-def register_builtin(name: str, daemon_class: Type[RoutingDaemon]) -> None:
+def register_builtin(name: str, daemon_class: type[RoutingDaemon]) -> None:
     """Register a built-in daemon class under *name*."""
     _BUILTIN_FACTORIES[name] = daemon_class
 
@@ -42,6 +43,7 @@ def create_daemon(
     Custom factories are checked first, then built-ins. Returns None when the
     method is unknown.
     """
+    factory: DaemonFactory | None
     if custom and name in custom:
         factory = custom[name]
     else:
@@ -57,9 +59,7 @@ def available_methods(custom: Mapping[str, Any] | None = None) -> list[str]:
     return names
 
 
-def is_known_method(
-    name: str, custom: Mapping[str, Any] | None = None
-) -> bool:
+def is_known_method(name: str, custom: Mapping[str, Any] | None = None) -> bool:
     """Return True when *name* resolves to a built-in or custom factory."""
     return name in _BUILTIN_FACTORIES or bool(custom and name in custom)
 

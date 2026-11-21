@@ -148,7 +148,9 @@ def test_initialize_address_plan_allocates_links_deterministically() -> None:
     )
 
 
-def test_link_address_pair_is_orientation_independent_but_labels_follow_source() -> None:
+def test_link_address_pair_is_orientation_independent_but_labels_follow_source() -> (
+    None
+):
     forward = _InterfaceMgrHost()
     satellite_0 = forward.add_satellite("Sat0")
     satellite_1 = forward.add_satellite("Sat1")
@@ -194,8 +196,10 @@ def test_link_key_and_address_sort_key_are_orientation_independent(
     forward = manager.add_link(satellite_0, satellite_1)
     reverse = manager.add_link(satellite_1, satellite_0)
 
-    assert manager._link_key(forward) == manager._link_key(reverse) == frozenset(
-        ("Sat0", "Sat1")
+    assert (
+        manager._link_key(forward)
+        == manager._link_key(reverse)
+        == frozenset(("Sat0", "Sat1"))
     )
     assert manager._address_link_sort_key(forward) == (0, 1)
     assert manager._address_link_sort_key(reverse) == (0, 1)
@@ -400,9 +404,7 @@ def test_set_ipv4s_for_all_nodes_can_filter_node_kinds(
         satellites=False, ground_stations=True, max_workers=1
     )
     satellite.set_ipv4_to_containers.assert_not_called()
-    ground.set_ipv4_to_containers.assert_called_once_with(
-        interface=None, set_lo=True
-    )
+    ground.set_ipv4_to_containers.assert_called_once_with(interface=None, set_lo=True)
 
     satellite.set_ipv4_to_containers.reset_mock()
     ground.set_ipv4_to_containers.reset_mock()
@@ -431,12 +433,8 @@ def test_set_ipv4s_for_all_nodes_attempts_every_node_before_raising(
     ):
         manager.set_ipv4s_for_all_nodes(ground_stations=False, max_workers=2)
 
-    failing.set_ipv4_to_containers.assert_called_once_with(
-        interface=None, set_lo=True
-    )
-    healthy.set_ipv4_to_containers.assert_called_once_with(
-        interface=None, set_lo=True
-    )
+    failing.set_ipv4_to_containers.assert_called_once_with(interface=None, set_lo=True)
+    healthy.set_ipv4_to_containers.assert_called_once_with(interface=None, set_lo=True)
 
 
 # ----------------------------------------------------------------------

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, List, Optional, Union
+from typing import TYPE_CHECKING
 
 from satgonetem.traffic import (
     Hping3Config,
@@ -22,10 +22,10 @@ class TrafficTestingMixin:
 
     def run_hping3(
         self,
-        source: Union[Node, List[Node]],
-        destination: Union[Node, List[Node]],
-        config: Optional[Hping3Config] = None,
-    ) -> List[Hping3Flow]:
+        source: Node | list[Node],
+        destination: Node | list[Node],
+        config: Hping3Config | None = None,
+    ) -> list[Hping3Flow]:
         """Launch hping3 flows for all (source, destination) combinations.
 
         Accepts a single Node or a list of Nodes for each of source and
@@ -62,7 +62,7 @@ class TrafficTestingMixin:
             config = Hping3Config()
         sources = source if isinstance(source, list) else [source]
         destinations = destination if isinstance(destination, list) else [destination]
-        flows: List[Hping3Flow] = []
+        flows: list[Hping3Flow] = []
         for src in sources:
             for dst in destinations:
                 f = Hping3Flow(src, dst, config)
@@ -73,10 +73,10 @@ class TrafficTestingMixin:
 
     def run_iperf3(
         self,
-        source: Union[Node, List[Node]],
-        destination: Union[Node, List[Node]],
+        source: Node | list[Node],
+        destination: Node | list[Node],
         config: Iperf3Config,
-    ) -> List[Iperf3Flow]:
+    ) -> list[Iperf3Flow]:
         """Launch iperf3 flows for all (source, destination) combinations.
 
         Accepts a single Node or a list of Nodes for each of source and
@@ -118,7 +118,7 @@ class TrafficTestingMixin:
         """
         sources = source if isinstance(source, list) else [source]
         destinations = destination if isinstance(destination, list) else [destination]
-        flows: List[Iperf3Flow] = []
+        flows: list[Iperf3Flow] = []
         for src in sources:
             for dst in destinations:
                 f = Iperf3Flow(src, dst, config)
@@ -129,10 +129,10 @@ class TrafficTestingMixin:
 
     def ping(
         self,
-        source: Union[Node, List[Node]],
-        destination: Union[Node, List[Node]],
-        config: Optional[PingConfig] = None,
-    ) -> List[PingFlow]:
+        source: Node | list[Node],
+        destination: Node | list[Node],
+        config: PingConfig | None = None,
+    ) -> list[PingFlow]:
         """Ping all (source, destination) combinations and return PingFlows.
 
         Accepts a single Node or a list of Nodes for each of source and
@@ -165,7 +165,7 @@ class TrafficTestingMixin:
         resolved_config = config or PingConfig()
         sources = source if isinstance(source, list) else [source]
         destinations = destination if isinstance(destination, list) else [destination]
-        flows: List[PingFlow] = []
+        flows: list[PingFlow] = []
         for src in sources:
             for dst in destinations:
                 f = PingFlow(src, dst, resolved_config)

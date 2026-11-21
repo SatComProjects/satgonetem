@@ -190,7 +190,10 @@ class TestSRLabelStackEntry:
             fec_prefix=32,
         )
         line = entry.to_iproute2_batch_line()
-        assert line == "route replace 10.0.0.1/32 encap mpls 16003/16007 via 10.1.0.1 dev eth3"
+        assert (
+            line
+            == "route replace 10.0.0.1/32 encap mpls 16003/16007 via 10.1.0.1 dev eth3"
+        )
         assert not line.startswith("ip ")
 
     def test_to_iproute2_batch_line_without_labels(self, iface):

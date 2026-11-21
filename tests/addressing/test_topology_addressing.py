@@ -15,10 +15,7 @@ from satgonetem.services.topology_satcom import TopologyManager
 @pytest.fixture(scope="module")
 def topology() -> TopologyManager:
     return TopologyManager.from_file(
-        str(
-            Path(__file__).resolve().parents[2]
-            / "topology_files/test_topology.json"
-        )
+        str(Path(__file__).resolve().parents[2] / "topology_files/test_topology.json")
     )
 
 
@@ -75,9 +72,7 @@ def test_every_link_has_a_unique_valid_slash31(topology):
     for link in topology.get_links():
         if1, if2 = link.peer_interfaces
         assert if1.prefix_len == if2.prefix_len == 31
-        network = ipaddress.ip_network(
-            f"{if1.ipv4}/{if1.prefix_len}", strict=False
-        )
+        network = ipaddress.ip_network(f"{if1.ipv4}/{if1.prefix_len}", strict=False)
         assert network == ipaddress.ip_network(
             f"{if2.ipv4}/{if2.prefix_len}", strict=False
         )
@@ -91,9 +86,7 @@ def test_every_link_has_a_unique_valid_slash31(topology):
 
 def test_all_loopbacks_and_links_are_inside_ten_slash8(topology):
     pool = ipaddress.ip_network("10.0.0.0/8")
-    for node in list(topology.get_satellites()) + list(
-        topology.get_ground_stations()
-    ):
+    for node in list(topology.get_satellites()) + list(topology.get_ground_stations()):
         assert ipaddress.ip_address(node.loopback.ipv4) in pool
         for iface in node.interfaces:
             assert ipaddress.ip_address(iface.ipv4) in pool
@@ -103,9 +96,7 @@ def test_ground_station_links_are_allocated_from_the_ground_station_block(topolo
     for link in topology.get_links():
         if link.type != "GroundStationLink":
             continue
-        gs_end = (
-            link.source if link.source.type == "GroundStation" else link.target
-        )
+        gs_end = link.source if link.source.type == "GroundStation" else link.target
         for iface in link.peer_interfaces:
             assert ipaddress.ip_network(
                 f"{iface.ipv4}/{iface.prefix_len}", strict=False

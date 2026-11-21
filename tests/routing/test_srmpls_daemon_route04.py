@@ -83,10 +83,7 @@ def test_ground_station_empty_route_list_deletes_and_clears_cache():
     daemon = _make_daemon(ground_stations={20: gs}, sids={})
 
     own = "ip -f mpls route replace 16001 dev lo"
-    stale_ip = (
-        "ip route replace 10.20.0.1/32 encap mpls 16001 "
-        "via 10.0.0.2 dev gs20.1"
-    )
+    stale_ip = "ip route replace 10.20.0.1/32 encap mpls 16001 via 10.0.0.2 dev gs20.1"
     daemon._prev_sr_gs_routes[20] = [own, stale_ip]
 
     daemon._apply_sr_routes_to_ground_stations()
@@ -107,10 +104,7 @@ def test_returning_route_is_reemitted_after_removal():
     sr_lfib = {}
     daemon = _make_daemon(satellites={30: sat}, sr_lfib=sr_lfib)
 
-    route = (
-        "ip route replace 10.30.0.1/32 encap mpls 16001 "
-        "via 10.0.0.2 dev sat30.1"
-    )
+    route = "ip route replace 10.30.0.1/32 encap mpls 16001 via 10.0.0.2 dev sat30.1"
 
     sr_lfib[30] = [_FakeLFIBEntry(route)]
     daemon._apply_sr_routes_to_satellites()
@@ -140,7 +134,11 @@ def test_failed_batch_keeps_cache_for_retry():
     daemon = _make_daemon(
         satellites={40: sat},
         sids={},
-        sr_lfib={40: [_FakeLFIBEntry("ip route replace 10.40.0.1/32 via 10.0.0.2 dev sat40.1")]},
+        sr_lfib={
+            40: [
+                _FakeLFIBEntry("ip route replace 10.40.0.1/32 via 10.0.0.2 dev sat40.1")
+            ]
+        },
     )
     daemon._prev_sr_sat_routes[40] = [previous]
 

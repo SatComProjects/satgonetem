@@ -213,9 +213,7 @@ def test_max_workers_one_stops_timed_out_flow_before_next_flow():
     """With max_workers=1 the timed-out flow is stopped before the next starts."""
     slow = _FakeFlow("slow", wait_for_stop=True)
     second = _WatchingFlow("second", slow, wait_for_stop=False)
-    scheduler = FlowScheduler(
-        [slow, second], max_workers=1, flow_timeout_sec=0.05
-    )
+    scheduler = FlowScheduler([slow, second], max_workers=1, flow_timeout_sec=0.05)
 
     try:
         scheduler.run()

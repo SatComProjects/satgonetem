@@ -8,9 +8,9 @@ def geodetic_to_orbital(lat_deg, lon_deg, alt_km, incl_deg, epoch=None):
     return {
         "inclination_deg": float(incl_deg),
         "mean_motion_rev_per_day": float(1),
-        "argument_of_perigee_deg": float(0.0),
-        "mean_anomaly_deg": float(0.0),
-        "raan_deg": float(0.0),
+        "argument_of_perigee_deg": 0.0,
+        "mean_anomaly_deg": 0.0,
+        "raan_deg": 0.0,
     }
 
 
@@ -166,7 +166,6 @@ def julian_date(dt):
 
 # Example usage:
 if __name__ == "__main__":
-
     # Example usage:
     epoch = datetime(2025, 6, 10, 12, 0, 0, tzinfo=timezone.utc)
     result = geodetic_to_orbital_sgp4(

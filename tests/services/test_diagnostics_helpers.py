@@ -69,9 +69,7 @@ def test_process_interface_file_returns_only_the_last_state(
     path = tmp_path / "interfaces.log"
     historical = {"eth0": 1, "eth55": 2}
     current = {"eth0": 656, "eth55": 272974304}
-    path.write_text(
-        json.dumps(historical) + "\n" + json.dumps(current) + "\n"
-    )
+    path.write_text(json.dumps(historical) + "\n" + json.dumps(current) + "\n")
 
     assert diagnostics_host._process_interface_file(str(path)) == current
 
@@ -304,9 +302,7 @@ def test_launch_tcpdump_starts_one_process_per_interface(tmp_path):
 
     host, sat = _node_host()
 
-    host.launch_tcpdump_on_satellites(
-        dump_dir=str(tmp_path), satellites=[sat]
-    )
+    host.launch_tcpdump_on_satellites(dump_dir=str(tmp_path), satellites=[sat])
 
     command = sat.execute_command.call_args.args[0]
     assert "tcpdump -i eth0" in command
@@ -417,9 +413,7 @@ def test_node_terminal_sends_resizes_reads_and_closes():
             yield None  # sentinel? recv loop only iterates responses
 
     client = MagicMock()
-    client.NodeExec.return_value = iter(
-        [SimpleNamespace(code=0, data=b"hello")]
-    )
+    client.NodeExec.return_value = iter([SimpleNamespace(code=0, data=b"hello")])
     terminal = NodeTerminal(client, "project", "Sat0")
 
     with terminal:

@@ -1,7 +1,6 @@
 import datetime
 import math
 from datetime import timezone
-from typing import Optional, Tuple
 
 import astropy.units as u
 import numpy as np
@@ -32,10 +31,10 @@ SGP4_ERROR_MESSAGES = {
 
 
 def teme_to_geodetic(
-    r_teme_km: Tuple[float, float, float],
+    r_teme_km: tuple[float, float, float],
     jd: float,
     fr: float,
-) -> Tuple[float, float, float]:
+) -> tuple[float, float, float]:
     """Convert a TEME position to WGS-84 geodetic coordinates.
 
     Uses the standard Vallado/Bowring approach: rotate the TEME vector into an
@@ -100,11 +99,11 @@ class PyOrbitalModel(MovementModel):
     orbital_object: Satrec
     clock: TimeManager
 
-    last_spatial_position: Optional[SpatialPosition] = None
-    last_time_position_calculated: Optional[datetime.datetime] = None
+    last_spatial_position: SpatialPosition | None = None
+    last_time_position_calculated: datetime.datetime | None = None
 
-    _last_teme_time: Optional[datetime.datetime] = None
-    _last_teme_state: Optional[Tuple[tuple, tuple]] = None
+    _last_teme_time: datetime.datetime | None = None
+    _last_teme_state: tuple[tuple, tuple] | None = None
 
     def __init__(self, tle: dict, time_manager: TimeManager):
         """
@@ -177,7 +176,9 @@ class PyOrbitalModel(MovementModel):
         lat_deg, lon_deg, alt_m = teme_to_geodetic(r_teme, jd, fr)
         return SpatialPosition(longitude=lon_deg, latitude=lat_deg, altitude=alt_m)
 
-    def _compute_position_astropy(self, t: datetime.datetime, r_teme) -> SpatialPosition:
+    def _compute_position_astropy(
+        self, t: datetime.datetime, r_teme
+    ) -> SpatialPosition:
         """Compute the geodetic position with Astropy's IERS-aware transform.
 
         Kept as a reference implementation for regression tests and for users
@@ -266,7 +267,7 @@ class PyOrbitalModel(MovementModel):
         """
         return self.clock.get_current_time()
 
-    def _teme_state(self, delta_t: float = 0.0) -> Tuple[tuple, tuple]:
+    def _teme_state(self, delta_t: float = 0.0) -> tuple[tuple, tuple]:
         """
         Return TEME-frame position and velocity at the clock's current UTC time plus delta_t.
 
@@ -286,7 +287,11 @@ class PyOrbitalModel(MovementModel):
         t = self.clock.get_current_time()
         if t is None:
             raise RuntimeError("Clock returned None for current time")
-        if delta_t == 0.0 and self._last_teme_time == t and self._last_teme_state is not None:
+        if (
+            delta_t == 0.0
+            and self._last_teme_time == t
+            and self._last_teme_state is not None
+        ):
             return self._last_teme_state
 
         t_target = t + datetime.timedelta(seconds=delta_t) if delta_t else t
@@ -418,18 +423,24 @@ def _ground_distance_km(self, spatial_position_1, spatial_position_2) -> float:
 
 
 def _ground_distance_meters(self, spatial_position_1, spatial_position_2) -> float:
-    return _haversine_ground_distance_km(spatial_position_1, spatial_position_2) * 1000.0
+    return (
+        _haversine_ground_distance_km(spatial_position_1, spatial_position_2) * 1000.0
+    )
 
 
 def _3d_distance_meters(self, spatial_position_1, spatial_position_2) -> float:
-    ground_m = _haversine_ground_distance_km(spatial_position_1, spatial_position_2) * 1000.0
+    ground_m = (
+        _haversine_ground_distance_km(spatial_position_1, spatial_position_2) * 1000.0
+    )
     alt_diff_m = (spatial_position_1.altitude or 0) - (spatial_position_2.altitude or 0)
     return math.sqrt(ground_m**2 + alt_diff_m**2)
 
 
 def _3d_distance_km(self, spatial_position_1, spatial_position_2) -> float:
     ground_km = _haversine_ground_distance_km(spatial_position_1, spatial_position_2)
-    alt_diff_km = ((spatial_position_1.altitude or 0) - (spatial_position_2.altitude or 0)) / 1000.0
+    alt_diff_km = (
+        (spatial_position_1.altitude or 0) - (spatial_position_2.altitude or 0)
+    ) / 1000.0
     return math.sqrt(ground_km**2 + alt_diff_km**2)
 
 
@@ -452,7 +463,7 @@ def apply_satcom_fix() -> None:
     import importlib
 
     orbital_models = importlib.import_module("sat_com_trajectopy.orbital_models")
-    setattr(orbital_models, "PyOrbitalModel", PyOrbitalModel)
+    orbital_models.PyOrbitalModel = PyOrbitalModel
 
     try:
         generate_satellite = importlib.import_module(
@@ -461,7 +472,7 @@ def apply_satcom_fix() -> None:
     except ImportError:
         pass
     else:
-        setattr(generate_satellite, "PyOrbitalModel", PyOrbitalModel)
+        generate_satellite.PyOrbitalModel = PyOrbitalModel
 
     distance_models = importlib.import_module("sat_com_trajectopy.distance_models")
     model_class = distance_models.SkLearningDistanceModel

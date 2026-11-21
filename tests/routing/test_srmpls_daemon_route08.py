@@ -120,9 +120,7 @@ def test_failed_apply_batch_does_not_commit_cache():
         sids={},
         sr_lfib={
             40: [
-                _FakeLFIBEntry(
-                    "ip route replace 10.40.0.1/32 via 10.0.0.2 dev sat40.1"
-                )
+                _FakeLFIBEntry("ip route replace 10.40.0.1/32 via 10.0.0.2 dev sat40.1")
             ]
         },
     )

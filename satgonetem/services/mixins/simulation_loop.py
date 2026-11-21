@@ -18,7 +18,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 from satgonetem.services.simulation_timing import tick_delay
 from satgonetem.utils.constants import MAX_WORKERS
@@ -45,6 +45,12 @@ def ensure_simulation_lock(owner: object) -> threading.RLock:
 
 class SimulationLoopMixin:
     """SimulationLoop functionality."""
+
+    _sim_thread: threading.Thread | None
+    _stop_evt: threading.Event
+    update_factor: float
+    project_name: str
+    last_simulation_error: BaseException | None
 
     def _get_simulation_lock(self) -> threading.RLock:
         """Return the per-instance lock serializing simulation mutations.
@@ -161,7 +167,7 @@ class SimulationLoopMixin:
         finally:
             self.set_running(False)
 
-    def get_last_simulation_error(self) -> Optional[BaseException]:
+    def get_last_simulation_error(self) -> BaseException | None:
         """Return the most recent exception raised by a loop tick.
 
         Returns ``None`` until a tick fails. The error is retained after later

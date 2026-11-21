@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import time
-from typing import Callable, Optional
+from collections.abc import Callable
 
 import grpc
 from google.protobuf import empty_pb2
@@ -23,9 +23,9 @@ class GoNetEmLifecycleMixin(GoNetEmClientMixin):
         self,
         nodes: list,
         workers: int = 64,
-        progress_cb: Optional[Callable[[str, int, int], None]] = None,
+        progress_cb: Callable[[str, int, int], None] | None = None,
         controller: bool = False,
-        links: Optional[list] = None,
+        links: list | None = None,
     ) -> tuple[float, float]:
         """Open the project on the GoNetem server and run TopologyRun.
 
@@ -76,14 +76,11 @@ class GoNetEmLifecycleMixin(GoNetEmClientMixin):
                 links=links,
             )
             with open(project_file, "rb") as fd:
-                open_req = netem_pb2.OpenRequest(
-                    name=self.project_name, data=fd.read()
-                )
+                open_req = netem_pb2.OpenRequest(name=self.project_name, data=fd.read())
             open_resp = client.ProjectOpen(open_req)
             if open_resp.status.code == netem_pb2.StatusCode.ERROR:
                 raise RuntimeError(
-                    f"GoNetEmLauncher: ProjectOpen failed: "
-                    f"{open_resp.status.error}"
+                    f"GoNetEmLauncher: ProjectOpen failed: {open_resp.status.error}"
                 )
             project_id = getattr(open_resp, "id", "")
             if not project_id:
@@ -170,9 +167,7 @@ class GoNetEmLifecycleMixin(GoNetEmClientMixin):
             if self._client is not None and self._request is not None:
                 self.force_close_project()
         except Exception as exc:
-            logging.error(
-                "GoNetEmLauncher: cleanup after failed start failed: %s", exc
-            )
+            logging.error("GoNetEmLauncher: cleanup after failed start failed: %s", exc)
         finally:
             self._close_transport()
             self._request = None
@@ -211,13 +206,13 @@ class GoNetEmLifecycleMixin(GoNetEmClientMixin):
         self,
         links: list,
         workers: int = 64,
-        progress_cb: Optional[Callable[[str, int, int], None]] = None,
+        progress_cb: Callable[[str, int, int], None] | None = None,
     ) -> None:
         """No-op: GoNetem already wired links during TopologyRun."""
 
     def close_project(
         self,
-        progress_cb: Optional[Callable[[str, int, int], None]] = None,
+        progress_cb: Callable[[str, int, int], None] | None = None,
     ) -> None:
         if self._client is None or self._request is None:
             return
@@ -260,7 +255,7 @@ class GoNetEmLifecycleMixin(GoNetEmClientMixin):
                 exc,
             )
 
-    def update_links(self, links) -> netem_pb2.LinkUpdateManyResponse:
+    def update_links(self, links) -> netem_pb2.LinkUpdateManyResponse:  # type: ignore[name-defined]
         """Update a burst of links with chunked LinkUpdateMany calls.
 
         Args:

@@ -21,9 +21,7 @@ def test_vertical_separation_is_preserved():
 
 
 def test_antipodal_surface_points_are_earth_diameter_apart():
-    assert distance_3d_km(0.0, 0.0, 0.0, 0.0, 180.0, 0.0) == pytest.approx(
-        12742.0
-    )
+    assert distance_3d_km(0.0, 0.0, 0.0, 0.0, 180.0, 0.0) == pytest.approx(12742.0)
 
 
 def test_vectorized_distance_matches_scalar_distance():
@@ -37,7 +35,7 @@ def test_vectorized_distance_matches_scalar_distance():
     vectorized = distance_3d_km_many(lat1, lon1, alt1, lat2, lon2, alt2)
     scalar = [
         distance_3d_km(a, b, c, d, e, f)
-        for a, b, c, d, e, f in zip(lat1, lon1, alt1, lat2, lon2, alt2)
+        for a, b, c, d, e, f in zip(lat1, lon1, alt1, lat2, lon2, alt2, strict=False)
     ]
 
     assert vectorized == pytest.approx(scalar)
