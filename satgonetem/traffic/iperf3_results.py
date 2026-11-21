@@ -1,0 +1,591 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Callable, Optional
+
+import matplotlib
+import pandas as pd
+
+from satgonetem.traffic.iperf3_config import Iperf3Config
+
+matplotlib.use("Agg")  # non-GUI backend
+import matplotlib.pyplot as plt
+
+if TYPE_CHECKING:
+    pass
+
+
+class Iperf3Results:
+    """Parsed results from an iperf3 JSON output.
+
+    Provides typed property getters for all TCP and UDP metrics, interval-
+    level DataFrames for time-series analysis, and methods to plot
+    individual metrics to files.
+
+    All summary metrics are derived from the 'end' section of the iperf3
+    JSON (the most reliable aggregated values). Time-series properties pull
+    from the flattened interval DataFrames.
+    """
+
+    _BPS_TO_MBPS: float = 1_000_000.0
+    _BYTES_TO_MB: float = 1_000_000.0
+    _BYTES_TO_KB: float = 1_000.0
+    _USEC_TO_MS: float = 1_000.0
+
+    def __init__(self, raw_json: str, config: Iperf3Config) -> None:
+        """
+        Args:
+            raw_json: Raw JSON string from iperf3 --json client output.
+            config: The Iperf3Config instance used to produce this result.
+
+        Raises:
+            ValueError: If raw_json is empty or cannot be parsed as JSON.
+        """
+        if not raw_json or not raw_json.strip():
+            raise ValueError(
+                "iperf3 returned empty output; the flow may have failed."
+            )
+        try:
+            self._data: dict = json.loads(raw_json)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"Failed to parse iperf3 JSON output: {exc}"
+            ) from exc
+
+        self._config = config
+        self._protocol: str = str(
+            self._data.get("start", {})
+            .get("test_start", {})
+            .get("protocol", config.protocol)
+        ).upper()
+        self._df_streams, self._df_summaries = self._flatten_intervals()
+
+        # Set by Iperf3Flow: which side's JSON this is ("client" or "server")
+        # and what iperf3 printed around the client's JSON (its warnings).
+        self.json_side: Optional[str] = None
+        self.client_notes: Optional[str] = None
+
+    def _flatten_intervals(self) -> tuple[pd.DataFrame, pd.DataFrame]:
+        """Flatten iperf3 intervals into per-stream and per-summary DataFrames.
+
+        Returns:
+            A 2-tuple (df_streams, df_summaries). Each row in df_streams
+            represents one stream measurement for one interval, annotated
+            with _t (end timestamp) and _label (socket identifier). Rows in
+            df_summaries represent the aggregated sum/sum_sent/sum_received
+            entries per interval.
+        """
+        intervals = self._data.get("intervals", [])
+        stream_rows: list[dict] = []
+        sum_rows: list[dict] = []
+
+        for it in intervals:
+            for s in it.get("streams", []):
+                if s.get("omitted", False):
+                    continue
+                row = dict(s)
+                row["_t"] = s.get("end", s.get("start"))
+                row["_label"] = f"Socket {s.get('socket', '?')}"
+                stream_rows.append(row)
+            for sum_key in (
+                "sum",
+                "sum_sent",
+                "sum_received",
+                "sum_bidir",
+                "sum_bidir_reverse",
+            ):
+                if sum_key in it:
+                    entry = dict(it[sum_key])
+                    if entry.get("omitted", False):
+                        continue
+                    entry["_t"] = entry.get("end", entry.get("start"))
+                    entry["_label"] = sum_key
+                    sum_rows.append(entry)
+
+        df_streams = pd.DataFrame(stream_rows) if stream_rows else pd.DataFrame()
+        df_summaries = pd.DataFrame(sum_rows) if sum_rows else pd.DataFrame()
+        return df_streams, df_summaries
+
+    def _end(self) -> dict:
+        """Return the 'end' section of the iperf3 JSON result.
+
+        Returns:
+            The end summary dict, or an empty dict if absent.
+        """
+        return self._data.get("end", {})
+
+    def _col_mean(self, df: pd.DataFrame, col: str, default: float = 0.0) -> float:
+        """Return the mean of a DataFrame column, falling back to default.
+
+        Args:
+            df: Source DataFrame.
+            col: Column name to aggregate.
+            default: Value returned when the column is absent or fully null.
+
+        Returns:
+            The column mean as a float, or default.
+        """
+        if df.empty or col not in df.columns:
+            return default
+        s = df[col].dropna()
+        return float(s.mean()) if not s.empty else default
+
+    def _col_max(self, df: pd.DataFrame, col: str, default: float = 0.0) -> float:
+        """Return the max of a DataFrame column, falling back to default.
+
+        Args:
+            df: Source DataFrame.
+            col: Column name to aggregate.
+            default: Value returned when the column is absent or fully null.
+
+        Returns:
+            The column maximum as a float, or default.
+        """
+        if df.empty or col not in df.columns:
+            return default
+        s = df[col].dropna()
+        return float(s.max()) if not s.empty else default
+
+    def _col_min(self, df: pd.DataFrame, col: str, default: float = 0.0) -> float:
+        """Return the min of a DataFrame column, falling back to default.
+
+        Args:
+            df: Source DataFrame.
+            col: Column name to aggregate.
+            default: Value returned when the column is absent or fully null.
+
+        Returns:
+            The column minimum as a float, or default.
+        """
+        if df.empty or col not in df.columns:
+            return default
+        s = df[col].dropna()
+        return float(s.min()) if not s.empty else default
+
+    def _primary_df(self) -> pd.DataFrame:
+        """Return the best available interval DataFrame for scalar aggregates.
+
+        Returns:
+            df_summaries when it has rows, otherwise df_streams.
+        """
+        return self._df_summaries if not self._df_summaries.empty else self._df_streams
+
+    # ---- Metadata ----
+
+    @property
+    def protocol(self) -> str:
+        """Transport protocol used in the test: 'TCP' or 'UDP'."""
+        return self._protocol
+
+    @property
+    def duration_seconds(self) -> float:
+        """Nominal test duration reported by iperf3 in seconds."""
+        return float(
+            self._data.get("start", {})
+            .get("test_start", {})
+            .get("duration", self._config.duration)
+        )
+
+    @property
+    def num_streams(self) -> int:
+        """Number of parallel streams used in the test."""
+        return int(
+            self._data.get("start", {})
+            .get("test_start", {})
+            .get("num_streams", self._config.parallel)
+        )
+
+    # ---- Shared throughput metrics (TCP + UDP) ----
+
+    def _summary_series(self) -> Optional[pd.DataFrame]:
+        """Return one consistent interval summary series, if available.
+
+        Prefers the aggregate ``sum`` rows, then sender/receiver summaries.
+        Using one label avoids mixing three different rate series per interval.
+
+        Returns:
+            The selected summary DataFrame, or None when no summary is present.
+        """
+        if self._df_summaries.empty or "_label" not in self._df_summaries.columns:
+            return None
+        for label in ("sum", "sum_received", "sum_sent"):
+            series = self._df_summaries[self._df_summaries["_label"] == label]
+            if not series.empty:
+                return series
+        return None
+
+    @property
+    def avg_throughput_mbps(self) -> float:
+        """Mean throughput in Mbps, excluding omitted warm-up intervals."""
+        series = self._summary_series()
+        if (
+            series is not None
+            and "bytes" in series.columns
+            and "seconds" in series.columns
+        ):
+            total_seconds = float(series["seconds"].sum())
+            if total_seconds > 0:
+                return (
+                    float(series["bytes"].sum())
+                    * 8.0
+                    / total_seconds
+                    / self._BPS_TO_MBPS
+                )
+        return self._col_mean(self._primary_df(), "bits_per_second") / self._BPS_TO_MBPS
+
+    @property
+    def max_throughput_mbps(self) -> float:
+        """Peak interval throughput in Mbps."""
+        return self._col_max(self._primary_df(), "bits_per_second") / self._BPS_TO_MBPS
+
+    @property
+    def min_throughput_mbps(self) -> float:
+        """Minimum interval throughput in Mbps."""
+        return self._col_min(self._primary_df(), "bits_per_second") / self._BPS_TO_MBPS
+
+    @property
+    def pmtu(self) -> int:
+        """Path MTU in bytes taken from the last stream interval.
+
+        Returns:
+            Path MTU as an integer, or 0 if not present in the data.
+        """
+        if not self._df_streams.empty and "pmtu" in self._df_streams.columns:
+            vals = self._df_streams["pmtu"].dropna()
+            if not vals.empty:
+                return int(vals.iloc[-1])
+        return 0
+
+    # ---- TCP-specific metrics ----
+
+    @property
+    def total_bytes_sent(self) -> int:
+        """Total bytes sent (TCP). Derived from end.sum_sent."""
+        return int(self._end().get("sum_sent", {}).get("bytes", 0))
+
+    @property
+    def total_bytes_received(self) -> int:
+        """Total bytes received (TCP). Derived from end.sum_received."""
+        return int(self._end().get("sum_received", {}).get("bytes", 0))
+
+    @property
+    def total_retransmits(self) -> int:
+        """Total TCP retransmissions across the entire test."""
+        return int(self._end().get("sum_sent", {}).get("retransmits", 0))
+
+    @property
+    def avg_rtt_ms(self) -> float:
+        """Mean TCP round-trip time across all stream intervals in ms."""
+        return self._col_mean(self._df_streams, "rtt") / self._USEC_TO_MS
+
+    @property
+    def max_rtt_ms(self) -> float:
+        """Maximum TCP round-trip time across all stream intervals in ms."""
+        return self._col_max(self._df_streams, "rtt") / self._USEC_TO_MS
+
+    @property
+    def avg_rtt_var_us(self) -> float:
+        """Mean TCP RTT variance in microseconds."""
+        return self._col_mean(self._df_streams, "rttvar")
+
+    @property
+    def avg_cwnd_bytes(self) -> float:
+        """Mean TCP send congestion window size in bytes."""
+        return self._col_mean(self._df_streams, "snd_cwnd")
+
+    @property
+    def avg_snd_wnd_bytes(self) -> float:
+        """Mean TCP send window size in bytes."""
+        return self._col_mean(self._df_streams, "snd_wnd")
+
+    # ---- UDP-specific metrics ----
+
+    @property
+    def total_bytes(self) -> int:
+        """Total UDP payload bytes, preferring the receiver summary."""
+        end = self._end()
+        for key in ("sum_received", "sum_sent", "sum"):
+            value = end.get(key, {}).get("bytes")
+            if value:
+                return int(value)
+        return 0
+
+    @property
+    def total_packets(self) -> int:
+        """Total UDP packets transmitted. Derived from end.sum."""
+        return int(self._end().get("sum", {}).get("packets", 0))
+
+    @property
+    def avg_jitter_ms(self) -> float:
+        """Mean one-way jitter in milliseconds (UDP). Derived from end.sum."""
+        return float(self._end().get("sum", {}).get("jitter_ms", 0.0))
+
+    @property
+    def total_lost_packets(self) -> int:
+        """Total lost UDP packets. Derived from end.sum."""
+        return int(self._end().get("sum", {}).get("lost_packets", 0))
+
+    @property
+    def avg_loss_percent(self) -> float:
+        """Average UDP packet loss percentage. Derived from end.sum."""
+        return float(self._end().get("sum", {}).get("lost_percent", 0.0))
+
+    @property
+    def total_out_of_order(self) -> int:
+        """Total out-of-order UDP packets, aggregated across end streams."""
+        end = self._end()
+        total = sum(
+            int(stream.get("udp", {}).get("out_of_order", 0) or 0)
+            for stream in end.get("streams", [])
+        )
+        if total:
+            return total
+        return int(end.get("sum", {}).get("out_of_order", 0) or 0)
+
+    # ---- DataFrame accessors ----
+
+    def get_interval_dataframe(self) -> pd.DataFrame:
+        """Return per-stream interval data as a copy of the internal DataFrame.
+
+        Each row is one stream measurement for one reporting interval.
+        Columns include all iperf3 stream fields plus _t (end timestamp in
+        seconds) and _label (e.g. 'Socket 5').
+
+        Returns:
+            A pandas DataFrame copy.
+        """
+        return self._df_streams.copy()
+
+    def get_summary_dataframe(self) -> pd.DataFrame:
+        """Return per-interval summary data as a copy of the internal DataFrame.
+
+        Each row is one aggregated interval entry (sum, sum_sent,
+        sum_received, etc.) with _t and _label columns added.
+
+        Returns:
+            A pandas DataFrame copy.
+        """
+        return self._df_summaries.copy()
+
+    # ---- Plotting ----
+
+    def _metric_map(self) -> dict[str, tuple[str, Callable]]:
+        """Return the protocol-appropriate metric label and transform map.
+
+        Returns:
+            A dict mapping iperf3 JSON field names to (axis_label, transform)
+            tuples, where transform converts raw units to display units.
+        """
+        def _id(x: Any) -> Any:
+            return x
+
+        if self._protocol == "UDP":
+            return {
+                "bits_per_second": ("Throughput (Mbps)", lambda x: x / 1_000_000),
+                "bytes": ("Bytes (MB)", lambda x: x / 1_000_000),
+                "packets": ("Packets", _id),
+                "jitter_ms": ("Jitter (ms)", _id),
+                "lost_packets": ("Lost Packets", _id),
+                "lost_percent": ("Loss (%)", _id),
+                "out_of_order": ("Out-of-Order Packets", _id),
+                "pmtu": ("Path MTU (bytes)", _id),
+            }
+        return {
+            "bits_per_second": ("Throughput (Mbps)", lambda x: x / 1_000_000),
+            "bytes": ("Bytes (MB)", lambda x: x / 1_000_000),
+            "retransmits": ("Retransmits (count)", _id),
+            "snd_cwnd": ("Send CWnd (KB)", lambda x: x / 1_000),
+            "snd_wnd": ("Send Window (KB)", lambda x: x / 1_000),
+            "rtt": ("RTT (ms)", lambda x: x / 1_000),
+            "rttvar": ("RTT Var (us)", _id),
+            "pmtu": ("Path MTU (bytes)", _id),
+        }
+
+    def plot_metric(
+        self,
+        metric: str,
+        output_dir: str = "/tmp/results",
+        file_stem: str = "iperf3",
+        use_summary: bool = True,
+        fmt: str = "png",
+    ) -> Optional[str]:
+        """Plot a single time-series metric and save it to a file.
+
+        Args:
+            metric: iperf3 JSON field name to plot (e.g. 'bits_per_second',
+                'rtt', 'jitter_ms').
+            output_dir: Directory where the output file is written. Created
+                if it does not exist.
+            file_stem: Base filename stem. Output path is
+                <output_dir>/<file_stem>_<metric>.<fmt>.
+            use_summary: When True, prefers interval summary rows
+                (sum/sum_sent) over per-stream rows. Falls back to per-stream
+                data when summaries are absent.
+            fmt: File format for the output image. E.g. 'png', 'pdf'.
+
+        Returns:
+            Absolute path of the saved plot file, or None if the metric is
+            not present in the recorded data.
+
+        Raises:
+            OSError: If the output directory cannot be created.
+        """
+        mmap = self._metric_map()
+        if metric not in mmap:
+            return None
+
+        df = (
+            self._df_summaries
+            if (use_summary and not self._df_summaries.empty)
+            else self._df_streams
+        )
+        if df.empty or metric not in df.columns or df[metric].isna().all():
+            return None
+
+        pretty, transform = mmap[metric]
+        tcol = (
+            "end"
+            if "end" in df.columns
+            else ("_t" if "_t" in df.columns else "seconds")
+        )
+
+        out_path = Path(output_dir)
+        out_path.mkdir(parents=True, exist_ok=True)
+
+        fig, ax = plt.subplots(figsize=(10, 5))
+        for label, group in df.groupby("_label"):
+            ax.plot(group[tcol], transform(group[metric]), label=str(label))
+        ax.set_xlabel("Time (s)")
+        ax.set_ylabel(pretty)
+        ax.set_title(f"{self._protocol} - {pretty}")
+        ax.legend()
+        ax.grid(True)
+
+        fpath = out_path / f"{file_stem}_{metric}.{fmt}"
+        fig.savefig(fpath, bbox_inches="tight", dpi=150)
+        plt.close(fig)
+        return str(fpath)
+
+    def plot_all(
+        self,
+        output_dir: str = "/tmp/results",
+        file_stem: str = "iperf3",
+        fmt: str = "png",
+    ) -> list[str]:
+        """Plot all available metrics to separate files.
+
+        Iterates over all protocol-appropriate metrics and saves one file
+        per metric. Metrics absent from the recorded data are silently
+        skipped.
+
+        Args:
+            output_dir: Directory where plot files are written.
+            file_stem: Base filename stem shared by all output files.
+            fmt: File format for all output images. E.g. 'png', 'pdf'.
+
+        Returns:
+            List of absolute paths of all successfully saved plot files.
+        """
+        saved: list[str] = []
+        for metric in self._metric_map():
+            path = self.plot_metric(metric, output_dir, file_stem, fmt=fmt)
+            if path:
+                saved.append(path)
+        return saved
+
+    def print_summary(self) -> None:
+        """Print a human-readable summary of all test results to stdout."""
+        proto = self._protocol
+        print("=" * 60)
+        print(f"          {proto} IPERF3 TEST RESULTS")
+        print("=" * 60)
+        print(f"Protocol:              {proto}")
+        print(f"Duration:              {self.duration_seconds:.1f} s")
+        print(f"Parallel streams:      {self.num_streams}")
+        print(f"Avg Throughput:        {self.avg_throughput_mbps:.2f} Mbps")
+        print(f"Max Throughput:        {self.max_throughput_mbps:.2f} Mbps")
+        print(f"Min Throughput:        {self.min_throughput_mbps:.2f} Mbps")
+        if proto == "TCP":
+            print(
+                f"Total Bytes Sent:      {self.total_bytes_sent / self._BYTES_TO_MB:.2f} MB"
+            )
+            print(
+                f"Total Bytes Received:  {self.total_bytes_received / self._BYTES_TO_MB:.2f} MB"
+            )
+            print(f"Total Retransmits:     {self.total_retransmits}")
+            print(f"Avg RTT:               {self.avg_rtt_ms:.2f} ms")
+            print(f"Max RTT:               {self.max_rtt_ms:.2f} ms")
+            print(f"Avg Send CWnd:         {self.avg_cwnd_bytes / self._BYTES_TO_KB:.2f} KB")
+        elif proto == "UDP":
+            print(
+                f"Total Bytes:           {self.total_bytes / self._BYTES_TO_MB:.2f} MB"
+            )
+            print(f"Total Packets:         {self.total_packets}")
+            print(f"Avg Jitter:            {self.avg_jitter_ms:.3f} ms")
+            print(f"Lost Packets:          {self.total_lost_packets}")
+            print(f"Avg Loss:              {self.avg_loss_percent:.2f} %")
+            print(f"Out of Order:          {self.total_out_of_order}")
+        if self.pmtu:
+            print(f"Path MTU:              {self.pmtu} bytes")
+        print("=" * 60)
+
+    def to_json(self) -> dict[str, Any]:
+        """Return a JSON-serializable dict of iperf3 results and configuration.
+
+        The 'summary' key holds the computed scalar metrics derived from the
+        iperf3 'end' section. Protocol-specific keys are included only for the
+        relevant protocol. The 'raw' key holds the complete iperf3 JSON output
+        as a dict.
+
+        Returns:
+            A dict with keys 'config', 'summary', and 'raw'. Suitable for
+            passing directly to json.dumps().
+        """
+        summary: dict[str, Any] = {
+            "protocol": self._protocol,
+            "duration_seconds": self.duration_seconds,
+            "num_streams": self.num_streams,
+            "avg_throughput_mbps": self.avg_throughput_mbps,
+            "max_throughput_mbps": self.max_throughput_mbps,
+            "min_throughput_mbps": self.min_throughput_mbps,
+            "pmtu": self.pmtu,
+        }
+        if self._protocol == "TCP":
+            summary.update({
+                "total_bytes_sent": self.total_bytes_sent,
+                "total_bytes_received": self.total_bytes_received,
+                "total_retransmits": self.total_retransmits,
+                "avg_rtt_ms": self.avg_rtt_ms,
+                "max_rtt_ms": self.max_rtt_ms,
+                "avg_rtt_var_us": self.avg_rtt_var_us,
+                "avg_cwnd_bytes": self.avg_cwnd_bytes,
+                "avg_snd_wnd_bytes": self.avg_snd_wnd_bytes,
+            })
+        elif self._protocol == "UDP":
+            summary.update({
+                "total_bytes": self.total_bytes,
+                "total_packets": self.total_packets,
+                "avg_jitter_ms": self.avg_jitter_ms,
+                "total_lost_packets": self.total_lost_packets,
+                "avg_loss_percent": self.avg_loss_percent,
+                "total_out_of_order": self.total_out_of_order,
+            })
+        return {
+            "config": {
+                "protocol": self._config.protocol,
+                "duration": self._config.duration,
+                "bandwidth_mbps": self._config.bandwidth_mbps,
+                "parallel": self._config.parallel,
+                "interval": self._config.interval,
+                "port": self._config.port,
+            },
+            "summary": summary,
+            "raw": self._data,
+        }
+
+    def __repr__(self) -> str:
+        return (
+            f"Iperf3Results(protocol={self._protocol!r}, "
+            f"avg_throughput_mbps={self.avg_throughput_mbps:.2f})"
+        )

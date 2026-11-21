@@ -10,6 +10,10 @@ Every tool exposes:
 - `*Results` - parses the raw output from the tool and exposes typed properties.
 - `*Flow` - wraps the call in a daemon thread so you can start it and poll.
 
+Flows implement the `traffic.flow.Flow` protocol and share a `ThreadedFlow`
+lifecycle. Importing `satgonetem.traffic` is lazy: pandas/matplotlib load only
+when iperf3 result/plot APIs are used.
+
 All three are also exposed on `TopologyManager` as convenience methods. Each method accepts a single node or a list of nodes for both `source` and `destination`, starts a flow for every (source, destination) pair, and always returns a list of flow objects.
 
 ```python

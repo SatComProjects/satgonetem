@@ -1,6 +1,6 @@
 # 0005 — Traffic subsystem
 
-- Status: Proposed
+- Status: Implemented
 - Date: 2026-11-21
 - Depends on: 0001, 0002, 0003
 - Supersedes: —
@@ -59,3 +59,30 @@ eagerly imports pandas and matplotlib.
 uv run --frozen --extra dev pytest -q tests/traffic
 uv run --frozen --extra dev pytest -q --cov=satgonetem/traffic --cov-fail-under=80
 ```
+
+## Implementation result (2026-11-21)
+
+- Added `traffic/flow.py` with a runtime-checkable `Flow` protocol and shared
+  `ThreadedFlow` lifecycle; Ping and hping3 now inherit it.
+- `FlowScheduler` uses `join`/`is_alive`/`discard_result` instead of private
+  `_thread`/`_lock`/`_result` access.
+- Split iperf3 into `iperf3_ports`, `iperf3_config`, `iperf3_io`,
+  `iperf3_results`, `iperf3_flow`, `iperf3_runner`, and `iperf3_plots`.
+  `iperf3_utils` remains a compatibility facade.
+- Made the `satgonetem.traffic` package entry point lazy, so importing it no
+  longer loads pandas/matplotlib.
+- Added plot-generation and direct result-plot tests; traffic coverage is
+  86.85% with 256 tests. Full suite: 1194 passed, 76.98% coverage.
+- Split hping3 configuration/results into `hping3_types.py`; its flow module is
+  now ~110 lines.
+- Remaining cohesion exception: `iperf3_results.py` is still ~590 lines
+  because metric properties and presentation are a single public result
+  object. A follow-up parser/presenter split is tracked; command, I/O, flow,
+  runner, port, and plot modules are separated.
+
+## Known behavior gaps intentionally preserved
+
+- Ping/hping3 still kill all same-named processes on the source; iperf3 scopes
+  its kill by port.
+- `FlowScheduler` timeout defaults remain `None`; changing them requires a
+  separate behavior spec.

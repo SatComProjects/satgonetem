@@ -13,7 +13,7 @@ recorded in [../adr/](../adr/).
 | [0002 — Test architecture](0002-test-architecture.md) | 1 | Implemented |
 | [0003 — External boundaries](0003-external-boundaries.md) | 2 | Implemented |
 | [0004 — Routing subsystem](0004-routing.md) | 3 | Implemented |
-| [0005 — Traffic subsystem](0005-traffic.md) | 4 | Proposed |
+| [0005 — Traffic subsystem](0005-traffic.md) | 4 | Implemented |
 | [0006 — Services and TopologyManager](0006-services.md) | 5 | Proposed |
 | [0007 — Launchers, builders, utils](0007-launchers-builders-utils.md) | 6 | Proposed |
 | [0008 — Enforcement and final validation](0008-enforcement.md) | 7 | Proposed |
