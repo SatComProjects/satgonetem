@@ -85,8 +85,6 @@ uv run --frozen --extra dev pytest -q --cov=satgonetem --cov-fail-under=65
   `ospf_daemon.open` patches, and the tautological link-budget assertion.
 - Coverage floor raised from 62% to 65%; CI has a separate manual
   `Extended tests` job for slow/benchmark tests.
-- Characterization exposed real defects that were not fixed in this phase:
-  P4 edge building converts names/MACs with `safe_int`; `NodeTerminalBridge`
-  logs to stdout; shared-memory graph names are fixed; `get_management_interface`
-  ignores `controller_node_iface_pattern`; and polar coverage geometry is
-  degenerate. These are tracked for the behavior/spec phases.
+- Characterization exposed real defects; the first batch was fixed in
+  [Spec 0009](0009-defect-fixes.md). Remaining behavior questions stay in the
+  later subsystem specs.

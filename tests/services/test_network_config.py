@@ -131,6 +131,26 @@ class TestPersistence:
         assert config.link_txqueuelen == 1000
 
 
+class TestControllerInterfacePattern:
+    def test_default_pattern_selects_controller_interface_index(self):
+        config = NetworkConfig()
+
+        assert config.controller_node_iface_pattern == "eth{node_id}"
+
+    def test_accepts_custom_pattern_with_node_id_placeholder(self):
+        config = NetworkConfig(controller_node_iface_pattern="mgmt{node_id}")
+
+        assert config.controller_node_iface_pattern.format(node_id=50007) == "mgmt50007"
+
+    @pytest.mark.parametrize(
+        "pattern",
+        ["eth0", "mgmt{iface}", "mgmt{node_id", "mgmt{node_id:d}"],
+    )
+    def test_rejects_invalid_patterns(self, pattern):
+        with pytest.raises(ValueError, match="controller_node_iface_pattern"):
+            NetworkConfig(controller_node_iface_pattern=pattern)
+
+
 class TestSampleTopologies:
     def test_sample_topologies_are_discovered(self):
         assert SAMPLE_TOPOLOGIES

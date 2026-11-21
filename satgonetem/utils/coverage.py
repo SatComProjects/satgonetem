@@ -53,6 +53,20 @@ def coverage_ring_from_elevation(
     lon0 = math.radians(lon0_deg)
     sin_lat0, cos_lat0 = math.sin(lat0), math.cos(lat0)
 
+    # At an exact pole the standard boundary formula is singular: every
+    # bearing maps to the same longitude. The visible boundary is a parallel at
+    # colatitude psi; return it as a closed ring around the pole.
+    if abs(cos_lat0) < 1e-12:
+        pole_lat = math.copysign(math.pi / 2 - psi, sin_lat0)
+        num = max(int(n_pts), 2)
+        lon = lon0 + np.linspace(-np.pi, np.pi, num, endpoint=True)
+        lat = np.full(num, pole_lat)
+        # Close through the pole for the planar polygon estimator.
+        pole = math.copysign(math.pi / 2, sin_lat0)
+        lon = np.append(lon, [lon0 + np.pi, lon0 - np.pi])
+        lat = np.append(lat, [pole, pole])
+        return np.degrees(lon), np.degrees(lat), True
+
     lat = np.arcsin(sin_lat0 * cospsi + cos_lat0 * sinpsi * np.cos(bearings))
     lon = lon0 + np.arctan2(
         np.sin(bearings) * sinpsi * cos_lat0,
@@ -72,22 +86,19 @@ def coverage_ring_from_elevation(
         lon = np.array(lon)
         lat = np.array(lat)
 
-        # Expand range for seamless wrapping when rasterizing
+        # Expand range for seamless wrapping when rasterizing.
         lon = np.insert(lon, 0, -2 * np.pi)
         lon = np.append(lon, 2 * np.pi)
         lon = np.insert(lon, 0, -2 * np.pi)
         lon = np.append(lon, 2 * np.pi)
 
-        if north:
-            lat = np.insert(lat, 0, np.pi)
-            lat = np.append(lat, np.pi)
-            lat = np.insert(lat, 0, np.pi)
-            lat = np.append(lat, np.pi)
-        else:
-            lat = np.insert(lat, 0, -np.pi)
-            lat = np.append(lat, -np.pi)
-            lat = np.insert(lat, 0, -np.pi)
-            lat = np.append(lat, -np.pi)
+        # Close through the geodetic pole; +/-180 latitude is not a valid
+        # geographic coordinate and corrupts polygon coverage.
+        pole = math.copysign(math.pi / 2, 1.0 if north else -1.0)
+        lat = np.insert(lat, 0, pole)
+        lat = np.append(lat, pole)
+        lat = np.insert(lat, 0, pole)
+        lat = np.append(lat, pole)
 
     lat_deg = np.degrees(lat)
     lon_deg = np.degrees(lon)

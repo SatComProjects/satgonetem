@@ -284,5 +284,11 @@ class ControllerMixin:
         return self.build_controller_ip(node_id)
 
     def get_management_interface(self, node_id: int) -> str:
-        """Get the management interface for a given node ID."""
-        return "eth" + str(50000 + node_id)
+        """Get the controller interface name for a node.
+
+        ``controller_node_iface_pattern`` is formatted with the controller
+        interface index (``50000 + node_id``), matching the interface generated
+        by the GoNetEm controller switch links.
+        """
+        pattern = getattr(self, "controller_node_iface_pattern", "eth{node_id}")
+        return pattern.format(node_id=50000 + node_id)

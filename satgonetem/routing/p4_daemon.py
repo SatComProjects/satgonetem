@@ -17,7 +17,38 @@ def safe_int(x, default=0):
     return int(x)
 
 def safe_ip(x):
-    return x if x is not None else "0.0.0.0"
+    return x if x else "0.0.0.0"
+
+
+def mac_to_int(value) -> int:
+    """Convert a MAC address string to an integer, defaulting to zero.
+
+    Accepts colon- or dash-separated 48-bit addresses. Invalid or missing
+    values map to ``0`` so a malformed interface does not abort graph export.
+    """
+    if value is None:
+        return 0
+    cleaned = str(value).strip().replace(":", "").replace("-", "")
+    if not cleaned:
+        return 0
+    try:
+        return int(cleaned, 16)
+    except ValueError:
+        return 0
+
+
+def interface_port(interface: Interface) -> int:
+    """Return the numeric suffix of an interface name, or zero.
+
+    Emulated interface names are ``<node>.<id>``; the suffix is the
+    container-side interface index used by the graph reader.
+    """
+    name = getattr(interface, "name", "") or ""
+    suffix = str(name).rsplit(".", 1)[-1]
+    try:
+        return int(suffix)
+    except ValueError:
+        return 0
 
 def build_edge_from_link(link: Link) -> dict:
     interface_source: Interface = link.peer_interfaces[0]
@@ -26,16 +57,13 @@ def build_edge_from_link(link: Link) -> dict:
     src_ip = interface_source.ipv4
     dst_ip = interface_destination.ipv4
 
-    src_port = interface_source.name
-    dst_port = interface_destination.name
-
     src_mac, dst_mac = link.get_mac_addresses()
 
     src_node: Node = link.source
     dst_node: Node = link.target
 
-    src_name = src_node.name
-    dst_name = dst_node.name
+    src_name = safe_int(getattr(src_node, "id", None))
+    dst_name = safe_int(getattr(dst_node, "id", None))
 
     src_is_satellite = isinstance(src_node, Satellite)
     src_is_ground_station = isinstance(src_node, GroundStation)
@@ -55,34 +83,57 @@ def build_edge_from_link(link: Link) -> dict:
 
     edge = {
         "weight": 1,
-        "src_name": safe_int(src_name),
-        "dst_name": safe_int(dst_name),
+        "src_name": src_name,
+        "dst_name": dst_name,
         "src_ip": safe_ip(src_ip),
         "dst_ip": safe_ip(dst_ip),
-        "src_mac": safe_int(src_mac),
-        "dst_mac": safe_int(dst_mac),
-        "src_port": safe_int(src_port),
-        "dst_port": safe_int(dst_port),
+        "src_mac": mac_to_int(src_mac),
+        "dst_mac": mac_to_int(dst_mac),
+        "src_port": interface_port(interface_source),
+        "dst_port": interface_port(interface_destination),
         "flag_gateway": safe_int(flag_gateway),
     }
     return edge
 
 class P4Daemon(RoutingDaemon):
 
-    def __init__(self, topology_manager: TopologyManager, p4_controller_path: str):
+    def __init__(
+        self,
+        topology_manager: TopologyManager,
+        p4_controller_path: str,
+        shared_memory_name: str = "satgonetem_graph",
+    ):
         super().__init__(topology_manager)
         self.graph_shared_memory = None
         self.p4_controller_path = p4_controller_path
+        self.shared_memory_name = shared_memory_name
         # Process handle for the controller
         self.p4_controller_process: Optional[subprocess.Popen] = None
         # Logger for controller output and events
         self.logger = logging.getLogger(__name__)
 
-
+    def _release_graph_shared_memory(self) -> None:
+        """Close and unlink the owned graph segment, if any."""
+        graph = getattr(self, "graph_shared_memory", None)
+        if graph is None:
+            return
+        try:
+            graph.close()
+        except Exception:
+            self.logger.exception("Failed to close P4 graph shared memory")
+        try:
+            graph.unlink()
+        except FileNotFoundError:
+            pass
+        except Exception:
+            self.logger.exception("Failed to unlink P4 graph shared memory")
+        finally:
+            self.graph_shared_memory = None
 
     def init(self, max_workers: int = 4) -> bool:
+        self._release_graph_shared_memory()
         self.graph_shared_memory = GraphSharedMemory(
-            name="satgonetem_graph",
+            name=self.shared_memory_name,
             max_edges=len(self.topology.links),
             create=True
         )
@@ -90,6 +141,7 @@ class P4Daemon(RoutingDaemon):
         started = self.start_p4_controller()
         if not started:
             self.logger.error("P4 controller failed to start")
+            self._release_graph_shared_memory()
             return False
 
         self.logger.info("P4 controller started")
@@ -194,4 +246,5 @@ class P4Daemon(RoutingDaemon):
 
 
     def remove(self, node: "Optional[Node]" = None, max_workers: int = 4) -> None:
-        pass
+        self.stop_p4_controller()
+        self._release_graph_shared_memory()
