@@ -1,6 +1,6 @@
 # 0007 — Launchers, builders, and utilities
 
-- Status: Proposed
+- Status: Partially implemented
 - Date: 2026-11-21
 - Depends on: 0001, 0002, 0003
 - Supersedes: —
@@ -63,3 +63,22 @@ uv run --frozen --extra dev pytest -q tests/launchers tests/utils
 uv run --frozen --extra dev pytest -q --cov=satgonetem/launchers --cov-fail-under=75
 uv build --out-dir dist
 ```
+
+## Implementation result (2026-11-21)
+
+- Aligned `NetworkLauncher.start_containers` with the concrete signature and
+  added `force_close_project`; added a fake launcher contract test.
+- Added `launchers/registry.py`; `network_launcher` now selects the backend.
+  The GoNetEm class remains dynamically resolved so existing patch points work.
+- Extracted GoNetEm project/YAML generation to `gonetem_project.py`; the
+  launcher delegates and keeps its public methods.
+- Moved geodesy, satellite coverage, shared-memory graph, and terminal bridge
+  code to `geodesy.py`, `satellite_coverage.py`,
+  `routing/graph_shared_memory.py`, and `cli/node_terminal_bridge.py`; legacy
+  module paths remain compatibility facades.
+- Launcher coverage is 75.2%; full suite 1224 passed, 79.80% coverage.
+- Packaging remains single-source in `pyproject.toml`; `setup.py` is gone.
+- **Deferred:** `gonetem_launcher.py` still contains lifecycle/gRPC methods
+  (~600 lines), and `project_builder.py` (~910 lines) still mixes objects,
+  fixtures, mesh construction, and file I/O. Both splits remain follow-up
+  work. `HILManager` continues to conform through the Phase 5 command port.

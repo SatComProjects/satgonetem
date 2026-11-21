@@ -15,7 +15,7 @@ from satgonetem.models.satellite import Satellite
 from satgonetem.ports import default_runner
 from satgonetem.services.node_terminal import NodeTerminal as NodeTerminal
 from satgonetem.utils.constants import MAX_WORKERS
-from satgonetem.utils.coverage import coverage_percentage_fast
+from satgonetem.utils.satellite_coverage import coverage_percentage_fast
 
 if TYPE_CHECKING:
     from typing import Any, Dict, List, Optional
