@@ -1,6 +1,6 @@
 # 0007 — Launchers, builders, and utilities
 
-- Status: Partially implemented
+- Status: Implemented
 - Date: 2026-11-21
 - Depends on: 0001, 0002, 0003
 - Supersedes: —
@@ -72,13 +72,17 @@ uv build --out-dir dist
   The GoNetEm class remains dynamically resolved so existing patch points work.
 - Extracted GoNetEm project/YAML generation to `gonetem_project.py`; the
   launcher delegates and keeps its public methods.
+- Split the remaining GoNetEm launcher into `gonetem_client.py` (gRPC/link
+  requests), `gonetem_lifecycle.py` (start/wire/link/close), and
+  `gonetem_cleanup.py` (Docker force-close); the launcher is now a thin
+  composition (~85 lines).
+- Split `project_builder.py` into `project_ground_objects.py`,
+  `project_mesh.py`, and `project_fixtures.py`; `project_builder` (~300 lines)
+  keeps custom-object construction and re-exports the public helpers.
 - Moved geodesy, satellite coverage, shared-memory graph, and terminal bridge
   code to `geodesy.py`, `satellite_coverage.py`,
   `routing/graph_shared_memory.py`, and `cli/node_terminal_bridge.py`; legacy
   module paths remain compatibility facades.
-- Launcher coverage is 75.2%; full suite 1224 passed, 79.80% coverage.
+- Launcher coverage is 75.86%; full suite 1224 passed, 79.91% coverage.
 - Packaging remains single-source in `pyproject.toml`; `setup.py` is gone.
-- **Deferred:** `gonetem_launcher.py` still contains lifecycle/gRPC methods
-  (~600 lines), and `project_builder.py` (~910 lines) still mixes objects,
-  fixtures, mesh construction, and file I/O. Both splits remain follow-up
-  work. `HILManager` continues to conform through the Phase 5 command port.
+- `HILManager` continues to conform through the Phase 5 command port.
