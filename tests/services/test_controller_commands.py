@@ -88,13 +88,10 @@ def test_get_management_interface_uses_50000_offset(
     assert controller_host.get_management_interface(node_id) == expected
 
 
-def test_get_management_interface_ignores_controller_node_iface_pattern() -> None:
+def test_get_management_interface_formats_controller_node_iface_pattern() -> None:
     host = _ControllerHost(controller_node_iface_pattern="mgmt{node_id}")
 
-    # GAP: docs/controller.md describes controller_node_iface_pattern as the
-    # source of the node interface name, but the implementation currently
-    # hard-codes eth{50000 + node_id}. This test pins the observed behavior.
-    assert host.get_management_interface(7) == "eth50007"
+    assert host.get_management_interface(7) == "mgmt50007"
 
 
 # ----------------------------------------------------------------------

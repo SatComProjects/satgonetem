@@ -17,6 +17,7 @@ recorded in [../adr/](../adr/).
 | [0006 — Services and TopologyManager](0006-services.md) | 5 | Proposed |
 | [0007 — Launchers, builders, utils](0007-launchers-builders-utils.md) | 6 | Proposed |
 | [0008 — Enforcement and final validation](0008-enforcement.md) | 7 | Proposed |
+| [0009 — Fix Phase 1 characterization defects](0009-defect-fixes.md) | 1.1 | Implemented |
 
 ## Rules
 

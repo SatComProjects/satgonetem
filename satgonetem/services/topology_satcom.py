@@ -148,6 +148,19 @@ class NetworkConfig:
                     f"{MAX_LINK_QUEUE_PACKETS} packets, got {value}"
                 )
 
+        pattern = self.controller_node_iface_pattern
+        if "{node_id}" not in pattern:
+            raise ValueError(
+                "controller_node_iface_pattern must contain {node_id}, "
+                f"got {pattern!r}"
+            )
+        try:
+            pattern.format(node_id=0)
+        except (KeyError, IndexError, ValueError) as exc:
+            raise ValueError(
+                f"Invalid controller_node_iface_pattern {pattern!r}: {exc}"
+            ) from exc
+
 
 class TopologyManager(
     TopologySyncMixin,

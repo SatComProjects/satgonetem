@@ -125,10 +125,10 @@ def test_safe_int_raises_for_non_numeric_text():
     [
         (None, "0.0.0.0"),
         ("10.0.0.1", "10.0.0.1"),
-        ("", ""),
+        ("", "0.0.0.0"),
     ],
 )
-def test_safe_ip_replaces_only_none(value, expected):
+def test_safe_ip_replaces_missing_values(value, expected):
     assert safe_ip(value) == expected
 
 
@@ -250,7 +250,7 @@ def test_stop_kills_process_after_wait_timeout(daemon):
 
 def test_init_returns_false_when_controller_fails(daemon, monkeypatch):
     daemon.topology.links = {0: object(), 1: object()}
-    graph = object()
+    graph = MagicMock()
     graph_cls = MagicMock(return_value=graph)
     monkeypatch.setattr(p4_daemon, "GraphSharedMemory", graph_cls)
     monkeypatch.setattr(daemon, "start_p4_controller", lambda timeout=10: False)
@@ -260,7 +260,9 @@ def test_init_returns_false_when_controller_fails(daemon, monkeypatch):
     graph_cls.assert_called_once_with(
         name="satgonetem_graph", max_edges=2, create=True
     )
-    assert daemon.graph_shared_memory is graph
+    graph.close.assert_called_once_with()
+    graph.unlink.assert_called_once_with()
+    assert daemon.graph_shared_memory is None
 
 
 def test_init_returns_true_when_controller_starts(daemon, monkeypatch):
@@ -273,3 +275,51 @@ def test_init_returns_true_when_controller_starts(daemon, monkeypatch):
     graph_cls.assert_called_once_with(
         name="satgonetem_graph", max_edges=1, create=True
     )
+
+
+def test_init_reinitializes_owned_shared_memory(daemon, monkeypatch):
+    old_graph = MagicMock()
+    new_graph = MagicMock()
+    daemon.topology.links = {0: object()}
+    daemon.graph_shared_memory = old_graph
+    graph_cls = MagicMock(return_value=new_graph)
+    monkeypatch.setattr(p4_daemon, "GraphSharedMemory", graph_cls)
+    monkeypatch.setattr(daemon, "start_p4_controller", lambda timeout=10: True)
+
+    assert daemon.init() is True
+
+    old_graph.close.assert_called_once_with()
+    old_graph.unlink.assert_called_once_with()
+    assert daemon.graph_shared_memory is new_graph
+
+
+def test_init_uses_custom_shared_memory_name(monkeypatch, topology, tmp_path):
+    custom = P4Daemon(
+        topology,
+        str(tmp_path / "controller"),
+        shared_memory_name="satgonetem-test-graph",
+    )
+    custom.topology.links = {0: object()}
+    graph_cls = MagicMock(return_value=object())
+    monkeypatch.setattr(p4_daemon, "GraphSharedMemory", graph_cls)
+    monkeypatch.setattr(custom, "start_p4_controller", lambda timeout=10: True)
+
+    assert custom.init() is True
+    graph_cls.assert_called_once_with(
+        name="satgonetem-test-graph", max_edges=1, create=True
+    )
+
+
+def test_remove_stops_controller_and_releases_shared_memory(daemon):
+    graph = MagicMock()
+    process = FakeProcess()
+    daemon.graph_shared_memory = graph
+    daemon.p4_controller_process = process
+
+    daemon.remove()
+
+    assert process.terminate_calls == 1
+    graph.close.assert_called_once_with()
+    graph.unlink.assert_called_once_with()
+    assert daemon.graph_shared_memory is None
+    assert daemon.p4_controller_process is None

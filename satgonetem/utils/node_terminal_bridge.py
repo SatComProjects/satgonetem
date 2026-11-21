@@ -38,15 +38,15 @@ def _find_python() -> str:
 
 
 def _log_error(msg: str) -> None:
-    """Write an error message to a log file and to stdout."""
+    """Write an error message to the per-process log file and stderr."""
     log_path = f"/tmp/satgonetem_bridge_{os.getpid()}.log"
     try:
         with open(log_path, "a") as fh:
             fh.write(msg + "\n")
     except Exception:
         pass
-    sys.stdout.write(msg + "\r\n")
-    sys.stdout.flush()
+    sys.stderr.write(msg + "\r\n")
+    sys.stderr.flush()
 
 
 def main() -> None:

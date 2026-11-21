@@ -336,6 +336,11 @@ The segment layout is a header (`version`, `num_edges`, `max_edges`,
 updates `num_edges`, and increments `version`. `clear()` does not reset the
 header. There is no cross-process locking; consumers should poll `version`.
 
+`P4Daemon` owns a segment named `satgonetem_graph` by default; the name can be
+overridden with the `shared_memory_name` constructor argument. Re-initializing
+the daemon, failing to start the controller, or calling `remove()` closes and
+unlinks the owned segment.
+
 ## Interactive terminal bridge
 
 `node_terminal_bridge.py` is a command-line helper, not an API:

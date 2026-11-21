@@ -26,24 +26,22 @@ def test_find_python_returns_the_current_interpreter():
     assert python == sys.executable
 
 
-def test_log_error_writes_message_to_stdout_and_log_file(monkeypatch, capsys):
-    # The docstring promises stdout; the requested "stderr" behavior is not
-    # what the current implementation does. This characterizes the real output.
+def test_log_error_writes_message_to_stderr_and_log_file(monkeypatch, capsys):
     log_file = mock_open()
     monkeypatch.setattr("builtins.open", log_file)
 
     node_terminal_bridge._log_error("bridge failure")
 
     captured = capsys.readouterr()
-    assert captured.out == "bridge failure\r\n"
-    assert captured.err == ""
+    assert captured.out == ""
+    assert captured.err == "bridge failure\r\n"
     log_file.assert_called_once_with(
         f"/tmp/satgonetem_bridge_{os.getpid()}.log", "a"
     )
     log_file().write.assert_called_once_with("bridge failure\n")
 
 
-def test_log_error_still_writes_stdout_when_log_file_cannot_be_opened(
+def test_log_error_still_writes_stderr_when_log_file_cannot_be_opened(
     monkeypatch, capsys
 ):
     def failing_open(*args, **kwargs):
@@ -54,8 +52,8 @@ def test_log_error_still_writes_stdout_when_log_file_cannot_be_opened(
     node_terminal_bridge._log_error("visible anyway")
 
     captured = capsys.readouterr()
-    assert captured.out == "visible anyway\r\n"
-    assert captured.err == ""
+    assert captured.out == ""
+    assert captured.err == "visible anyway\r\n"
 
 
 def test_main_prints_usage_to_stderr_and_exits_without_arguments(

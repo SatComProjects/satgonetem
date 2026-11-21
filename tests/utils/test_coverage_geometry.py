@@ -128,9 +128,25 @@ def test_ring_crossing_a_pole_is_flagged_and_extended() -> None:
     assert lat_deg.shape == (40,)
     assert np.any(lon_deg < -180.0)
     assert np.any(lon_deg > 180.0)
-    # Synthetic closure values use +/-180 deg latitude, which is outside the
-    # geodetic latitude range.
-    assert np.any(np.isclose(lat_deg, 180.0))
+    # Closure uses the geodetic pole, never an invalid +/-180 latitude.
+    assert np.all(lat_deg >= -90.0)
+    assert np.all(lat_deg <= 90.0)
+    assert not np.any(np.isclose(np.abs(lat_deg), 180.0))
+    assert np.any(np.isclose(lat_deg, 90.0))
+
+
+def test_ring_at_exact_north_pole_is_closed_and_valid() -> None:
+    lon_deg, lat_deg, polar_flag = coverage_ring_from_elevation(
+        90.0, 0.0, 550.0, 10.0, 72
+    )
+
+    assert polar_flag is True
+    assert np.all(np.isfinite(lon_deg))
+    assert np.all(np.isfinite(lat_deg))
+    assert np.all(lat_deg >= 75.0 - 1e-6)
+    assert np.all(lat_deg <= 90.0)
+    assert np.any(np.isclose(lat_deg, 90.0))
+    assert float(lon_deg.max() - lon_deg.min()) > 300.0
 
 
 @pytest.mark.parametrize(
@@ -222,14 +238,6 @@ def test_satellite_below_minimum_altitude_contributes_zero_coverage() -> None:
     assert coverage_percentage_fast(sats, elev_min_deg=10.0) == 0.0
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "A satellite exactly over the pole produces a degenerate ring: the "
-        "planar polygon estimator reports 0% while the spherical estimator "
-        "reports about 1.7%."
-    ),
-)
 def test_polygon_and_fast_coverage_agree_at_the_pole() -> None:
     sats = [_sat(90.0, 0.0)]
 
