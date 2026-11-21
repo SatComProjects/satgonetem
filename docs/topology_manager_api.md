@@ -7,7 +7,7 @@ Private helpers (prefixed with `_`) are excluded.
 
 ## Emulator lifecycle
 
-### `start_gonetem() -> float | None`
+### `start_gonetem() -> tuple[float, float] | None`
 
 Start the network emulator by launching containers and wiring links.
 
@@ -17,7 +17,7 @@ If `self.hil_manager` is set, HIL-managed nodes and links are excluded from
 the software launch and delegated to the HIL manager instead.
 
 **Returns**
-- `float` - elapsed wall-clock seconds on success.
+- `tuple[float, float]` - container and link setup times, in seconds, on success.
 - `None` - if the emulator is already running (no-op).
 
 ---
@@ -61,9 +61,10 @@ Signal the background loop to stop and join its thread.
 
 ---
 
-### `next_step() -> None`
+### `next_step() -> float`
 
-Advance the simulation by exactly one tick.
+Advance the simulation by exactly one tick and return the elapsed wall-clock
+time in seconds.
 
 ---
 
@@ -247,7 +248,7 @@ ground stations.
 
 ---
 
-### `get_node_IP_addresses(name: str) -> List[str]`
+### `get_node_ip_addresses(name: str) -> List[str]`
 
 Return all IPv4 addresses assigned to a node's interfaces.
 

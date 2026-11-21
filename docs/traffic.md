@@ -354,7 +354,7 @@ scheduler = FlowScheduler(
     flows,                  # list[PingFlow | Iperf3Flow | Hping3Flow]
     max_workers=100,        # maximum flows executing at the same time
     debug=False,            # print start/done/active lines to stdout
-    flow_timeout_sec=180.0, # per-flow deadline; None disables it
+    flow_timeout_sec=None,   # per-flow deadline; None disables it
     save_results=True,      # keep per-flow results in memory
 )
 ```
@@ -364,7 +364,7 @@ scheduler = FlowScheduler(
 | `flows` | `list[AnyFlow]` | - | Flows with `.delay` set. Need not be pre-sorted. |
 | `max_workers` | `int` | `100` | Thread-pool cap. Limits simultaneous executions. |
 | `debug` | `bool` | `False` | Print `[flow] START/DONE/ACTIVE` lines and a progress summary every second to stdout. |
-| `flow_timeout_sec` | `float or None` | `180.0` | Seconds before a running flow is declared failed. `None` disables. |
+| `flow_timeout_sec` | `float or None` | `None` | Seconds before a running flow is declared failed. `None` disables. |
 | `save_results` | `bool` | `True` | If `False`, do not retain successful per-flow results. Use this for very large schedules (hundreds of thousands or millions of flows) to avoid excessive memory use. Errors are still collected; `results()` is unavailable. |
 
 ### How it works

@@ -38,6 +38,12 @@ SatGoNetem bridges orbital mechanics and Linux network emulation. It computes sa
 
 - [`docs/utils.md`](docs/utils.md) — Project builder, coverage/IP helpers, connection strategies, compatibility patch
 
+**Development**
+
+- [`AGENTS.md`](AGENTS.md) — Development principles, six-stage workflow, branch policy, required commands
+- [`docs/specs/`](docs/specs/README.md) — Phase specifications, acceptance criteria, and verification
+- [`docs/adr/`](docs/adr/README.md) — Architecture decision records
+
 ## Features
 
 - Real-time satellite constellation simulation (LEO/MEO/GEO, walker and TLE-based)
