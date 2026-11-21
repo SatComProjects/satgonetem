@@ -15,7 +15,7 @@ recorded in [../adr/](../adr/).
 | [0004 — Routing subsystem](0004-routing.md) | 3 | Implemented |
 | [0005 — Traffic subsystem](0005-traffic.md) | 4 | Implemented |
 | [0006 — Services and TopologyManager](0006-services.md) | 5 | Implemented |
-| [0007 — Launchers, builders, utils](0007-launchers-builders-utils.md) | 6 | Proposed |
+| [0007 — Launchers, builders, utils](0007-launchers-builders-utils.md) | 6 | Partially implemented |
 | [0008 — Enforcement and final validation](0008-enforcement.md) | 7 | Proposed |
 | [0009 — Fix Phase 1 characterization defects](0009-defect-fixes.md) | 1.1 | Implemented |
 

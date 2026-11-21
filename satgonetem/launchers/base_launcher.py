@@ -44,8 +44,14 @@ class NetworkLauncher(ABC):
         nodes: list,
         workers: int = 64,
         progress_cb: Optional[Callable[[str, int, int], None]] = None,
-    ) -> None:
-        """Start (or provision) all node containers / processes."""
+        controller: bool = False,
+        links: Optional[list] = None,
+    ) -> tuple[float, float]:
+        """Start (or provision) all node containers / processes.
+
+        Returns:
+            ``(container_time, link_time)`` in seconds.
+        """
 
     @abstractmethod
     def wire_links(
@@ -62,6 +68,10 @@ class NetworkLauncher(ABC):
         progress_cb: Optional[Callable[[str, int, int], None]] = None,
     ) -> None:
         """Tear down all containers / processes for this project."""
+
+    @abstractmethod
+    def force_close_project(self) -> None:
+        """Best-effort teardown after a failed startup."""
 
     # Per-step link management
 

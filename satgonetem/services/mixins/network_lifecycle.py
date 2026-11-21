@@ -30,9 +30,10 @@ class NetworkLifecycleMixin:
         if self.get_gonetem_status():
             return
 
-        from satgonetem.launchers.gonetem_launcher import GoNetEmLauncher
+        from satgonetem.launchers.registry import create_launcher
 
-        launcher = GoNetEmLauncher(
+        launcher = create_launcher(
+            getattr(self, "network_launcher", "GONETEM"),
             topology_manager=self,
             server_address=self.gonetem_server,
             project_name=self.project_name,

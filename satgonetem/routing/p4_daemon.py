@@ -8,7 +8,7 @@ from typing import List, Optional
 from satgonetem.models import GroundStation, Interface, Link, Node, Satellite
 from satgonetem.ports import ProcessRunner, default_runner
 from satgonetem.routing.base_daemon import RoutingContext, RoutingDaemon
-from satgonetem.utils.graph_shared_memory import GraphSharedMemory
+from satgonetem.routing.graph_shared_memory import GraphSharedMemory
 
 
 def safe_int(x, default=0):

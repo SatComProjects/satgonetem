@@ -10,7 +10,6 @@ since it is the only launcher that needs the GoNetem .gnet format.
 
 import logging
 import os
-import tarfile
 import time
 from typing import Callable, Optional
 
@@ -19,6 +18,7 @@ from google.protobuf import empty_pb2
 
 import satgonetem.proto.netem_pb2_grpc as netem_grpc
 from satgonetem.launchers.base_launcher import NetworkLauncher
+from satgonetem.launchers.gonetem_project import GoNetEmProjectBuilder, _tbf_qos
 from satgonetem.ports import (
     CommandRunner,
     ContainerRuntime,
@@ -28,26 +28,6 @@ from satgonetem.ports import (
     default_runner,
 )
 from satgonetem.proto import netem_pb2
-
-
-def _tbf_qos(rate_kbps: int, delay_ms: int) -> tuple[int, float]:
-    """Return TBF burst bytes and BDP multiplier for a link.
-
-    gonetem computes ``limit = buffer * rate * delay / 8``. Choosing the
-    buffer factor as ``(burst + BDP) / BDP`` makes the resulting limit equal
-    to ``burst + BDP`` without changing the server.
-    """
-    rate_kbps = int(rate_kbps)
-    delay_ms = max(int(delay_ms), 1)
-    if rate_kbps <= 0:
-        return 0, 0.0
-
-    rate_bytes_per_sec = rate_kbps * 125
-    burst = rate_bytes_per_sec // 250 + 1514
-    bdp_bytes = rate_kbps * delay_ms / 8.0
-    buffer_factor = (burst + bdp_bytes) / bdp_bytes
-    return burst, buffer_factor
-
 
 # LinkUpdateMany is one RPC per burst; keep requests small enough that a
 # single response stays bounded and retries are cheap.
@@ -91,177 +71,15 @@ class GoNetEmLauncher(NetworkLauncher):
         self._connection = None
         self._command_runner = command_runner or default_runner
         self._container_runtime = container_runtime or DockerContainerRuntime()
+        self._project_builder = GoNetEmProjectBuilder(self)
 
     # Project file generation
 
-    def get_gonetem_topology(
-        self,
-        fallback: bool = False,
-        controller: bool = False,
-        nodes: Optional[list] = None,
-        links: Optional[list] = None,
-    ) -> str:
-        """Build the GoNetem network.yml content from the current topology.
+    def get_gonetem_topology(self, *args, **kwargs) -> str:
+        return self._project_builder.get_gonetem_topology(*args, **kwargs)
 
-        Args:
-            fallback: Use host networking instead of the Docker images.
-            controller: Add the controller switch and its links.
-            nodes: Optional filtered node set. When provided, only these
-                satellites/ground stations (and links between them) are
-                serialized. HIL-managed ground stations are excluded by the
-                caller.
-            links: Optional filtered link set. When omitted, all topology
-                links between the selected nodes are used.
-        """
-        tm = self._topology_manager
-        sat_type = "docker.host" if fallback else "docker.satellite"
-        gs_type = "docker.host" if fallback else "docker.gndstation"
-
-        if nodes is None:
-            satellite_nodes = list(tm.satellites.values())
-            ground_station_nodes = list(tm.ground_stations.values())
-            allowed_names = None
-        else:
-            allowed_names = {node.name for node in nodes}
-            satellite_nodes = [
-                sat for sat in tm.satellites.values() if sat.name in allowed_names
-            ]
-            ground_station_nodes = [
-                gs for gs in tm.ground_stations.values() if gs.name in allowed_names
-            ]
-
-        if links is None:
-            link_nodes = tm.links.values()
-        else:
-            link_nodes = links
-        if allowed_names is not None:
-            link_nodes = [
-                link
-                for link in link_nodes
-                if link.source.name in allowed_names
-                and link.target.name in allowed_names
-            ]
-
-        satellites = self._write_satellites(satellite_nodes, sat_type)
-        groundStations = self._write_ground_stations(
-            ground_station_nodes, gs_type, fallback=fallback
-        )
-        controller_section = self._write_controller_switch() if controller else ""
-        link_section = self._write_links(link_nodes)
-        controller_links = (
-            self._write_controller_switch_links(
-                satellite_nodes, ground_station_nodes
-            )
-            if controller
-            else ""
-        )
-
-        return (
-            "nodes: \n"
-            + satellites
-            + groundStations
-            + controller_section
-            + "links: \n"
-            + link_section
-            + controller_links
-        )
-
-    @staticmethod
-    def _write_controller_switch_links(satellites, ground_stations) -> str:
-        # Link from every node to the controller switch with high capacity and low latency
-        result = ""
-        for sat in satellites:
-            eth_id = 50000 + sat.id
-            burst, buffer = _tbf_qos(1_000_000, 1)
-            result += (
-                f" - {{peer1: Controller.{sat.id}, peer2: {sat.name}.{eth_id},"
-                f" peer1qos: {{ rate: 1000000, buffer: {buffer}, jitter: 0, delay: 1, burst: {burst}}},"
-                f" peer2qos: {{ rate: 1000000, buffer: {buffer}, jitter: 0, delay: 1, burst: {burst}}}}} \n"
-            )
-        for gs in ground_stations:
-            eth_id = 50000 + gs.id
-            burst, buffer = _tbf_qos(1_000_000, 1)
-            result += (
-                f" - {{peer1: Controller.{gs.id}, peer2: {gs.name}.{eth_id},"
-                f" peer1qos: {{ rate: 1000000, buffer: {buffer}, jitter: 0, delay: 1, burst: {burst}}},"
-                f" peer2qos: {{ rate: 1000000, buffer: {buffer}, jitter: 0, delay: 1, burst: {burst}}}}} \n"
-            )
-        return result
-
-    @staticmethod
-    def _write_controller_switch() -> str:
-        return " Controller:\n  type: ovs\n  volumes:\n  - /tmp:/tmp\n"
-
-    @staticmethod
-    def _write_satellites(satellites, sat_type: str) -> str:
-        result = ""
-        for sat in satellites:
-            image = "jariassuarez/sgnt:satellite" if not sat.image else sat.image
-            result += f" Sat{sat.id}:\n  type: {sat_type}\n  image: {image}\n  volumes:\n  - /tmp:/tmp\n"
-        return result
-
-    @staticmethod
-    def _write_ground_stations(
-        ground_stations, gs_type: str, fallback: bool = False
-    ) -> str:
-        result = ""
-        for gs in ground_stations:
-            prefix = "Gnd" if gs.type == "GroundStation" else "Usr"
-            image = gs.image
-            if not image and not fallback:
-                image = "jariassuarez/sgnt:ground-station"
-            result += f" {prefix}{gs.id}:\n  type: {gs_type}\n  image: {image}\n  volumes:\n  - /tmp:/tmp\n"
-        return result
-
-    def _write_links(self, links) -> str:
-        result = ""
-        for link in links:
-            if not getattr(link, "is_active", True):
-                continue
-            delay = max(int(link.delay), 1)
-            rate = link.get_capacity()
-            burst, buffer = _tbf_qos(rate, delay)
-            queue = f"limit: {self.netem_limit}, txqueuelen: {self.txqueuelen}"
-            result += (
-                f" - {{peer1: {link.source.name}.{link.target.id},"
-                f" peer2: {link.target.name}.{link.source.id},"
-                f" peer1qos: {{ rate: {rate}, buffer: {buffer}, jitter: 0, delay: {delay}, burst: {burst}, {queue}}},"
-                f" peer2qos: {{ rate: {rate}, buffer: {buffer}, jitter: 0, delay: {delay}, burst: {burst}, {queue}}}}}"
-                f" #Latency of {delay}ms \n"
-            )
-        return result
-
-    def generate_project(
-        self,
-        dest_dir: str,
-        controller: bool = False,
-        nodes: Optional[list] = None,
-        links: Optional[list] = None,
-    ) -> str:
-        """Write a project.gnet archive to *dest_dir* and return its path.
-
-        Args:
-            dest_dir: Directory for the generated archive.
-            controller: Add the controller switch and its links.
-            nodes: Optional filtered node set passed to
-                :meth:`get_gonetem_topology`.
-            links: Optional filtered link set passed to
-                :meth:`get_gonetem_topology`.
-        """
-        import tempfile
-
-        data = self.get_gonetem_topology(
-            controller=controller, nodes=nodes, links=links
-        )
-        with tempfile.TemporaryDirectory() as tmp:
-            network_yml = os.path.join(tmp, "network.yml")
-            with open(network_yml, "w") as fd:
-                fd.write(data)
-            fd, gnet_path = tempfile.mkstemp(suffix=".gnet", dir=dest_dir)
-            os.close(fd)
-            with tarfile.open(gnet_path, "w:gz") as tar:
-                tar.add(network_yml, arcname="network.yml")
-        return gnet_path
+    def generate_project(self, *args, **kwargs) -> str:
+        return self._project_builder.generate_project(*args, **kwargs)
 
     # Internal helpers
 

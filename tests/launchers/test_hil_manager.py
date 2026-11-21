@@ -380,3 +380,35 @@ def test_delete_sat_veth_uses_injected_command_runner():
 
     runner.run.assert_called_once()
     assert runner.run.call_args.args[0][:2] == ["nsenter", "--net=/proc/1234/ns/net"]
+
+
+def test_run_batch_helpers_raise_on_failure():
+    from types import SimpleNamespace
+
+    from satgonetem.launchers.hil_manager import _run_ip_batch, _run_tc_batch
+
+    runner = MagicMock()
+    runner.run.return_value = SimpleNamespace(returncode=1, stderr="boom")
+    with pytest.raises(RuntimeError, match="boom"):
+        _run_tc_batch(1, ["qdisc show"], runner=runner)
+    with pytest.raises(RuntimeError, match="boom"):
+        _run_ip_batch(1, ["link show"], runner=runner)
+
+    runner.run.return_value = SimpleNamespace(returncode=0, stderr="")
+    _run_tc_batch(1, ["qdisc show"], runner=runner)
+    _run_ip_batch(1, ["link show"], runner=runner)
+
+
+def test_create_bridge_attaches_veth_and_hardware(monkeypatch):
+    from satgonetem.launchers import hil_manager
+
+    manager = HILManager({"Gnd0": "eth9"})
+    ipr = MagicMock()
+    ipr.link.return_value = [{"index": 7}]
+    ipr.__enter__.return_value = ipr
+    monkeypatch.setattr(hil_manager, "IPRoute", MagicMock(return_value=ipr))
+
+    assert manager._create_bridge("Gnd0", 0) is True
+    assert manager._hil_bridges["Gnd0"] == "brhil0"
+    assert manager._hil_veths["Gnd0"] == "hil0"
+    assert ipr.link.call_count >= 4

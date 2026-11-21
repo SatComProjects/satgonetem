@@ -32,6 +32,6 @@ Adapters stay thin: no topology knowledge, no retries, no business logic.
   operations to `ContainerRuntime`/`NetworkNamespace`. Its GoNetEm `NodeRun`
   command path remains a narrow in-model adapter because `Node` is the public
   command surface.
-- `utils/node_terminal_bridge.py` is itself a CLI adapter and owns its gRPC
-  stream.
+- `satgonetem/cli/node_terminal_bridge.py` is itself a CLI adapter and owns its
+  gRPC stream; `utils/node_terminal_bridge.py` is a compatibility alias.
 - Generated protobuf code remains generated and is not edited.
