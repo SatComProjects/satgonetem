@@ -1,10 +1,11 @@
 """Tests for the Satellite model."""
 
-import pytest
 from unittest.mock import MagicMock
 
-from satgonetem.models.satellite import Satellite
+import pytest
+
 from satgonetem.models.node import Node
+from satgonetem.models.satellite import Satellite
 
 
 class TestSatelliteInit:

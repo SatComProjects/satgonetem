@@ -396,9 +396,7 @@ class TestIperf3Results:
         assert not df.empty
 
     def test_omitted_intervals_are_excluded_from_dataframes(self):
-        res = Iperf3Results(
-            raw_json=_OMITTED_INTERVAL_JSON, config=Iperf3Config()
-        )
+        res = Iperf3Results(raw_json=_OMITTED_INTERVAL_JSON, config=Iperf3Config())
 
         summary = res.get_summary_dataframe()
         streams = res.get_interval_dataframe()
@@ -409,9 +407,7 @@ class TestIperf3Results:
         assert streams.iloc[0]["bytes"] == 12_500_000
 
     def test_avg_throughput_uses_bytes_over_time_and_skips_warmup(self):
-        res = Iperf3Results(
-            raw_json=_OMITTED_INTERVAL_JSON, config=Iperf3Config()
-        )
+        res = Iperf3Results(raw_json=_OMITTED_INTERVAL_JSON, config=Iperf3Config())
 
         assert res.avg_throughput_mbps == pytest.approx(100.0)
 
@@ -497,7 +493,7 @@ class TestIperf3Flow:
             flow.results()
 
     def test_start_transitions_to_done(self):
-        with patch("satgonetem.traffic.iperf3_utils.time.sleep"):
+        with patch("satgonetem.traffic.iperf3_flow.time.sleep"):
             flow = self._make_flow(_TCP_JSON)
             flow.start()
             deadline = time.time() + 3.0
@@ -506,7 +502,7 @@ class TestIperf3Flow:
             assert flow.status() == FlowStatus.DONE
 
     def test_results_available_after_done(self):
-        with patch("satgonetem.traffic.iperf3_utils.time.sleep"):
+        with patch("satgonetem.traffic.iperf3_flow.time.sleep"):
             flow = self._make_flow(_TCP_JSON)
             flow.start()
             deadline = time.time() + 3.0
@@ -522,7 +518,7 @@ class TestIperf3Flow:
             flow.start()
 
     def test_error_status_on_bad_json(self):
-        with patch("satgonetem.traffic.iperf3_utils.time.sleep"):
+        with patch("satgonetem.traffic.iperf3_flow.time.sleep"):
             src = _make_node("gs0", "10.0.0.1")
             dst = _make_node("gs1", "10.0.0.2")
             src.execute_command.return_value = "not json"
@@ -587,7 +583,9 @@ class TestIperf3JsonExtraction:
         assert _extract_iperf3_json(_TCP_JSON) == _TCP_JSON
 
     def test_text_before_and_after_the_json_is_skipped(self):
-        text = _WARNING + _TCP_JSON + "\niperf3: interrupt - the client has terminated\n"
+        text = (
+            _WARNING + _TCP_JSON + "\niperf3: interrupt - the client has terminated\n"
+        )
         assert json.loads(_extract_iperf3_json(text)) == json.loads(_TCP_JSON)
         outside = _text_outside_iperf3_json(text)
         assert "exceeds TCP MSS" in outside and "client has terminated" in outside
@@ -606,8 +604,10 @@ class TestIperf3FlowJsonReading:
     def test_late_udp_server_json_is_waited_for(self):
         # The receiver writes its report after the client returned: the
         # first reads find nothing. The sender's file has other loss figures.
-        with patch("satgonetem.traffic.iperf3_utils.time.sleep"):
-            src = _scripted_node("gs0", "10.0.0.1", {"client": [_udp_json_with_loss(0)]})
+        with patch("satgonetem.traffic.iperf3_flow.time.sleep"):
+            src = _scripted_node(
+                "gs0", "10.0.0.1", {"client": [_udp_json_with_loss(0)]}
+            )
             dst = _scripted_node(
                 "gs1", "10.0.0.2", {"server": ["", "", _udp_json_with_loss(10)]}
             )
@@ -620,8 +620,9 @@ class TestIperf3FlowJsonReading:
         assert dst.cat_calls["server"] == 3
 
     def test_udp_falls_back_to_client_when_server_never_writes(self):
-        with patch("satgonetem.traffic.iperf3_utils.time.sleep"), patch(
-            "satgonetem.traffic.iperf3_utils._IPERF3_RESULT_WAIT_TIMEOUT", 0.2
+        with (
+            patch("satgonetem.traffic.iperf3_flow.time.sleep"),
+            patch("satgonetem.traffic.iperf3_flow._IPERF3_RESULT_WAIT_TIMEOUT", 0.2),
         ):
             src = _scripted_node("gs0", "10.0.0.1", {"client": [_UDP_JSON]})
             dst = _scripted_node("gs1", "10.0.0.2", {"server": [""]})
@@ -631,7 +632,7 @@ class TestIperf3FlowJsonReading:
         assert flow.results().json_side == "client"
 
     def test_warning_before_tcp_json_is_kept_as_client_notes(self):
-        with patch("satgonetem.traffic.iperf3_utils.time.sleep"):
+        with patch("satgonetem.traffic.iperf3_flow.time.sleep"):
             src = _scripted_node("gs0", "10.0.0.1", {"client": [_WARNING + _TCP_JSON]})
             dst = _scripted_node("gs1", "10.0.0.2", {"server": [_TCP_JSON]})
             flow = _run_flow(src, dst, Iperf3Config(protocol="TCP", duration=1))
@@ -642,14 +643,17 @@ class TestIperf3FlowJsonReading:
         assert "exceeds TCP MSS" in res.client_notes
 
     def test_no_json_anywhere_reports_both_outputs(self):
-        with patch("satgonetem.traffic.iperf3_utils.time.sleep"), patch(
-            "satgonetem.traffic.iperf3_utils._IPERF3_RESULT_WAIT_TIMEOUT", 0.2
+        with (
+            patch("satgonetem.traffic.iperf3_flow.time.sleep"),
+            patch("satgonetem.traffic.iperf3_flow._IPERF3_RESULT_WAIT_TIMEOUT", 0.2),
         ):
             src = _scripted_node(
                 "gs0", "10.0.0.1", {"client": ["iperf3: error - unable to connect"]}
             )
             dst = _scripted_node(
-                "gs1", "10.0.0.2", {"server": ["iperf3: error - unable to start listener"]}
+                "gs1",
+                "10.0.0.2",
+                {"server": ["iperf3: error - unable to start listener"]},
             )
             flow = _run_flow(src, dst, Iperf3Config(protocol="UDP", duration=1))
 
@@ -663,7 +667,7 @@ class TestRunIperf3Flow:
     """Tests for run_iperf3_flow."""
 
     def test_returns_iperf3_results(self):
-        with patch("satgonetem.traffic.iperf3_utils.time.sleep"):
+        with patch("satgonetem.traffic.iperf3_flow.time.sleep"):
             src = _make_node("gs0", "10.0.0.1")
             dst = _make_node("gs1", "10.0.0.2")
             src.execute_command.return_value = _TCP_JSON
@@ -673,7 +677,7 @@ class TestRunIperf3Flow:
             assert isinstance(res, Iperf3Results)
 
     def test_server_started_on_destination(self):
-        with patch("satgonetem.traffic.iperf3_utils.time.sleep"):
+        with patch("satgonetem.traffic.iperf3_flow.time.sleep"):
             src = _make_node("gs0", "10.0.0.1")
             dst = _make_node("gs1", "10.0.0.2")
             src.execute_command.return_value = _TCP_JSON
@@ -681,14 +685,12 @@ class TestRunIperf3Flow:
             cfg = Iperf3Config(duration=1)
             run_iperf3_flow(src, dst, cfg)
             server_calls = [
-                c
-                for c in dst.execute_command.call_args_list
-                if "iperf3 -s" in str(c)
+                c for c in dst.execute_command.call_args_list if "iperf3 -s" in str(c)
             ]
             assert len(server_calls) >= 1
 
     def test_client_run_on_source(self):
-        with patch("satgonetem.traffic.iperf3_utils.time.sleep"):
+        with patch("satgonetem.traffic.iperf3_flow.time.sleep"):
             src = _make_node("gs0", "10.0.0.1")
             dst = _make_node("gs1", "10.0.0.2")
             src.execute_command.return_value = _TCP_JSON
@@ -696,14 +698,12 @@ class TestRunIperf3Flow:
             cfg = Iperf3Config(duration=1)
             run_iperf3_flow(src, dst, cfg)
             client_calls = [
-                c
-                for c in src.execute_command.call_args_list
-                if "iperf3 -c" in str(c)
+                c for c in src.execute_command.call_args_list if "iperf3 -c" in str(c)
             ]
             assert len(client_calls) >= 1
 
     def test_raises_when_no_valid_json_returned(self):
-        with patch("satgonetem.traffic.iperf3_utils.time.sleep"):
+        with patch("satgonetem.traffic.iperf3_flow.time.sleep"):
             src = _make_node("gs0", "10.0.0.1")
             dst = _make_node("gs1", "10.0.0.2")
             src.execute_command.return_value = "no json here"
@@ -734,9 +734,7 @@ def test_negative_bandwidth_is_rejected():
 
 _UDP_RECEIVER_JSON = json.dumps(
     {
-        "start": {
-            "test_start": {"protocol": "UDP", "duration": 5, "num_streams": 1}
-        },
+        "start": {"test_start": {"protocol": "UDP", "duration": 5, "num_streams": 1}},
         "intervals": [
             {
                 "streams": [

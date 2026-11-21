@@ -59,7 +59,9 @@ def _make_visible_satellites():
     )
     visible_satellites = [
         VisibleSatellite(satellite=satellite, elevation_above_horizon=elevation)
-        for satellite, elevation in zip(satellites, [70.0, 60.0, 50.0, 40.0])
+        for satellite, elevation in zip(
+            satellites, [70.0, 60.0, 50.0, 40.0], strict=False
+        )
     ]
     return ground_object, satellites, visible_satellites
 
@@ -95,9 +97,11 @@ def test_longest_connection_time_strategy_does_not_duplicate_retained_satellite(
         ),
         patch("builtins.print"),
     ):
-        result = LongestConnectionTimeStrategy().compute_ground_object_connection_strategy(
-            ground_object=ground_object,
-            satellites=satellites,
+        result = (
+            LongestConnectionTimeStrategy().compute_ground_object_connection_strategy(
+                ground_object=ground_object,
+                satellites=satellites,
+            )
         )
 
     _assert_each_connected_satellite_appears_once(result, "Sat0")

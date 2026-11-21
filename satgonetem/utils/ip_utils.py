@@ -1,9 +1,9 @@
-import numpy as np
 from functools import lru_cache
+
+import numpy as np
 
 
 class IPUtils:
-
     IPV4_ADDRESS_LENGTH = 32
 
     @staticmethod
@@ -32,13 +32,8 @@ class IPUtils:
 
     @staticmethod
     def quaddot(binary: str) -> str:
-        "Returns a quad-dotted string representation of a 32-bit binary number" ""
-        return "{}.{}.{}.{}".format(
-            int(binary[0:8], 2),
-            int(binary[8:16], 2),
-            int(binary[16:24], 2),
-            int(binary[24:], 2),
-        )
+        "Returns a quad-dotted string representation of a 32-bit binary number"
+        return f"{int(binary[0:8], 2)}.{int(binary[8:16], 2)}.{int(binary[16:24], 2)}.{int(binary[24:], 2)}"
 
     @staticmethod
     @lru_cache(maxsize=4096)
@@ -62,7 +57,7 @@ class IPUtils:
         try:
             octets = [int(p) for p in parts]
         except ValueError:
-            raise ValueError("Invalid IPv4 address.")
+            raise ValueError("Invalid IPv4 address.") from None
         if any(not 0 <= o <= 255 for o in octets):
             raise ValueError("Invalid IPv4 address.")
         return f"{octets[0]:08b}{octets[1]:08b}{octets[2]:08b}{octets[3]:08b}"
@@ -80,16 +75,11 @@ class IPUtils:
         try:
             octets = [int(p) for p in parts]
         except ValueError:
-            raise ValueError("Invalid IPv4 address.")
+            raise ValueError("Invalid IPv4 address.") from None
         if any(not 0 <= o <= 255 for o in octets):
             raise ValueError("Invalid IPv4 address.")
 
-        ip_int = (
-            (octets[0] << 24)
-            | (octets[1] << 16)
-            | (octets[2] << 8)
-            | octets[3]
-        )
+        ip_int = (octets[0] << 24) | (octets[1] << 16) | (octets[2] << 8) | octets[3]
         mask = 0xFFFFFFFF << (32 - prefix)
         ip_int &= mask
         return (

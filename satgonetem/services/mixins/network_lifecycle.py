@@ -5,9 +5,9 @@ from __future__ import annotations
 import logging
 import time
 import warnings
-from satgonetem.utils.constants import MAX_WORKERS
-from satgonetem.utils.utils import time_
 from typing import TYPE_CHECKING
+
+from satgonetem.utils.constants import MAX_WORKERS
 
 if TYPE_CHECKING:
     pass
@@ -20,19 +20,20 @@ _FLOW_STOP_TIMEOUT_SEC = 5.0
 class NetworkLifecycleMixin:
     """NetworkLifecycle functionality."""
 
-    def start_gonetem(self, controller: bool = False) -> float | None:
+    def start_gonetem(self, controller: bool = False) -> tuple[float, float] | None:
         """Start GoNetEm by launching containers and wiring links.
 
         Returns:
-            float: Time taken to start GoNetEm
+            tuple[float, float]: Container and link setup times, in seconds.
+            None: If the emulator is already running (no-op).
         """
-        tic = time.perf_counter()
         if self.get_gonetem_status():
-            return
+            return None
 
-        from satgonetem.launchers.gonetem_launcher import GoNetEmLauncher
+        from satgonetem.launchers.registry import create_launcher
 
-        launcher = GoNetEmLauncher(
+        launcher = create_launcher(
+            getattr(self, "network_launcher", "GONETEM"),
             topology_manager=self,
             server_address=self.gonetem_server,
             project_name=self.project_name,
@@ -78,8 +79,7 @@ class NetworkLifecycleMixin:
                 launcher.force_close_project()
             except Exception as cleanup_exc:
                 logging.error(
-                    "Failed to force-close GoNetEm project after startup "
-                    "failure: %s",
+                    "Failed to force-close GoNetEm project after startup failure: %s",
                     cleanup_exc,
                 )
             self.launcher = None
@@ -216,9 +216,7 @@ class NetworkLifecycleMixin:
             try:
                 self._stop_active_flows()
             except Exception as exc:
-                logging.error(
-                    "Failed to stop traffic flows during force stop: %s", exc
-                )
+                logging.error("Failed to stop traffic flows during force stop: %s", exc)
 
             if self.hil_manager is not None:
                 try:

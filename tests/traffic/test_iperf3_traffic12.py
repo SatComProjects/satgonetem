@@ -14,7 +14,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from satgonetem.traffic import iperf3_utils
+from satgonetem.traffic import iperf3_flow, iperf3_ports
 from satgonetem.traffic.iperf3_utils import (
     FlowStatus,
     Iperf3Config,
@@ -49,9 +49,9 @@ def _make_node(name: str, ipv4: str) -> MagicMock:
 def _fresh_port_allocator(monkeypatch):
     """Give every test an isolated process-wide allocator."""
     monkeypatch.setattr(
-        iperf3_utils,
+        iperf3_ports,
         "_IPERF3_PORT_ALLOCATOR",
-        iperf3_utils._Iperf3PortAllocator(),
+        iperf3_ports._Iperf3PortAllocator(),
     )
 
 
@@ -67,9 +67,7 @@ class TestPortAllocator:
     """Tests for the thread-safe per-flow port allocator."""
 
     def test_allocator_returns_unique_ports_under_concurrent_allocation(self):
-        allocator = iperf3_utils._Iperf3PortAllocator(
-            base_port=5201, max_port=5220
-        )
+        allocator = iperf3_ports._Iperf3PortAllocator(base_port=5201, max_port=5220)
         allocated: list[int] = []
         allocated_lock = threading.Lock()
         barrier = threading.Barrier(16)
@@ -80,9 +78,7 @@ class TestPortAllocator:
             with allocated_lock:
                 allocated.append(port)
 
-        threads = [
-            threading.Thread(target=allocate_one) for _ in range(16)
-        ]
+        threads = [threading.Thread(target=allocate_one) for _ in range(16)]
         for thread in threads:
             thread.start()
         for thread in threads:
@@ -93,9 +89,7 @@ class TestPortAllocator:
         assert all(5201 <= port <= 5220 for port in allocated)
 
     def test_allocator_reuses_released_ports(self):
-        allocator = iperf3_utils._Iperf3PortAllocator(
-            base_port=5201, max_port=5202
-        )
+        allocator = iperf3_ports._Iperf3PortAllocator(base_port=5201, max_port=5202)
 
         first = allocator.allocate()
         second = allocator.allocate()
@@ -126,10 +120,10 @@ class TestUniqueFlowPorts:
         assert 5201 <= port_b <= 5300
 
     @patch(
-        "satgonetem.traffic.iperf3_utils._wait_for_iperf3_server",
+        "satgonetem.traffic.iperf3_flow._wait_for_iperf3_server",
         return_value=True,
     )
-    @patch("satgonetem.traffic.iperf3_utils.time.sleep")
+    @patch("satgonetem.traffic.iperf3_flow.time.sleep")
     def test_flow_commands_use_own_port_and_do_not_mutate_config(
         self, _mock_sleep, _mock_ready
     ):
@@ -160,12 +154,8 @@ class TestUniqueFlowPorts:
         assert len(client_a_cmds) == 1
         assert len(client_b_cmds) == 1
 
-        assert any(
-            f"-p {flow_a._port} " in cmd for cmd in server_cmds
-        )
-        assert any(
-            f"-p {flow_b._port} " in cmd for cmd in server_cmds
-        )
+        assert any(f"-p {flow_a._port} " in cmd for cmd in server_cmds)
+        assert any(f"-p {flow_b._port} " in cmd for cmd in server_cmds)
         assert f"-p {flow_a._port} " in client_a_cmds[0]
         assert f"-p {flow_b._port} " in client_b_cmds[0]
 
@@ -173,7 +163,7 @@ class TestUniqueFlowPorts:
         assert flow_a.results().to_json()["config"]["port"] == flow_a._port
         assert flow_b.results().to_json()["config"]["port"] == flow_b._port
 
-    @patch("satgonetem.traffic.iperf3_utils.time.sleep")
+    @patch("satgonetem.traffic.iperf3_flow.time.sleep")
     def test_stop_pkill_uses_flow_port(self, _mock_sleep):
         src = _make_node("sat0", "10.0.0.1")
         dst = _make_node("gnd0", "10.0.0.2")
@@ -194,10 +184,10 @@ class TestRunIperf3FlowPorts:
     """The blocking entry point must allocate too."""
 
     @patch(
-        "satgonetem.traffic.iperf3_utils._wait_for_iperf3_server",
+        "satgonetem.traffic.iperf3_flow._wait_for_iperf3_server",
         return_value=True,
     )
-    @patch("satgonetem.traffic.iperf3_utils.time.sleep")
+    @patch("satgonetem.traffic.iperf3_flow.time.sleep")
     def test_blocking_flow_uses_one_allocated_port_for_both_sides(
         self, _mock_sleep, _mock_ready
     ):
@@ -208,7 +198,7 @@ class TestRunIperf3FlowPorts:
         config = Iperf3Config(duration=1)
 
         # Occupy the legacy default port so the run must pick another one.
-        assert iperf3_utils._IPERF3_PORT_ALLOCATOR.allocate() == 5201
+        assert iperf3_ports._IPERF3_PORT_ALLOCATOR.allocate() == 5201
 
         result = run_iperf3_flow(src, dst, config)
 
@@ -233,12 +223,8 @@ class TestServerReadinessWait:
             "LISTEN 0 128 10.0.0.2:5201",
         ]
 
-        with patch(
-            "satgonetem.traffic.iperf3_utils.time.sleep"
-        ) as mock_sleep:
-            ready = iperf3_utils._wait_for_iperf3_server(
-                node, "10.0.0.2", 5201
-            )
+        with patch("satgonetem.traffic.iperf3_flow.time.sleep") as mock_sleep:
+            ready = iperf3_flow._wait_for_iperf3_server(node, "10.0.0.2", 5201)
 
         assert ready is True
         assert mock_sleep.call_count == 1
@@ -247,12 +233,8 @@ class TestServerReadinessWait:
         node = MagicMock()
         node.execute_command.return_value = None
 
-        with patch(
-            "satgonetem.traffic.iperf3_utils.time.sleep"
-        ) as mock_sleep:
-            ready = iperf3_utils._wait_for_iperf3_server(
-                node, "10.0.0.2", 5201
-            )
+        with patch("satgonetem.traffic.iperf3_flow.time.sleep") as mock_sleep:
+            ready = iperf3_flow._wait_for_iperf3_server(node, "10.0.0.2", 5201)
 
         assert ready is False
         mock_sleep.assert_called_once_with(0.5)
@@ -261,10 +243,8 @@ class TestServerReadinessWait:
         node = MagicMock()
         node.execute_command.return_value = ""
 
-        with patch(
-            "satgonetem.traffic.iperf3_utils.time.sleep"
-        ) as mock_sleep:
-            ready = iperf3_utils._wait_for_iperf3_server(
+        with patch("satgonetem.traffic.iperf3_flow.time.sleep") as mock_sleep:
+            ready = iperf3_flow._wait_for_iperf3_server(
                 node, "10.0.0.2", 5201, timeout=0.0
             )
 

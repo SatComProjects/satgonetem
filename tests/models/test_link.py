@@ -1,13 +1,13 @@
 """Tests for the Link model."""
 
-import pytest
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from satgonetem.link_budget.config import LinkBudgetConfig
+from satgonetem.models.interface import Interface
 from satgonetem.models.link import Link, LinkBudgetService
 from satgonetem.models.node import Node
-from satgonetem.models.interface import Interface
-
 
 SPEED_OF_LIGHT = 299_792_458  # m/s
 
@@ -344,7 +344,6 @@ class TestLinkSyncDistanceAndDelay:
         }
         gsl_link.target.position = {"latitude": 10.0, "longitude": 0.0, "altitude": 0.0}
 
-        old_delay = gsl_link.delay
         gsl_link.sync_distance_from_satcom_and_delay()
 
         assert isinstance(gsl_link.delay, int)
@@ -406,9 +405,7 @@ class TestLinkCapacityRefresh:
             use_budget=True,
         )
 
-    def test_refresh_marks_to_update_when_capacity_changes(
-        self, sat_node, gnd_node
-    ):
+    def test_refresh_marks_to_update_when_capacity_changes(self, sat_node, gnd_node):
         link = self._make_budget_link(sat_node, gnd_node)
         link.to_update = False
 
@@ -523,20 +520,14 @@ class TestLinkBudgetFallback:
         )
 
     def test_both_directions_falling_back_use_default(self, sat_node, gnd_node):
-        with patch.object(
-            LinkBudgetService, "compute_one_way", side_effect=[0, 0]
-        ):
+        with patch.object(LinkBudgetService, "compute_one_way", side_effect=[0, 0]):
             link = self._make_link(sat_node, gnd_node)
 
         assert link.peer1_capacity == 777
         assert link.peer2_capacity == 777
 
-    def test_single_failed_direction_falls_back_independently(
-        self, sat_node, gnd_node
-    ):
-        with patch.object(
-            LinkBudgetService, "compute_one_way", side_effect=[0, 4321]
-        ):
+    def test_single_failed_direction_falls_back_independently(self, sat_node, gnd_node):
+        with patch.object(LinkBudgetService, "compute_one_way", side_effect=[0, 4321]):
             link = self._make_link(sat_node, gnd_node)
 
         assert link.peer1_capacity == 777
@@ -576,3 +567,29 @@ class TestLinkBudgetConfigParam:
             default_capacity_kbps=500,
         )
         assert link.link_budget_config is None
+
+
+def test_link_accepts_injected_capacity_strategies(sat_node, gnd_node):
+    sat_node.type = "Satellite"
+    gnd_node.type = "GroundStation"
+    sat_node.antenna = MagicMock()
+    gnd_node.antenna = MagicMock()
+    downlink = MagicMock()
+    uplink = MagicMock()
+
+    with patch("satgonetem.models.link.LinkBudgetService") as service_cls:
+        service_cls.return_value.compute_one_way.side_effect = [120, 60]
+        link = Link(
+            source=sat_node,
+            target=gnd_node,
+            distance=550_000.0,
+            type="GroundStationLink",
+            use_budget=True,
+            downlink_capacity_strategy=downlink,
+            uplink_capacity_strategy=uplink,
+        )
+
+    assert service_cls.call_args_list[0].kwargs["capacity_strategy"] is downlink
+    assert service_cls.call_args_list[1].kwargs["capacity_strategy"] is uplink
+    assert link.peer1_capacity == 120
+    assert link.peer2_capacity == 60

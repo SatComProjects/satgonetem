@@ -7,7 +7,7 @@ This module provides classes for SR-MPLS (Segment Routing MPLS) entries.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, TYPE_CHECKING
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from satgonetem.models.interface import Interface
@@ -118,7 +118,7 @@ class SRForwardEntry:
 
     target_sid: int
     next_hop: str
-    interface: "Interface"
+    interface: Interface
     target_name: str = ""
 
     def to_iproute2_command(self) -> str:
@@ -166,9 +166,9 @@ class SRLabelStackEntry:
     """
 
     destination: str
-    label_stack: List[int]
+    label_stack: list[int]
     next_hop: str
-    interface: "Interface"
+    interface: Interface
     fec_prefix: int = 32
 
     def to_iproute2_command(self) -> str:
@@ -193,7 +193,7 @@ class SRLabelStackEntry:
 
         # Join labels with '/' for the MPLS encap command
         # Labels are pushed in order: first label becomes innermost (processed last)
-        labels_str = "/".join(str(l) for l in self.label_stack)
+        labels_str = "/".join(str(label) for label in self.label_stack)
 
         return f"ip route replace {self.destination}/{self.fec_prefix} encap mpls {labels_str} via {self.next_hop} dev {iface_name}"
 
@@ -209,12 +209,12 @@ class SRLabelStackEntry:
         if not self.label_stack:
             return f"route replace {self.destination}/{self.fec_prefix} via {self.next_hop} dev {iface_name}"
 
-        labels_str = "/".join(str(l) for l in self.label_stack)
+        labels_str = "/".join(str(label) for label in self.label_stack)
         return f"route replace {self.destination}/{self.fec_prefix} encap mpls {labels_str} via {self.next_hop} dev {iface_name}"
 
     def __str__(self) -> str:
         stack_str = (
-            "/".join(str(l) for l in self.label_stack)
+            "/".join(str(label) for label in self.label_stack)
             if self.label_stack
             else "(empty)"
         )

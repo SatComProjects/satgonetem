@@ -82,6 +82,16 @@ class _FakeFlow:
         self.stop_calls += 1
         self._stop_event.set()
 
+    def join(self, timeout: float | None = None) -> None:
+        if self._thread is not None:
+            self._thread.join(timeout=timeout)
+
+    def is_alive(self) -> bool:
+        return self._thread is not None and self._thread.is_alive()
+
+    def discard_result(self) -> None:
+        self._result = None
+
     def results(self) -> str:
         return self._result
 
@@ -132,6 +142,16 @@ class _NoTruncationFlow:
 
     def stop(self) -> None:
         self.stop_called = True
+
+    def join(self, timeout: float | None = None) -> None:
+        if self._thread is not None:
+            self._thread.join(timeout=timeout)
+
+    def is_alive(self) -> bool:
+        return self._thread is not None and self._thread.is_alive()
+
+    def discard_result(self) -> None:
+        self._result = None
 
     def results(self) -> str:
         return self._result
@@ -193,9 +213,7 @@ def test_max_workers_one_stops_timed_out_flow_before_next_flow():
     """With max_workers=1 the timed-out flow is stopped before the next starts."""
     slow = _FakeFlow("slow", wait_for_stop=True)
     second = _WatchingFlow("second", slow, wait_for_stop=False)
-    scheduler = FlowScheduler(
-        [slow, second], max_workers=1, flow_timeout_sec=0.05
-    )
+    scheduler = FlowScheduler([slow, second], max_workers=1, flow_timeout_sec=0.05)
 
     try:
         scheduler.run()

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "satgonetem"
-version = "0.2.2"
+version = "0.3.0"
 description = "SatGoNetem - Satellite Network Emulation Tool"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -43,7 +43,6 @@ dependencies = [
     "pyroute2>=0.7.0",
     "yaspin>=3.0.0",
     "sat_com_topology @ git+https://github.com/SatComProjects/satComTopology.git@v5.0.3",
-    "pytest>=9.0.3",
     "igraph>=1.0.0",
     "itur>=0.4.0",
 ]
@@ -55,8 +54,6 @@ extra = [
 dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",
-    "black>=23.0",
-    "flake8>=6.0",
     "mypy>=1.0",
     "ruff==0.17.6",
 ]
@@ -75,14 +72,54 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
+addopts = "-ra --strict-markers -m 'not slow and not benchmark'"
+markers = [
+    "unit: fast, deterministic unit tests",
+    "integration: requires Docker, root, network, or another external service",
+    "slow: takes substantially longer than a unit test",
+    "benchmark: performance or scale benchmark",
+]
+
+[tool.coverage.run]
+source = ["satgonetem"]
+omit = [
+    "satgonetem/proto/*",
+    "*/__pycache__/*",
+]
+
+[tool.coverage.report]
+fail_under = 75
+show_missing = true
+skip_covered = false
+
+[tool.mypy]
+python_version = "3.10"
+files = ["satgonetem"]
+ignore_missing_imports = true
+warn_unused_configs = true
+# Generated protobuf attributes and mixin-injected state are not statically
+# visible. Keep this as a ratchet; remove categories as annotations land.
+disable_error_code = ["attr-defined"]
 
 [tool.ruff]
 target-version = "py310"
+# Generated protobuf modules are produced by protoc and are not hand-edited.
+exclude = [
+    "satgonetem/proto/netem_pb2.py",
+    "satgonetem/proto/netem_pb2_grpc.py",
+]
 
 [tool.ruff.lint]
-# Ratchet: this is the subset the codebase passes today. Widen it (e.g. E4, E7,
-# F401, F841) as the existing findings are fixed, so CI never regresses.
-select = ["E9", "F63", "F7", "F82"]
+# Ratchet: this is the enforced subset. Widen it as findings are fixed; never
+# narrow it to make a change pass. Spec 0008 tracks the remaining rules.
+select = ["B", "E4", "E7", "E9", "F401", "F63", "F7", "F811", "F82", "F841", "I", "SIM", "UP"]
+
+[tool.ruff.lint.per-file-ignores]
+# apply_satcom_fix() must run before the sat_com imports below it, so the import
+# block is intentionally not at the top of the file.
+"satgonetem/services/topology_satcom.py" = ["E402"]
+# Nested context managers keep setup/assertion phases readable in tests.
+"tests/**" = ["SIM117"]
 
 [tool.uv]
 required-version = ">=0.11.0"

@@ -36,7 +36,14 @@ SatGoNetem bridges orbital mechanics and Linux network emulation. It computes sa
 
 **Support**
 
-- [`docs/utils.md`](docs/utils.md) — Project builder, coverage/IP helpers, connection strategies, compatibility patch
+- [`docs/utils.md`](docs/utils.md) — Project builder, geodesy/coverage helpers, connection strategies, shared memory, compatibility patch
+- [`docs/ports.md`](docs/ports.md) — External-boundary ports, adapters, and injection points
+
+**Development**
+
+- [`AGENTS.md`](AGENTS.md) — Development principles, six-stage workflow, branch policy, required commands
+- [`docs/specs/`](docs/specs/README.md) — Phase specifications, acceptance criteria, and verification
+- [`docs/adr/`](docs/adr/README.md) — Architecture decision records
 
 ## Features
 
@@ -333,7 +340,17 @@ See [`docs/services.md`](docs/services.md#networkconfig) for every `NetworkConfi
 pytest tests/ -v
 ```
 
-Tests cover models, routing daemons, traffic result parsing, launchers, and project builder utilities. Tests that exercise Docker or network operations require a suitable host environment.
+The default suite excludes `slow` and `benchmark` tests. Run the extended set
+explicitly:
+
+```bash
+pytest tests/ -q -m "slow or benchmark"
+```
+
+Tests cover models, routing daemons, traffic result parsing, launchers, and
+project builder utilities. Unit tests use shared fixtures and fakes from
+`tests/support/` and do not require Docker, root, or live networking; the
+manual checks below exercise real emulation.
 
 Scale and live connectivity checks:
 
@@ -354,8 +371,8 @@ Two GitHub Actions workflows live in [`.github/workflows/`](.github/workflows/):
 
 | Workflow | Trigger | What it runs |
 | --- | --- | --- |
-| [`ci.yml`](.github/workflows/ci.yml) | Push to `main` or `develop`, every pull request, manual dispatch | Ruff lint, lockfile check, unit tests on Python 3.10–3.14, sdist/wheel build, metadata validation, wheel install smoke test |
-| [`release.yml`](.github/workflows/release.yml) | Push of a `v*` tag, manual dispatch | Checks the tag matches `pyproject.toml`, builds the distributions, and publishes a GitHub Release with the sdist and wheel attached |
+| [`ci.yml`](.github/workflows/ci.yml) | Push to `main` or `develop`, every pull request, manual dispatch | Ruff lint/format, full mypy, lockfile check, unit tests on Python 3.10–3.14 with a 75% coverage floor, dependency audit, sdist/wheel build, metadata validation, wheel install smoke test |
+| [`release.yml`](.github/workflows/release.yml) | Push of a `v*` tag, manual dispatch | Lint/format, full mypy, tests and coverage, checks the tag matches `pyproject.toml`, builds the distributions, and publishes a GitHub Release with the sdist and wheel attached |
 
 All jobs run on `ubuntu-latest` with [`uv`](https://docs.astral.sh/uv/) and the
 committed `uv.lock`. No repository secrets are required: the test suite mocks
@@ -367,16 +384,34 @@ Run the same checks locally:
 uv sync --extra dev                      # install the locked development environment
 uv lock --check                          # pyproject.toml and uv.lock agree
 uv run --extra dev ruff check satgonetem tests
-uv run --extra dev pytest -q
+uv run --extra dev ruff format --check satgonetem tests
+uv run --extra dev mypy
+uvx pip-audit@2.9.0 --path .venv/lib/python3.14/site-packages
+uv run --extra dev pytest -q --cov=satgonetem --cov-fail-under=75
 uv build --out-dir dist                  # sdist + wheel
 uvx twine@7.0.0 check dist/*
 ```
 
-### Enabling required checks
+### Required checks
 
-In **Settings → Branches → Branch protection rules**, require these status checks
-on `main` and `develop`: `Lint`, `Test (Python 3.10)` through
-`Test (Python 3.14)`, and `Build package`.
+The `develop` and `main` repository rulesets require pull requests and the
+same checks: `Lint`, `Type check`, `Test (Python 3.10)` through
+`Test (Python 3.14)`, `Security audit`, and `Build package`.
+
+### Technical debt
+
+Known follow-ups and intentional exceptions are tracked here and in
+[`docs/specs/`](docs/specs/README.md):
+
+| Area | Debt | Next step |
+|---|---|---|
+| Type checking | `attr-defined` is disabled globally because generated protobuf and mixin-injected state are not statically visible | Add protocols/annotations and re-enable the category |
+| Coverage | `utils/project_mesh.py` (~30%) and `launchers/gonetem_lifecycle.py` (~58%) are below the global floor's spirit | Add mesh-construction and lifecycle branch tests |
+| Behavior | Link-operation counts mean “attempted”, not “succeeded”; `FlowScheduler` defaults to no timeout | Separate behavior specs and tests |
+| Controller | Custom interface patterns must format to `eth<digits>` | Decide whether arbitrary prefixes are needed |
+| P4 | `P4Daemon` is experimental and not registered as a routing method | Support or remove it explicitly |
+| Compatibility | `satcom_fix` patches third-party internals at import time | Separate removal spec if upstream fixes land |
+| Integration | Docker/root/GoNetEm paths run only via manual scripts, not CI | Add a privileged integration runner when available |
 
 ### Releasing
 
@@ -384,8 +419,8 @@ on `main` and `develop`: `Lint`, `Test (Python 3.10)` through
 2. Tag the release commit and push the tag:
 
    ```bash
-   git tag -a v0.2.2 -m "SatGoNetem 0.2.2"
-   git push origin v0.2.2
+   git tag -a v0.3.0 -m "SatGoNetem 0.3.0"
+   git push origin v0.3.0
    ```
 
 3. `release.yml` verifies that the tag matches `pyproject.toml`, builds `dist/`,
@@ -393,7 +428,7 @@ on `main` and `develop`: `Lint`, `Test (Python 3.10)` through
 4. Install a release directly from GitHub:
 
    ```bash
-   pip install "satgonetem @ git+https://github.com/SatComProjects/satgonetem@v0.2.2"
+   pip install "satgonetem @ git+https://github.com/SatComProjects/satgonetem@v0.3.0"
    ```
 
 `release.yml` does not publish to PyPI. `pyproject.toml` depends on

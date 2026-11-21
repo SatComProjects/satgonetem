@@ -6,7 +6,7 @@ a satellite and a ground station.
 
 import math
 from dataclasses import dataclass
-from typing import Optional
+from typing import cast
 
 from satgonetem.link_budget.antenna import Antenna
 from satgonetem.link_budget.conversions import linear_to_db
@@ -48,16 +48,16 @@ class LinkBudgetResult:
     cn0_dbhz: float
     """Carrier-to-noise power spectral density in dB-Hz."""
 
-    cn_db: Optional[float]
+    cn_db: float | None
     """Carrier-to-noise ratio in dB (optional)."""
 
-    best_modcod: Optional[ModCod]
+    best_modcod: ModCod | None
     """Selected MODCOD, if applicable."""
 
-    capacity_bps: Optional[float]
+    capacity_bps: float | None
     """Link capacity in bits per second."""
 
-    capacity_kbps: Optional[int]
+    capacity_kbps: int | None
     """Link capacity in kilobits per second (rounded down)."""
 
 
@@ -168,12 +168,12 @@ class LinkBudgetCalculator:
             eirp_db = calculate_transmitter_eirp(sspa, gdb, losses)
 
         rx_ant = getattr(rx_node, "antenna", None)
-        rx_gain_db = 0.0
+        rx_gain_db: float = 0.0
         if rx_ant is not None:
             try:
                 rx_gain_db = rx_ant.calculate_gain_db(frequency_ghz)
             except (AttributeError, TypeError, ValueError):
-                rx_gain_db = getattr(rx_ant, "gain_db", None)
+                rx_gain_db = cast(float, getattr(rx_ant, "gain_db", None))
             rx_gain_db = rx_gain_db if rx_gain_db is not None else 0.0
         g_over_t_db = rx_gain_db - linear_to_db(self.rx_tsys_k)
 
@@ -253,9 +253,9 @@ class LinkBudgetCalculator:
         if eirp_db is None:
             raise ValueError("Satellite antenna EIRP is not available")
 
-        g_over_t_db: Optional[float] = getattr(gnd_node, "g_over_t_db", None)
+        g_over_t_db: float | None = getattr(gnd_node, "g_over_t_db", None)
         if g_over_t_db is None:
-            antenna: Optional[Antenna] = getattr(gnd_node, "antenna", None)
+            antenna: Antenna | None = getattr(gnd_node, "antenna", None)
             if antenna is None:
                 raise ValueError("Ground station antenna is not available")
             rx_gain_db = antenna.calculate_gain_db(self.frequency_ghz_downlink)

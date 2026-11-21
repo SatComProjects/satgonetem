@@ -1,6 +1,5 @@
 """Tests for satgonetem.link_budget.receiver."""
 
-
 import pytest
 
 from satgonetem.link_budget.constants import BOLTZMANN_CONSTANT

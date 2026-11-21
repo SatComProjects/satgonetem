@@ -1,13 +1,12 @@
 """Tests for the Node base model."""
 
-
 import base64
 from unittest.mock import MagicMock
 
 import pytest
 
-from satgonetem.models.node import Node
 from satgonetem.models.interface import Interface
+from satgonetem.models.node import Node
 
 
 class TestNodeInit:

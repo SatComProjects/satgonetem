@@ -7,13 +7,10 @@ classes so no containers or network namespaces are required.
 from __future__ import annotations
 
 import logging
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 from satgonetem.services.mixins.routing_mgr import RoutingManagerMixin
 from satgonetem.utils.constants import MAX_WORKERS
-
-STATIC_DAEMON_PATH = "satgonetem.services.mixins.routing_mgr.StaticRoutingDaemon"
-OSPF_DAEMON_PATH = "satgonetem.services.mixins.routing_mgr.OSPFDaemon"
 
 
 class RecordingDaemon:
@@ -111,8 +108,8 @@ def test_override_does_not_mutate_configured_routing_method():
     topology = DummyRoutingTopology(routing="static")
     ospf_factory = DaemonFactory("ospf")
 
-    with patch(OSPF_DAEMON_PATH, new=ospf_factory):
-        elapsed = topology.init_routing(routing_method="dynamic-ospf", max_workers=3)
+    topology._daemon_registry["dynamic-ospf"] = ospf_factory
+    elapsed = topology.init_routing(routing_method="dynamic-ospf", max_workers=3)
 
     assert topology.routing == "static"
     assert topology.routing_daemon is ospf_factory.instances[0]
@@ -122,8 +119,8 @@ def test_override_does_not_mutate_configured_routing_method():
     # A later call without an override must use the original method, proving
     # the previous override was not persisted on the instance.
     static_factory = DaemonFactory("static")
-    with patch(STATIC_DAEMON_PATH, new=static_factory):
-        topology.init_routing(max_workers=2)
+    topology._daemon_registry["static"] = static_factory
+    topology.init_routing(max_workers=2)
 
     assert topology.routing == "static"
     assert topology.routing_daemon is static_factory.instances[0]
@@ -138,8 +135,8 @@ def test_existing_daemon_removed_before_replacement_is_constructed():
     topology.routing_initiated = True
 
     factory = DaemonFactory("static", events=events)
-    with patch(STATIC_DAEMON_PATH, new=factory):
-        topology.init_routing(max_workers=5)
+    topology._daemon_registry["static"] = factory
+    topology.init_routing(max_workers=5)
 
     old_daemon.remove.assert_called_once_with(max_workers=5)
     assert events[:2] == ["remove:old", "construct:static"]
@@ -150,8 +147,8 @@ def test_success_installs_new_daemon_and_sets_initiated_flag():
     topology = DummyRoutingTopology()
     factory = DaemonFactory("static")
 
-    with patch(STATIC_DAEMON_PATH, new=factory):
-        elapsed = topology.init_routing(max_workers=7)
+    topology._daemon_registry["static"] = factory
+    elapsed = topology.init_routing(max_workers=7)
 
     assert elapsed >= 0
     assert factory.instances[0].init_workers == 7
@@ -166,8 +163,8 @@ def test_init_failure_clears_daemon_and_flag_and_returns_minus_one():
     topology.routing_initiated = True
     factory = DaemonFactory("static", init_result=False)
 
-    with patch(STATIC_DAEMON_PATH, new=factory):
-        elapsed = topology.init_routing(max_workers=6)
+    topology._daemon_registry["static"] = factory
+    elapsed = topology.init_routing(max_workers=6)
 
     assert elapsed == -1.0
     assert topology.routing_daemon is None
@@ -184,8 +181,8 @@ def test_old_daemon_teardown_error_is_logged_but_not_fatal(caplog):
     factory = DaemonFactory("static")
 
     with caplog.at_level(logging.ERROR):
-        with patch(STATIC_DAEMON_PATH, new=factory):
-            elapsed = topology.init_routing(max_workers=4)
+        topology._daemon_registry["static"] = factory
+        elapsed = topology.init_routing(max_workers=4)
 
     assert elapsed >= 0
     assert "Failed to tear down existing routing daemon" in caplog.text
@@ -197,8 +194,8 @@ def test_delete_routing_still_removes_the_installed_daemon():
     topology = DummyRoutingTopology()
     factory = DaemonFactory("static")
 
-    with patch(STATIC_DAEMON_PATH, new=factory):
-        topology.init_routing()
+    topology._daemon_registry["static"] = factory
+    topology.init_routing()
 
     elapsed = topology.delete_routing()
 

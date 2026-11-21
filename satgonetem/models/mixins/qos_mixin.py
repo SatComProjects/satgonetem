@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Callable
+from typing import Any
 
 
 class QoSCapableMixin:
@@ -23,6 +25,10 @@ class QoSCapableMixin:
         command_output (str): Last command stdout, set by execute_command.
         execute_command (callable): Executes a shell command inside the container.
     """
+
+    name: str
+    command_output: str
+    execute_command: Callable[..., Any]
 
     def initialise_global_qos(
         self,
@@ -74,7 +80,6 @@ class QoSCapableMixin:
         if match_latency:
             tbf_rate = match_latency.group(1)
             tbf_burst = match_latency.group(2)
-            tbf_latency = match_latency.group(3)
         elif match_limit:
             tbf_rate = match_limit.group(1)
             tbf_burst = match_limit.group(2)
@@ -86,14 +91,7 @@ class QoSCapableMixin:
             )
             return
 
-        tbf_burst_int = int(re.search(r"\d+", tbf_burst).group())
-
-        if match_latency:
-            tbf_latency_int = int(re.search(r"\d+", tbf_latency).group())
-            tbf_limit_int = int(tbf_latency_int * capacity_bytes) + tbf_burst_int
-        else:
-            tbf_limit_str = match_limit.group(3)
-            tbf_limit_int = int(re.search(r"\d+", tbf_limit_str).group())
+        tbf_burst_int = int(re.search(r"\d+", tbf_burst).group())  # type: ignore[union-attr]
 
         wire_rate_multiplier = mtu / (mtu - header_bytes)
         total_wire_rate = num_flows * rate_bytes * wire_rate_multiplier

@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-import satgonetem.traffic.iperf3_utils as iperf3_utils
+import satgonetem.traffic.iperf3_ports as iperf3_ports
 from satgonetem.traffic import (
     Iperf3Config,
     Iperf3Flow,
@@ -16,12 +16,12 @@ from satgonetem.traffic import (
 @pytest.fixture(autouse=True)
 def fresh_pool():
     """Each test gets a new default pool; the process-wide one is put back after."""
-    allocator = iperf3_utils._IPERF3_PORT_ALLOCATOR
-    iperf3_utils._IPERF3_PORT_ALLOCATOR = iperf3_utils._Iperf3PortAllocator(
-        iperf3_utils._IPERF3_PORT_RANGE_START, iperf3_utils._IPERF3_PORT_RANGE_END
+    allocator = iperf3_ports._IPERF3_PORT_ALLOCATOR
+    iperf3_ports._IPERF3_PORT_ALLOCATOR = iperf3_ports._Iperf3PortAllocator(
+        iperf3_ports._IPERF3_PORT_RANGE_START, iperf3_ports._IPERF3_PORT_RANGE_END
     )
     yield
-    iperf3_utils._IPERF3_PORT_ALLOCATOR = allocator
+    iperf3_ports._IPERF3_PORT_ALLOCATOR = allocator
 
 
 def _flow() -> Iperf3Flow:
@@ -52,7 +52,7 @@ def test_set_iperf3_port_range_refuses_while_ports_are_held():
     flow._reserve_port()
     with pytest.raises(RuntimeError, match="hold ports"):
         set_iperf3_port_range(7000, 7999)
-    iperf3_utils._IPERF3_PORT_ALLOCATOR.release(flow._port)
+    iperf3_ports._IPERF3_PORT_ALLOCATOR.release(flow._port)
     set_iperf3_port_range(7000, 7999)
     assert get_iperf3_port_range() == (7000, 7999)
 
@@ -65,12 +65,12 @@ def test_set_iperf3_port_range_rejects_an_invalid_range():
 def test_range_from_environment(monkeypatch):
     # read once, when the pool is created at import time
     monkeypatch.setenv("SATGONETEM_IPERF3_PORT_RANGE", "8000-8499")
-    assert iperf3_utils._port_range_from_env() == (8000, 8499)
+    assert iperf3_ports._port_range_from_env() == (8000, 8499)
     monkeypatch.delenv("SATGONETEM_IPERF3_PORT_RANGE")
-    assert iperf3_utils._port_range_from_env() == (5201, 6200)
+    assert iperf3_ports._port_range_from_env() == (5201, 6200)
 
 
 def test_malformed_environment_range_is_reported(monkeypatch):
     monkeypatch.setenv("SATGONETEM_IPERF3_PORT_RANGE", "lots")
     with pytest.raises(ValueError, match="first-last"):
-        iperf3_utils._port_range_from_env()
+        iperf3_ports._port_range_from_env()

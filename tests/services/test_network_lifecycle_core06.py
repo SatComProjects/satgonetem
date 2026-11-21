@@ -7,7 +7,6 @@ import pytest
 
 from satgonetem.services.mixins.network_lifecycle import NetworkLifecycleMixin
 
-
 LAUNCHER_PATH = "satgonetem.launchers.gonetem_launcher.GoNetEmLauncher"
 
 

@@ -11,11 +11,10 @@ from __future__ import annotations
 
 import logging
 
-
-from satgonetem.models.node import Node
-from satgonetem.models.mixins.qos_mixin import QoSCapableMixin
-
 from sat_com_model.models import Satellite as SatComSatellite
+
+from satgonetem.models.mixins.qos_mixin import QoSCapableMixin
+from satgonetem.models.node import Node
 
 
 class Satellite(Node, QoSCapableMixin):
@@ -109,7 +108,5 @@ class Satellite(Node, QoSCapableMixin):
         for interface in self.interfaces:
             iname = interface.get_iname()
             destination = path + f"/{self.name}_{iname}.log"
-            command = (
-                f"net_logger --interface {iname} " f"--log {destination} --interval 1"
-            )
+            command = f"net_logger --interface {iname} --log {destination} --interval 1"
             self.execute_command(command, detach=True)

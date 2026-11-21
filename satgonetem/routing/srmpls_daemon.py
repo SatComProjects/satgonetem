@@ -11,21 +11,35 @@ import logging
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any
 
 import networkx as nx
 
-from satgonetem.routing.base_daemon import RoutingDaemon
-from satgonetem.utils.utils import time_
+from satgonetem.models.ground_station import GroundStation
 from satgonetem.models.mpls_entry import SRForwardEntry, SRNodeSIDEntry
 from satgonetem.models.satellite import Satellite
-from satgonetem.models.ground_station import GroundStation
+from satgonetem.routing.base_daemon import RoutingContext, RoutingDaemon
+from satgonetem.routing.commands import enable_mpls as _enable_mpls_helper
+from satgonetem.routing.srmpls_label_manager import (
+    MPLS_LABEL_IMPLICIT_NULL,
+    MPLS_LABEL_MAX,
+    MPLS_LABEL_MIN,
+    NodeSID,
+    SegmentRoutingManager,
+)
+
+__all__ = [
+    "MPLS_LABEL_IMPLICIT_NULL",
+    "MPLS_LABEL_MAX",
+    "MPLS_LABEL_MIN",
+    "NodeSID",
+    "SRMPLSDaemon",
+    "SegmentRoutingManager",
+]
 
 if TYPE_CHECKING:
     from satgonetem.models.link import Link
     from satgonetem.models.node import Node
-    from satgonetem.services.topology_satcom import TopologyManager
 
 
 def _route_delete_command(route_command: str) -> str:
@@ -58,288 +72,6 @@ def _route_delete_command(route_command: str) -> str:
     raise ValueError(f"Unsupported route command: {route_command!r}")
 
 
-MPLS_LABEL_MIN = 16
-MPLS_LABEL_MAX = 1048575
-MPLS_LABEL_IMPLICIT_NULL = 3
-
-
-@dataclass
-class NodeSID:
-    """Node Segment Identifier for SR-MPLS.
-
-    Each node gets a globally unique label (Node SID) that means
-    "forward this packet toward me using shortest path".
-
-    Attributes:
-        node_id: The node's unique identifier.
-        label: The MPLS label assigned as the Node SID.
-        node_name: Human-readable name for logging.
-    """
-
-    node_id: int
-    label: int
-    node_name: str = ""
-
-    def __hash__(self) -> int:
-        return hash(self.node_id)
-
-    def __eq__(self, other: object) -> bool:
-        if not isinstance(other, NodeSID):
-            return NotImplemented
-        return self.node_id == other.node_id
-
-
-class SegmentRoutingManager:
-    """SR-MPLS label manager: allocates Node SIDs and resolves label stacks.
-
-    SR-MPLS uses source routing where the ingress node encodes the complete
-    path as a stack of labels. Transit nodes pop their own Node SID and
-    forward on the next label.
-
-    Attributes:
-        node_sid_base: Base label value for Node SIDs.
-        node_sids: Mapping of node_id to NodeSID.
-        custom_paths: Custom path overrides for specific ground-station pairs.
-    """
-
-    def __init__(self, node_sid_base: int = 16000, adj_sid_base: int = 100000) -> None:
-        """Initialize the Segment Routing manager.
-
-        Args:
-            node_sid_base: Starting label for Node SIDs. Node SID = base + node_id.
-            adj_sid_base: Starting label for Adjacency SIDs (reserved for future use).
-        """
-        if node_sid_base < MPLS_LABEL_MIN:
-            node_sid_base = MPLS_LABEL_MIN
-
-        self.node_sid_base = node_sid_base
-        self.adj_sid_base = adj_sid_base
-        self.node_sids: Dict[int, NodeSID] = {}
-        self.reverse_sid_map: Dict[int, int] = {}
-        self.custom_paths: Dict[Tuple[int, int], List[int]] = {}
-        self._label_stack_cache: Dict[Tuple[int, int], List[int]] = {}
-
-        logging.info(
-            f"SegmentRoutingManager initialized with Node SID base {node_sid_base}"
-        )
-
-    def allocate_node_sid(self, node_id: int, node_name: str = "") -> NodeSID:
-        """Allocate a stable Node SID for a node.
-
-        The label is deterministic: node_sid_base + node_id.
-
-        Args:
-            node_id: The node's unique identifier.
-            node_name: Human-readable name for logging.
-
-        Returns:
-            NodeSID object containing the allocated label.
-
-        Raises:
-            RuntimeError: If the computed label exceeds MPLS_LABEL_MAX.
-        """
-        if node_id in self.node_sids:
-            return self.node_sids[node_id]
-
-        label = self.node_sid_base + node_id
-        if label > MPLS_LABEL_MAX:
-            raise RuntimeError(
-                f"Node SID {label} exceeds maximum MPLS label {MPLS_LABEL_MAX}"
-            )
-
-        sid = NodeSID(node_id=node_id, label=label, node_name=node_name)
-        self.node_sids[node_id] = sid
-        self.reverse_sid_map[label] = node_id
-
-        logging.debug(f"Allocated Node SID {label} for node {node_name or node_id}")
-        return sid
-
-    def get_node_sid(self, node_id: int) -> Optional[int]:
-        """Return the Node SID label for a node, or None if not allocated.
-
-        Args:
-            node_id: The node's identifier.
-
-        Returns:
-            The MPLS label, or None.
-        """
-        sid = self.node_sids.get(node_id)
-        return sid.label if sid else None
-
-    def get_node_for_sid(self, label: int) -> Optional[int]:
-        """Return the node ID for a given Node SID label, or None.
-
-        Args:
-            label: The Node SID label.
-
-        Returns:
-            The node ID, or None if not found.
-        """
-        return self.reverse_sid_map.get(label)
-
-    def set_custom_path(self, source_id: int, dest_id: int, path: List[int]) -> None:
-        """Store a custom path for a source-destination pair.
-
-        Args:
-            source_id: Source ground station ID.
-            dest_id: Destination ground station ID.
-            path: Ordered list of node IDs from source to destination.
-
-        Raises:
-            ValueError: If path is too short or endpoints do not match.
-        """
-        if len(path) < 2:
-            raise ValueError("Path must have at least 2 nodes")
-        if path[0] != source_id:
-            raise ValueError("Path must start with source node")
-        if path[-1] != dest_id:
-            raise ValueError("Path must end with destination node")
-
-        self.custom_paths[(source_id, dest_id)] = path
-        self._label_stack_cache.pop((source_id, dest_id), None)
-
-        logging.info(
-            f"Set custom SR path {source_id} -> {dest_id}: "
-            f"{' -> '.join(str(n) for n in path)}"
-        )
-
-    def get_custom_path(self, source_id: int, dest_id: int) -> Optional[List[int]]:
-        """Return the custom path for a pair, or None if using default routing.
-
-        Args:
-            source_id: Source ground station ID.
-            dest_id: Destination ground station ID.
-
-        Returns:
-            Custom path as list of node IDs, or None.
-        """
-        return self.custom_paths.get((source_id, dest_id))
-
-    def clear_custom_path(self, source_id: int, dest_id: int) -> bool:
-        """Remove a custom path, reverting to shortest-path routing.
-
-        Args:
-            source_id: Source ground station ID.
-            dest_id: Destination ground station ID.
-
-        Returns:
-            True if a custom path was removed, False if none existed.
-        """
-        self._label_stack_cache.pop((source_id, dest_id), None)
-        return self.custom_paths.pop((source_id, dest_id), None) is not None
-
-    def get_label_stack_for_path(
-        self, path: List[int], use_php: bool = True
-    ) -> List[int]:
-        """Generate the label stack for a path.
-
-        The source pushes Node SIDs for each transit hop. The stack is ordered
-        so the first label to be processed is on top.
-
-        Args:
-            path: List of node IDs from source to destination.
-            use_php: If True, omit the destination's SID (Penultimate Hop Popping).
-
-        Returns:
-            List of labels to push, bottom to top.
-
-        Raises:
-            ValueError: If any node in the path has no allocated Node SID.
-        """
-        if len(path) < 2:
-            return []
-
-        end_idx = -1 if use_php else len(path)
-        segment_nodes = path[1:end_idx]
-
-        labels = []
-        for node_id in segment_nodes:
-            sid = self.node_sids.get(node_id)
-            if sid is None:
-                raise ValueError(f"Node {node_id} does not have a Node SID allocated")
-            labels.append(sid.label)
-
-        return labels
-
-    def get_sr_route_for_destination(
-        self,
-        source_id: int,
-        dest_id: int,
-        default_path: Optional[List[int]] = None,
-        use_php: bool = True,
-    ) -> Tuple[List[int], List[int]]:
-        """Return the path and label stack for a destination.
-
-        Uses the custom path when set, otherwise falls back to default_path.
-
-        Args:
-            source_id: Source node ID.
-            dest_id: Destination node ID.
-            default_path: Shortest path to use when no custom path exists.
-            use_php: Use Penultimate Hop Popping.
-
-        Returns:
-            Tuple of (path, label_stack). Both are empty lists if no path exists.
-        """
-        custom = self.custom_paths.get((source_id, dest_id))
-        path = custom if custom else default_path
-
-        if not path or len(path) < 2:
-            return [], []
-
-        cache_key = (source_id, dest_id)
-        if cache_key in self._label_stack_cache and custom is None:
-            return path, self._label_stack_cache[cache_key]
-
-        labels = self.get_label_stack_for_path(path, use_php=use_php)
-
-        if custom is None:
-            self._label_stack_cache[cache_key] = labels
-
-        return path, labels
-
-    def get_all_node_sids(self) -> List[NodeSID]:
-        """Return all allocated Node SIDs.
-
-        Returns:
-            List of NodeSID objects.
-        """
-        return list(self.node_sids.values())
-
-    def get_statistics(self) -> Dict[str, int]:
-        """Return SR manager statistics.
-
-        Returns:
-            Dict with node_sid_base, node_sids_allocated, custom_paths,
-            and cached_stacks.
-        """
-        return {
-            "node_sid_base": self.node_sid_base,
-            "node_sids_allocated": len(self.node_sids),
-            "custom_paths": len(self.custom_paths),
-            "cached_stacks": len(self._label_stack_cache),
-        }
-
-    def clear_cache(self) -> None:
-        """Clear the label stack cache."""
-        self._label_stack_cache.clear()
-
-    def reset(self) -> None:
-        """Reset all SR state."""
-        self.node_sids.clear()
-        self.reverse_sid_map.clear()
-        self.custom_paths.clear()
-        self._label_stack_cache.clear()
-        logging.info("SegmentRoutingManager reset")
-
-    def __str__(self) -> str:
-        stats = self.get_statistics()
-        return (
-            f"SegmentRoutingManager: {stats['node_sids_allocated']} Node SIDs, "
-            f"{stats['custom_paths']} custom paths"
-        )
-
-
 class SRMPLSDaemon(RoutingDaemon):
     """Segment Routing MPLS routing daemon.
 
@@ -356,26 +88,26 @@ class SRMPLSDaemon(RoutingDaemon):
       configuration is installed once at init and never touched again.
     """
 
-    def __init__(self, topology: "TopologyManager") -> None:
+    def __init__(self, topology: RoutingContext) -> None:
         """
         Args:
             topology: The TopologyManager instance that owns this daemon.
         """
         super().__init__(topology)
-        self._label_manager: Optional[SegmentRoutingManager] = None
-        self.sr_lfib: Dict[int, List] = {}
-        self._sr_graph: Optional[Any] = None
-        self.mpls_config: Optional[Any] = None
-        self._prev_sr_gs_routes: Dict[int, List[str]] = {}
-        self._prev_sr_sat_routes: Dict[int, List[str]] = {}
-        self._prev_sr_node_sid_routes: Dict[int, List[str]] = {}
+        self._label_manager: SegmentRoutingManager | None = None
+        self.sr_lfib: dict[int, list] = {}
+        self._sr_graph: Any | None = None
+        self.mpls_config: Any | None = None
+        self._prev_sr_gs_routes: dict[int, list[str]] = {}
+        self._prev_sr_sat_routes: dict[int, list[str]] = {}
+        self._prev_sr_node_sid_routes: dict[int, list[str]] = {}
 
     @property
     def is_initialized(self) -> bool:
         """Return True after init() has been called successfully."""
         return self._label_manager is not None
 
-    def get_node_sid(self, node_id: int) -> Optional[int]:
+    def get_node_sid(self, node_id: int) -> int | None:
         """Return the Node SID label for a node, or None if not allocated.
 
         Args:
@@ -402,7 +134,6 @@ class SRMPLSDaemon(RoutingDaemon):
             True if initialization succeeded, False otherwise.
         """
         try:
-
             self._configure_mpls()
 
             self._init_sr_mpls()
@@ -416,7 +147,7 @@ class SRMPLSDaemon(RoutingDaemon):
             logging.error(f"SR-MPLS initialization failed: {e}")
             return False
 
-    def update(self, _new_links: "List[Link]", max_workers: int = 128) -> None:
+    def update(self, _new_links: list[Link], max_workers: int = 128) -> None:
         """Rebuild SR-MPLS ground-station routes after topology changes.
 
         Satellite Node SID rules are stable and never touched here. Only
@@ -429,7 +160,7 @@ class SRMPLSDaemon(RoutingDaemon):
         """
         self._rebuild_sr_mpls_routing(init_flag=False, max_workers=max_workers)
 
-    def remove(self, node: "Optional[Node]" = None, max_workers: int = 128) -> None:
+    def remove(self, node: Node | None = None, max_workers: int = 128) -> None:
         """Remove all SR-MPLS forwarding entries.
 
         Flushes the kernel MPLS label-forwarding table on every node (or on a
@@ -453,8 +184,8 @@ class SRMPLSDaemon(RoutingDaemon):
         self._prev_sr_node_sid_routes.clear()
 
     def set_sr_custom_path(
-        self, source_id: int, dest_id: int, path: List[int]
-    ) -> Dict[str, Any]:
+        self, source_id: int, dest_id: int, path: list[int]
+    ) -> dict[str, Any]:
         """Set a custom SR-MPLS path for a source-destination pair.
 
         Validates the path, stores it in the label manager, and immediately
@@ -511,7 +242,7 @@ class SRMPLSDaemon(RoutingDaemon):
             "hop_count": len(path) - 1,
         }
 
-    def clear_sr_custom_path(self, source_id: int, dest_id: int) -> Dict[str, Any]:
+    def clear_sr_custom_path(self, source_id: int, dest_id: int) -> dict[str, Any]:
         """Remove a custom SR path and revert to shortest-path routing.
 
         Args:
@@ -541,7 +272,7 @@ class SRMPLSDaemon(RoutingDaemon):
             "reverted_to_shortest": removed,
         }
 
-    def get_sr_statistics(self) -> Dict[str, Any]:
+    def get_sr_statistics(self) -> dict[str, Any]:
         """Return SR-MPLS statistics.
 
         Returns:
@@ -557,7 +288,7 @@ class SRMPLSDaemon(RoutingDaemon):
         stats["ground_stations_with_routes"] = len(self.sr_lfib)
         return stats
 
-    def list_sr_custom_paths(self) -> List[Dict[str, Any]]:
+    def list_sr_custom_paths(self) -> list[dict[str, Any]]:
         """List all active custom SR paths.
 
         Returns:
@@ -714,9 +445,9 @@ class SRMPLSDaemon(RoutingDaemon):
         all_paths = dict(nx.all_pairs_dijkstra_path(graph, weight="weight"))
 
         # Pre-build interface lookup: {node_id: {peer_id: iface}}
-        iface_lookup: Dict[int, Dict[int, Any]] = {}
+        iface_lookup: dict[int, dict[int, Any]] = {}
         for node in gs_array + sat_array:
-            node_ifaces: Dict[int, Any] = {}
+            node_ifaces: dict[int, Any] = {}
             for iface in node.interfaces:
                 try:
                     peer_id = int(iface.name.split(".")[1])
@@ -742,24 +473,21 @@ class SRMPLSDaemon(RoutingDaemon):
 
                 try:
                     custom_path = self._label_manager.get_custom_path(src_id, gs_dst.id)
-                    if custom_path:
-                        path = custom_path
-                    else:
-                        path = src_paths[gs_dst.id]
+                    path = custom_path or src_paths[gs_dst.id]
 
                     if len(path) < 2:
                         continue
 
                     first_hop_id = path[1]
-                    iface = src_ifaces.get(first_hop_id)
+                    first_iface: Any = src_ifaces.get(first_hop_id)
 
-                    if iface is None or iface.peer is None:
+                    if first_iface is None or first_iface.peer is None:
                         logging.warning(
                             f"No interface from GS {src_id} to {first_hop_id}"
                         )
                         continue
 
-                    next_hop_ip = iface.peer.ipv4
+                    next_hop_ip = first_iface.peer.ipv4
                     if not next_hop_ip or next_hop_ip == "0.0.0.0":
                         continue
 
@@ -771,7 +499,7 @@ class SRMPLSDaemon(RoutingDaemon):
                         destination=gs_dst.loopback.ipv4,
                         label_stack=label_stack,
                         next_hop=next_hop_ip,
-                        interface=iface,
+                        interface=first_iface,
                         fec_prefix=32,
                     )
                     self.sr_lfib[src_id].append(entry)
@@ -827,22 +555,9 @@ class SRMPLSDaemon(RoutingDaemon):
         )
         return errors
 
-    def _enable_mpls(self, node: "Node") -> None:
-        """Load kernel MPLS modules and enable MPLS forwarding on a node.
-
-        Loads mpls_router and mpls_iptunnel modules, sets the platform label
-        space size, and enables MPLS input on loopback and every interface.
-
-        Args:
-            node: The node whose MPLS forwarding should be enabled.
-        """
-        commands = [
-            "sysctl -w net.mpls.platform_labels=1048575",
-            "sysctl -w net.mpls.conf.lo.input=1",
-        ]
-        for iface in node.interfaces:
-            commands.append(f"sysctl -w net.mpls.conf.{iface.get_iname()}.input=1")
-        node.execute_command("; ".join(commands))
+    def _enable_mpls(self, node: Node) -> None:
+        """Enable MPLS forwarding on a node."""
+        _enable_mpls_helper(node, load_modules=False)
 
     def _enable_mpls_on_all_nodes(self, max_workers: int = 32) -> int:
         """Enable MPLS forwarding on all satellites and ground stations.
@@ -934,7 +649,7 @@ class SRMPLSDaemon(RoutingDaemon):
                         neighbor_name = neighbor_node.name
                     case None:
                         match self.topology.ground_stations.get(neighbor_id):
-                            case GroundStation() as neighbor_node:
+                            case GroundStation() as neighbor_node:  # type: ignore[misc]
                                 neighbor_name = neighbor_node.name
                             case None:
                                 neighbor_name = f"Node{neighbor_id}"
@@ -988,7 +703,7 @@ class SRMPLSDaemon(RoutingDaemon):
         errors = 0
         with ThreadPoolExecutor(max_workers=workers) as pool:
             futures = [
-                pool.submit(install_sr_forwarding, sat)
+                pool.submit(install_sr_forwarding, sat)  # type: ignore[arg-type]
                 for sat in all_sats
                 if sat.container
             ]
@@ -1022,7 +737,7 @@ class SRMPLSDaemon(RoutingDaemon):
             len(self.topology.ground_stations),
         )
 
-        def install_gs_routes(gs: "GroundStation") -> bool:
+        def install_gs_routes(gs: GroundStation) -> bool:
             if self._label_manager is None:
                 raise RuntimeError("SR-MPLS manager not initialized")
 
@@ -1056,7 +771,7 @@ class SRMPLSDaemon(RoutingDaemon):
         errors = 0
         with ThreadPoolExecutor(max_workers=workers) as pool:
             futures = [
-                pool.submit(install_gs_routes, gs)
+                pool.submit(install_gs_routes, gs)  # type: ignore[arg-type]
                 for gs in self.topology.ground_stations.values()
                 if gs.container
             ]
@@ -1090,7 +805,7 @@ class SRMPLSDaemon(RoutingDaemon):
             len(self.topology.satellites),
         )
 
-        def install_satellite_routes(sat: "Satellite") -> bool:
+        def install_satellite_routes(sat: Satellite) -> bool:
             if self._label_manager is None:
                 raise RuntimeError("SR-MPLS manager not initialized")
 
@@ -1124,7 +839,7 @@ class SRMPLSDaemon(RoutingDaemon):
         errors = 0
         with ThreadPoolExecutor(max_workers=workers) as pool:
             futures = [
-                pool.submit(install_satellite_routes, sat)
+                pool.submit(install_satellite_routes, sat)  # type: ignore[arg-type]
                 for sat in [
                     satellite
                     for satellite in self.topology.satellites.values()
@@ -1247,7 +962,7 @@ class SRMPLSDaemon(RoutingDaemon):
             except Exception as e:
                 logging.error(f"Failed to update SR routes on {gs_src.name}: {e}")
 
-    def _flush_node(self, node: "Node") -> None:
+    def _flush_node(self, node: Node) -> None:
         """Flush SR-MPLS and IPv4 routes on a single node container.
 
         Removes the IPv4 prefixes installed by this daemon (including those
@@ -1261,7 +976,7 @@ class SRMPLSDaemon(RoutingDaemon):
         if node.container is None:
             return
 
-        cached_commands: List[str] = []
+        cached_commands: list[str] = []
         for cache in (
             self._prev_sr_gs_routes,
             self._prev_sr_sat_routes,
@@ -1269,7 +984,7 @@ class SRMPLSDaemon(RoutingDaemon):
         ):
             cached_commands.extend(cache.pop(node.id, []))
 
-        prefixes: List[str] = []
+        prefixes: list[str] = []
         for command in cached_commands:
             for line in command.splitlines():
                 line = line.strip()
@@ -1286,9 +1001,7 @@ class SRMPLSDaemon(RoutingDaemon):
             try:
                 node.execute_command(["sh", "-lc", f"ip route del {prefix}"])
             except Exception as e:
-                logging.error(
-                    f"Failed to delete SR route {prefix} on {node.name}: {e}"
-                )
+                logging.error(f"Failed to delete SR route {prefix} on {node.name}: {e}")
 
         try:
             node.execute_command(["sh", "-lc", "ip -f mpls route flush table all"])

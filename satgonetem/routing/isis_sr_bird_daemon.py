@@ -5,18 +5,22 @@ declarative Bird2 config directly to each container and manages the Bird
 service lifecycle. MPLS kernel modules and sysctls are configured before
 Bird is started.
 """
+
 from __future__ import annotations
 
 import base64
 import logging
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import TYPE_CHECKING, List, Optional
+from typing import TYPE_CHECKING
 
-from satgonetem.routing.base_daemon import RoutingDaemon
-from satgonetem.routing.bird_service import apply_bird_config, stop_bird
+from satgonetem.routing.bird_daemon import BirdRoutingDaemon
+from satgonetem.routing.bird_service import apply_bird_config
+from satgonetem.routing.commands import (
+    assign_ips,
+    enable_mpls,
+    format_net_address,
+)
 
 if TYPE_CHECKING:
-    from satgonetem.models.link import Link
     from satgonetem.models.node import Node
 
 ISIS_HELLO_INTERVAL = 1
@@ -24,13 +28,10 @@ ISIS_HELLO_MULTIPLIER = 3
 SR_GLOBAL_BLOCK_LOW = 16000
 SR_GLOBAL_BLOCK_HIGH = 23999
 
-_ISIS_PROBE_CONFIG = (
-    "protocol device {}\n"
-    "protocol mpls { label range 16000 23999; }\n"
-)
+_ISIS_PROBE_CONFIG = "protocol device {}\nprotocol mpls { label range 16000 23999; }\n"
 
 
-def _bird_supports_isis(node: "Node") -> bool:
+def _bird_supports_isis(node: Node) -> bool:
     """Return whether *node*'s Bird build accepts IS-IS and MPLS config.
 
     Stock Bird 2.x ships neither protocol, so only a patched build accepts the
@@ -55,7 +56,7 @@ def _bird_supports_isis(node: "Node") -> bool:
     return True
 
 
-class ISISBirdSRDaemon(RoutingDaemon):
+class ISISBirdSRDaemon(BirdRoutingDaemon):
     """Bird2-based IS-IS SR-MPLS routing daemon.
 
     Writes a complete declarative Bird2 IS-IS + SR-MPLS configuration to each
@@ -63,18 +64,7 @@ class ISISBirdSRDaemon(RoutingDaemon):
     When new links are added, rebuilds the config for directly affected nodes.
     """
 
-    def init(self, max_workers: int = 4) -> bool:
-        """Start Bird IS-IS SR-MPLS on every satellite and ground station.
-
-        Args:
-            max_workers: Maximum number of parallel worker threads.
-
-        Returns:
-            True if all nodes initialized successfully, False if any failed.
-        """
-        nodes = list(self.topology.get_satellites()) + list(
-            self.topology.get_ground_stations()
-        )
+    def _validate_nodes(self, nodes: list[Node]) -> bool:
         if nodes and not _bird_supports_isis(nodes[0]):
             logging.error(
                 "IS-IS SR requires a Bird build with IS-IS and MPLS support; "
@@ -82,123 +72,17 @@ class ISISBirdSRDaemon(RoutingDaemon):
                 "image or the 'dynamic-ospf' routing method."
             )
             return False
-        errors = 0
-        with ThreadPoolExecutor(max_workers=max_workers) as pool:
-            futures = {pool.submit(self._init_node, n): n for n in nodes}
-            for fut in as_completed(futures):
-                n = futures[fut]
-                try:
-                    fut.result()
-                except Exception as e:
-                    errors += 1
-                    logging.error(f"IS-IS SR init failed on {n.name}: {e}")
-        return errors == 0
+        return True
 
-    def update(self, new_links: "List[Link]", max_workers: int = 4) -> None:
-        """Rebuild Bird IS-IS SR config on nodes touched by new links.
-
-        Bird uses a single declarative config file, so adding an interface
-        requires a full config rebuild and reload on the affected node.
-
-        Args:
-            new_links: Links added in the latest topology change.
-            max_workers: Accepted for interface consistency.
-        """
-        if not self.topology.status:
-            logging.warning("IS-IS SR update skipped: topology not yet active")
-            return
-
-        affected = {link.source for link in new_links} | {
-            link.target for link in new_links
-        }
-        for node in affected:
-            try:
-                self._init_node(node)
-            except Exception as e:
-                logging.error(f"IS-IS SR update failed on {node.name}: {e}")
-
-    def remove(self, node: "Optional[Node]" = None, max_workers: int = 4) -> None:
-        """Stop Bird on all nodes or on a single node.
-
-        Args:
-            node: If provided, only this node is affected. If None, all
-                satellites and ground stations are processed in parallel.
-            max_workers: Maximum number of parallel worker threads.
-        """
-        if node is not None:
-            self._stop_node(node)
-            return
-
-        nodes = list(self.topology.get_satellites()) + list(
-            self.topology.get_ground_stations()
-        )
-        with ThreadPoolExecutor(max_workers=max_workers) as pool:
-            futures = {pool.submit(self._stop_node, n): n for n in nodes}
-            for fut in as_completed(futures):
-                n = futures[fut]
-                try:
-                    fut.result()
-                except Exception as e:
-                    logging.error(f"Failed to stop Bird on {n.name}: {e}")
-
-    def _init_node(self, node: "Node") -> None:
-        """Enable MPLS, assign IPs, build Bird IS-IS SR config, and start Bird.
-
-        Args:
-            node: The node to configure.
-        """
+    def _init_node(self, node: Node) -> None:
+        """Enable MPLS, assign IPs, build Bird IS-IS SR config, and start Bird."""
         _enable_mpls(node)
         _assign_ips(node)
         config = _build_isis_sr_config(node)
         _apply_config(node, config)
 
-    def _stop_node(self, node: "Node") -> None:
-        """Stop the Bird service inside a node's container.
 
-        Args:
-            node: The node on which Bird should be stopped.
-        """
-        stop_bird(node)
-
-
-def _format_net_address(loopback_ip: str) -> str:
-    """Format an IS-IS NET address from a loopback IPv4 address.
-
-    Pads each octet to 3 digits, concatenates, then groups as XXXX.XXXX.XXXX.
-
-    Args:
-        loopback_ip: IPv4 address string (e.g. "128.33.0.133").
-
-    Returns:
-        Full NET string (e.g. "49.0001.1280.3300.0133.00").
-    """
-    parts = [f"{int(p):03d}" for p in loopback_ip.split(".")]
-    full_str = "".join(parts)
-    system_id = f"{full_str[0:4]}.{full_str[4:8]}.{full_str[8:12]}"
-    return f"49.0001.{system_id}.00"
-
-
-def _enable_mpls(node: "Node") -> None:
-    """Load kernel MPLS modules and enable MPLS forwarding on a node.
-
-    Loads mpls_router and mpls_iptunnel modules, sets the platform label
-    space size, and enables MPLS input on loopback and every interface.
-
-    Args:
-        node: The node whose MPLS forwarding should be enabled.
-    """
-    commands = [
-        "modprobe mpls_router 2>/dev/null || true",
-        "modprobe mpls_iptunnel 2>/dev/null || true",
-        "sysctl -w net.mpls.platform_labels=1048575",
-        "sysctl -w net.mpls.conf.lo.input=1",
-    ]
-    for iface in node.interfaces:
-        commands.append(f"sysctl -w net.mpls.conf.{iface.get_iname()}.input=1")
-    node.execute_command("; ".join(commands))
-
-
-def _build_isis_sr_config(node: "Node") -> str:
+def _build_isis_sr_config(node: Node) -> str:
     """Build a complete Bird2 IS-IS + SR-MPLS configuration string for one node.
 
     The configuration includes:
@@ -285,7 +169,7 @@ def _build_isis_sr_config(node: "Node") -> str:
     return "\n".join(lines)
 
 
-def _apply_config(node: "Node", config: str) -> None:
+def _apply_config(node: Node, config: str) -> None:
     """Install a Bird IS-IS SR config and start or reload Bird in the container.
 
     Args:
@@ -295,24 +179,6 @@ def _apply_config(node: "Node", config: str) -> None:
     apply_bird_config(node, config)
 
 
-def _assign_ips(node: "Node") -> None:
-    """Synchronously assign interface IPv4 addresses before Bird starts.
-
-    Uses ``ip addr replace`` (idempotent) so Bird's device and direct
-    protocols can see the addresses on startup.
-
-    Args:
-        node: The node whose interfaces should have IPs assigned.
-    """
-    lines = []
-    for iface in node.interfaces:
-        ip = getattr(iface, "ipv4", None)
-        if ip:
-            lines.append(f"addr replace {ip}/{iface.prefix_len} dev {iface.get_iname()}")
-    if getattr(node.loopback, "ipv4", None):
-        lines.append(f"addr replace {node.loopback.ipv4}/32 dev lo")
-    if not lines:
-        return
-    payload = "\n".join(lines)
-    b64 = base64.b64encode(payload.encode()).decode()
-    node.execute_command(f"echo {b64} | base64 -d | ip -force -batch -")
+_format_net_address = format_net_address
+_enable_mpls = enable_mpls
+_assign_ips = assign_ips

@@ -17,7 +17,7 @@ BIRD_CONTROL_SOCKET = "/run/bird/bird.ctl"
 BIRD_CONFIG_PATH = "/etc/bird/bird.conf"
 
 
-def apply_bird_config(node: "Node", config: str) -> None:
+def apply_bird_config(node: Node, config: str) -> None:
     """Install *config* and start or reload Bird inside *node*'s container.
 
     The config is written inside the container, a running daemon is reloaded
@@ -41,7 +41,7 @@ def apply_bird_config(node: "Node", config: str) -> None:
     )
 
 
-def stop_bird(node: "Node") -> None:
+def stop_bird(node: Node) -> None:
     """Stop Bird inside *node*'s container.
 
     A daemon that is not running is not an error: ``birdc down`` fails when no
@@ -50,6 +50,4 @@ def stop_bird(node: "Node") -> None:
     Args:
         node: The node whose Bird daemon should stop.
     """
-    node.execute_command(
-        f"birdc -s {BIRD_CONTROL_SOCKET} down 2>/dev/null || true"
-    )
+    node.execute_command(f"birdc -s {BIRD_CONTROL_SOCKET} down 2>/dev/null || true")

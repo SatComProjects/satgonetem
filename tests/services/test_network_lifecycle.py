@@ -62,9 +62,12 @@ def test_start_gonetem_passes_only_non_hil_nodes_and_active_links():
 
     hil_manager = MagicMock()
     hil_manager.is_hil_node.side_effect = lambda name: name == hil_gnd.name
-    hil_manager.is_hil_link.side_effect = lambda link: hil_gnd.name in (
-        link.source.name,
-        link.target.name,
+    hil_manager.is_hil_link.side_effect = lambda link: (
+        hil_gnd.name
+        in (
+            link.source.name,
+            link.target.name,
+        )
     )
     topology.hil_manager = hil_manager
 

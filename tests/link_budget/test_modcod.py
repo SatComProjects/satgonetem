@@ -1,6 +1,5 @@
 """Tests for satgonetem.link_budget.modcod."""
 
-
 from satgonetem.link_budget.modcod import ModCod
 
 

@@ -15,7 +15,6 @@ from satgonetem.models.sat_com_models import (
     WalkerShell,
 )
 
-
 CONSTELLATION_DATA = {
     "identifier": "iris2",
     "amount_of_orbit_plane": 6,
@@ -71,8 +70,11 @@ class TestOrbitalConnectivityProperty:
         assert prop.maximum_ground_station_range == 1500.0
 
     def test_missing_required_field_raises(self):
-        data = {k: v for k, v in ORBITAL_CONNECTIVITY_DATA.items()
-                if k != "maximum_ground_station_range"}
+        data = {
+            k: v
+            for k, v in ORBITAL_CONNECTIVITY_DATA.items()
+            if k != "maximum_ground_station_range"
+        }
         with pytest.raises(ValidationError):
             OrbitalConnectivityProperty(**data)
 
@@ -84,7 +86,9 @@ class TestWalkerShell:
         shell = WalkerShell(
             type="delta",
             constellation_property=ConstellationProperty(**CONSTELLATION_DATA),
-            orbital_connectivity_property=OrbitalConnectivityProperty(**ORBITAL_CONNECTIVITY_DATA),
+            orbital_connectivity_property=OrbitalConnectivityProperty(
+                **ORBITAL_CONNECTIVITY_DATA
+            ),
             ground_object_white_list=["gs1", "gs2"],
         )
         assert shell.type == "delta"
@@ -94,7 +98,9 @@ class TestWalkerShell:
         shell = WalkerShell(
             type="star",
             constellation_property=ConstellationProperty(**CONSTELLATION_DATA),
-            orbital_connectivity_property=OrbitalConnectivityProperty(**ORBITAL_CONNECTIVITY_DATA),
+            orbital_connectivity_property=OrbitalConnectivityProperty(
+                **ORBITAL_CONNECTIVITY_DATA
+            ),
             ground_object_white_list=[],
         )
         assert shell.type == "star"
@@ -104,7 +110,9 @@ class TestWalkerShell:
             WalkerShell(
                 type="polar",
                 constellation_property=ConstellationProperty(**CONSTELLATION_DATA),
-                orbital_connectivity_property=OrbitalConnectivityProperty(**ORBITAL_CONNECTIVITY_DATA),
+                orbital_connectivity_property=OrbitalConnectivityProperty(
+                    **ORBITAL_CONNECTIVITY_DATA
+                ),
                 ground_object_white_list=[],
             )
 
@@ -120,8 +128,11 @@ class TestConnectivityProperties:
         assert props.maximum_connected_satellites == 2
 
     def test_missing_field_raises(self):
-        data = {k: v for k, v in CONNECTIVITY_PROPS_DATA.items()
-                if k != "elevation_above_horizon"}
+        data = {
+            k: v
+            for k, v in CONNECTIVITY_PROPS_DATA.items()
+            if k != "elevation_above_horizon"
+        }
         with pytest.raises(ValidationError):
             ConnectivityProperties(**data)
 
@@ -154,7 +165,9 @@ class TestGroundObject:
                 identifier="x",
                 data_file="file.txt",
                 type="relay_station",
-                connectivity_properties=ConnectivityProperties(**CONNECTIVITY_PROPS_DATA),
+                connectivity_properties=ConnectivityProperties(
+                    **CONNECTIVITY_PROPS_DATA
+                ),
             )
 
 
@@ -228,7 +241,9 @@ class TestConfiguration:
         walker_shell = WalkerShell(
             type="delta",
             constellation_property=ConstellationProperty(**CONSTELLATION_DATA),
-            orbital_connectivity_property=OrbitalConnectivityProperty(**ORBITAL_CONNECTIVITY_DATA),
+            orbital_connectivity_property=OrbitalConnectivityProperty(
+                **ORBITAL_CONNECTIVITY_DATA
+            ),
             ground_object_white_list=[],
         )
         ground_object = GroundObject(

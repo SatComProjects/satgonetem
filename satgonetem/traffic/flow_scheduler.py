@@ -20,17 +20,15 @@ import enum
 import threading
 import time
 from collections import deque
+from collections.abc import Callable, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from threading import Lock
-from typing import TYPE_CHECKING, Callable, Sequence, Union
+from typing import Any
 
-if TYPE_CHECKING:
-    from satgonetem.traffic.hping3_utils import Hping3Flow, Hping3Results
-    from satgonetem.traffic.iperf3_utils import Iperf3Flow, Iperf3Results
-    from satgonetem.traffic.ping_utils import PingFlow, PingResults
+from satgonetem.traffic.flow import Flow
 
-AnyFlow = Union["Iperf3Flow", "Hping3Flow", "PingFlow"]
-AnyResult = Union["Iperf3Results", "Hping3Results", "PingResults"]
+AnyFlow = Flow
+AnyResult = Any
 
 # How long to wait for a flow thread to exit after stop() has been called on
 # timeout. stop() itself performs a bounded join, so this is a final safety
@@ -107,19 +105,18 @@ def _execute_flow(
     try:
         flow.delay = 0.0
         flow.start()
-        if flow._thread is not None:
-            flow._thread.join(timeout=join_timeout_sec)
-            if flow._thread.is_alive():
-                # Stop the abandoned flow before raising so its tool process
-                # (iperf3/hping3/ping) and thread do not outlive the
-                # scheduler's accounting or exceed max_workers.
-                try:
-                    flow.stop()
-                except Exception as stop_exc:
-                    if debug:
-                        print(f"[flow] STOP FAIL {label}: {stop_exc}")
-                flow._thread.join(timeout=_STOP_JOIN_TIMEOUT_SEC)
-                raise TimeoutError(f"Flow timed out after {join_timeout_sec}s: {label}")
+        flow.join(timeout=join_timeout_sec)
+        if flow.is_alive():
+            # Stop the abandoned flow before raising so its tool process
+            # (iperf3/hping3/ping) and thread do not outlive the
+            # scheduler's accounting or exceed max_workers.
+            try:
+                flow.stop()
+            except Exception as stop_exc:
+                if debug:
+                    print(f"[flow] STOP FAIL {label}: {stop_exc}")
+            flow.join(timeout=_STOP_JOIN_TIMEOUT_SEC)
+            raise TimeoutError(f"Flow timed out after {join_timeout_sec}s: {label}")
         if debug:
             print(f"[flow] DONE  {label}")
     except Exception as exc:
@@ -183,7 +180,7 @@ class FlowScheduler:
             raise ValueError(f"max_workers must be >= 1, got {max_workers}")
         if flow_timeout_sec is not None and flow_timeout_sec <= 0:
             raise ValueError(
-                "flow_timeout_sec must be > 0 when provided, " f"got {flow_timeout_sec}"
+                f"flow_timeout_sec must be > 0 when provided, got {flow_timeout_sec}"
             )
         self._flows = sorted(flows, key=lambda f: f.delay)
         self._max_workers = max_workers
@@ -309,7 +306,7 @@ class FlowScheduler:
                     pending.add(future)
 
                 for future in as_completed(pending):
-                    flow: AnyFlow = future._satgonetem_flow
+                    completed_flow: AnyFlow = future._satgonetem_flow
                     pending.discard(future)
                     exc = future.exception()
                     if exc is not None:
@@ -324,15 +321,11 @@ class FlowScheduler:
                     elif self._save_results:
                         completed = future.result()
                         self._results.append(completed)
-                        self._result_map[id(flow)] = completed
+                        self._result_map[id(completed_flow)] = completed
                     else:
                         # Release the memory held by the flow's own result.
-                        # The scheduler was asked not to retain it, and clearing
-                        # it here lets GC reclaim potentially large result
-                        # objects (e.g. iperf3 DataFrames) as soon as the flow
-                        # finishes instead of after the whole schedule.
-                        with flow._lock:
-                            flow._result = None
+                        # The scheduler was asked not to retain it.
+                        completed_flow.discard_result()
 
                 if self._debug:
                     progress_event.set()

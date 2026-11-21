@@ -1,6 +1,7 @@
 """Tests for satgonetem.utils.project_builder."""
 
 import pathlib
+
 import pytest
 
 from satgonetem.models.sat_com_models import (
@@ -13,15 +14,15 @@ from satgonetem.utils.project_builder import (
     GroundObject,
     GroundObjectFile,
     GroundStationEntry,
-    create_test_project,
-    create_empty_project,
-    create_and_load_simulation,
-    create_custom_satellite,
-    create_custom_ground_station,
-    add_custom_ground_station,
-    _find_satellite_by_name,
-    _find_ground_station_by_name,
     _find_ground_object_by_name,
+    _find_ground_station_by_name,
+    _find_satellite_by_name,
+    add_custom_ground_station,
+    create_and_load_simulation,
+    create_custom_ground_station,
+    create_custom_satellite,
+    create_empty_project,
+    create_test_project,
 )
 
 CONN_PROPS = ConnectivityProperties(

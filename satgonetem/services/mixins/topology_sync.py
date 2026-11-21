@@ -6,25 +6,29 @@ import logging
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from satgonetem.models.ground_station import GroundStation
-from satgonetem.models.satellite import Satellite
-from satgonetem.models.link import Link
-from satgonetem.services.mixins.simulation_loop import ensure_simulation_lock
-from satgonetem.utils.utils import distance_3d_km, distance_3d_km_many
+from typing import TYPE_CHECKING
+
 from sat_com_model.models import InterSatelliteLinkDirection
 from sat_com_model.models import Link as SatComLink
-from sat_com_model.models import Satellite as SatComSatellite
-from sat_com_model.models import GroundStation as SatComGroundStation
 
-from typing import TYPE_CHECKING
+from satgonetem.models.ground_station import GroundStation
+from satgonetem.models.link import Link
+from satgonetem.models.satellite import Satellite
+from satgonetem.services.mixins.simulation_loop import ensure_simulation_lock
+from satgonetem.services.topology_link_plan import (
+    build_link_key,
+    removed_link_keys,
+)
+from satgonetem.utils.utils import distance_3d_km, distance_3d_km_many
 
 if TYPE_CHECKING:
     from satgonetem.models.node import Node
-    from typing import Optional
 
 
 class TopologySyncMixin:
     """TopologySync functionality."""
+
+    initial_sync: bool
 
     def init(self) -> None:
         """Initialize topology from the simulation manager."""
@@ -215,7 +219,7 @@ class TopologySyncMixin:
         error_count += self._refresh_link_distances(distance_refresh_links)
 
         removed_count = 0
-        for key in self.links.keys() - current_keys:
+        for key in removed_link_keys(self.links.keys(), current_keys):
             self.links[key].to_remove = True
             removed_count += 1
 
@@ -284,7 +288,7 @@ class TopologySyncMixin:
             return errors
 
         errors = 0
-        for link, distance_km in zip(links, distances_km):
+        for link, distance_km in zip(links, distances_km, strict=False):
             try:
                 link.update_distance_and_delay(float(distance_km) * 1000.0)
             except Exception as exc:
@@ -322,8 +326,7 @@ class TopologySyncMixin:
                 key = self._build_link_key(source, destination)
             except ValueError as exc:
                 logging.warning(
-                    "Skipping link with unsupported endpoints during delete "
-                    "sync: %s",
+                    "Skipping link with unsupported endpoints during delete sync: %s",
                     exc,
                 )
                 continue
@@ -361,7 +364,7 @@ class TopologySyncMixin:
                 pass
             case None:
                 match self.ground_stations.get(src_uid):
-                    case GroundStation() as link_source:
+                    case GroundStation() as link_source:  # type: ignore[misc]
                         pass
                     case None:
                         raise ValueError(
@@ -383,7 +386,7 @@ class TopologySyncMixin:
                 pass
             case None:
                 match self.ground_stations.get(dst_uid):
-                    case GroundStation() as link_destination:
+                    case GroundStation() as link_destination:  # type: ignore[misc]
                         pass
                     case None:
                         raise ValueError(
@@ -428,7 +431,9 @@ class TopologySyncMixin:
         if link_type == "InterSatelliteLink":
             default_capacity_kbps = self.isl_link_capacity
         elif link_type == "GroundObjectLink":
-            default_capacity_kbps = getattr(self, "ground_object_link_capacity", self.gnd_link_capacity)
+            default_capacity_kbps = getattr(
+                self, "ground_object_link_capacity", self.gnd_link_capacity
+            )
         else:
             default_capacity_kbps = self.gnd_link_capacity
 
@@ -446,99 +451,9 @@ class TopologySyncMixin:
         link.satcom_object = sat_com_link
         return link
 
-    def _build_link_key(self, source: "Node", target: "Node") -> frozenset:
-        """Build a unique frozenset key identifying a link between two nodes.
-
-        Accepts either SatGoNeTem nodes (Satellite/GroundStation) or
-        sat_com_model topology objects (SatComSatellite/SatComGroundStation),
-        so the same method can be used during both initial sync and runtime
-        update passes.
-
-        Args:
-            source: The link source, either a local node or a satcom object.
-            target: The link target, either a local node or a satcom object.
-
-        Returns:
-            A frozenset of two name strings that uniquely identifies the link
-            regardless of direction.
-
-        Raises:
-            ValueError: If source/target are not a recognised node type pair.
-        """
-        if isinstance(source, SatComSatellite) and isinstance(target, SatComSatellite):
-            return frozenset(
-                (
-                    "Sat" + str(getattr(source, "topology_uniq_id", None)),
-                    "Sat" + str(getattr(target, "topology_uniq_id", None)),
-                )
-            )
-        elif isinstance(source, SatComSatellite) and isinstance(
-            target, SatComGroundStation
-        ):
-            return frozenset(
-                (
-                    "Sat" + str(getattr(source, "topology_uniq_id", None)),
-                    "Gnd" + str(getattr(target, "topology_uniq_id", None)),
-                )
-            )
-        elif isinstance(source, SatComGroundStation) and isinstance(
-            target, SatComSatellite
-        ):
-            return frozenset(
-                (
-                    "Gnd" + str(getattr(source, "topology_uniq_id", None)),
-                    "Sat" + str(getattr(target, "topology_uniq_id", None)),
-                )
-            )
-        elif isinstance(source, SatComGroundStation) and isinstance(
-            target, SatComGroundStation
-        ):
-            return frozenset(
-                (
-                    "Gnd" + str(getattr(source, "topology_uniq_id", None)),
-                    "Gnd" + str(getattr(target, "topology_uniq_id", None)),
-                )
-            )
-        elif isinstance(source, Satellite) and isinstance(target, Satellite):
-            return frozenset(
-                (
-                    "Sat"
-                    + str(getattr(source.satcom_object, "topology_uniq_id", None)),
-                    "Sat"
-                    + str(getattr(target.satcom_object, "topology_uniq_id", None)),
-                )
-            )
-        elif isinstance(source, Satellite) and isinstance(target, GroundStation):
-            return frozenset(
-                (
-                    "Sat"
-                    + str(getattr(source.satcom_object, "topology_uniq_id", None)),
-                    "Gnd"
-                    + str(getattr(target.satcom_object, "topology_uniq_id", None)),
-                )
-            )
-        elif isinstance(source, GroundStation) and isinstance(target, Satellite):
-            return frozenset(
-                (
-                    "Gnd"
-                    + str(getattr(source.satcom_object, "topology_uniq_id", None)),
-                    "Sat"
-                    + str(getattr(target.satcom_object, "topology_uniq_id", None)),
-                )
-            )
-        elif isinstance(source, GroundStation) and isinstance(target, GroundStation):
-            return frozenset(
-                (
-                    "Gnd"
-                    + str(getattr(source.satcom_object, "topology_uniq_id", None)),
-                    "Gnd"
-                    + str(getattr(target.satcom_object, "topology_uniq_id", None)),
-                )
-            )
-        else:
-            raise ValueError(
-                "Source and target must be either Satellite or GroundStation"
-            )
+    def _build_link_key(self, source: Node, target: Node) -> frozenset:
+        """Return a direction-independent link key."""
+        return build_link_key(source, target)
 
     def update_simulation(self, advance_timestep: bool = True) -> None:
         """
@@ -576,7 +491,7 @@ class TopologySyncMixin:
             if advance_timestep:
                 self.current_time_step += 1
                 self._update_simulation_manager_time()
-            
+
             self._sync_node_positions()
             link_changes = self._sync_links()
             links_to_add = link_changes["links_to_add"]
@@ -679,7 +594,7 @@ class TopologySyncMixin:
         for link in self.links.values():
             link.update_interfaces_state()
 
-    def _create_test_link(self, node1, node2) -> Optional[Link]:
+    def _create_test_link(self, node1, node2) -> Link | None:
         """
         Create a test link between two nodes for performance testing.
 
@@ -740,7 +655,7 @@ class TopologySyncMixin:
                 distance=distance,
                 type=link_type,
                 direction="",
-                default_capacity_kbps=int(10000),
+                default_capacity_kbps=10000,
                 is_active=True,
                 use_budget=self.use_budget,
                 link_budget_config=self.link_budget_config,
@@ -759,7 +674,7 @@ class TopologySyncMixin:
             if link_key not in self.links:
                 self.links[link_key] = test_link
                 logging.info(
-                    f"Created test link {node1.name} -- {node2.name} (distance: {int(distance/1000)} km, delay: {test_link.delay}ms)"
+                    f"Created test link {node1.name} -- {node2.name} (distance: {int(distance / 1000)} km, delay: {test_link.delay}ms)"
                 )
                 return test_link
             else:

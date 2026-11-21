@@ -12,9 +12,14 @@ from satgonetem.services.topology_satcom import (
     TopologyManager,
 )
 
-TEST_TOPOLOGY = "topology_files/test_topology.json"
+TEST_TOPOLOGY = str(
+    Path(__file__).resolve().parents[2] / "topology_files/test_topology.json"
+)
 SAMPLE_TOPOLOGIES = sorted(
-    str(path) for path in Path("topology_files").glob("*_topology.json")
+    str(path)
+    for path in (Path(__file__).resolve().parents[2] / "topology_files").glob(
+        "*_topology.json"
+    )
 )
 
 
@@ -87,9 +92,7 @@ class TestPersistence:
         path = tmp_path / "topology.json"
         topology.to_file(
             str(path),
-            network_config=NetworkConfig(
-                link_netem_limit=2048, link_txqueuelen=4096
-            ),
+            network_config=NetworkConfig(link_netem_limit=2048, link_txqueuelen=4096),
         )
 
         payload = json.loads(path.read_text())["network_config"]
@@ -100,9 +103,7 @@ class TestPersistence:
         path = tmp_path / "topology.json"
         topology.to_file(
             str(path),
-            network_config=NetworkConfig(
-                link_netem_limit=2048, link_txqueuelen=4096
-            ),
+            network_config=NetworkConfig(link_netem_limit=2048, link_txqueuelen=4096),
         )
 
         reloaded = TopologyManager.from_file(str(path))
@@ -126,6 +127,26 @@ class TestPersistence:
         assert config.link_txqueuelen == 1000
 
 
+class TestControllerInterfacePattern:
+    def test_default_pattern_selects_controller_interface_index(self):
+        config = NetworkConfig()
+
+        assert config.controller_node_iface_pattern == "eth{node_id}"
+
+    def test_accepts_custom_pattern_with_node_id_placeholder(self):
+        config = NetworkConfig(controller_node_iface_pattern="eth5{node_id}")
+
+        assert config.controller_node_iface_pattern.format(node_id=50007) == "eth550007"
+
+    @pytest.mark.parametrize(
+        "pattern",
+        ["eth0", "mgmt{iface}", "mgmt{node_id}", "mgmt{node_id:d}"],
+    )
+    def test_rejects_invalid_patterns(self, pattern):
+        with pytest.raises(ValueError, match="controller_node_iface_pattern"):
+            NetworkConfig(controller_node_iface_pattern=pattern)
+
+
 class TestSampleTopologies:
     def test_sample_topologies_are_discovered(self):
         assert SAMPLE_TOPOLOGIES
@@ -139,3 +160,27 @@ class TestSampleTopologies:
         config = NetworkConfig(**payload)
         assert 0 <= config.link_netem_limit <= MAX_LINK_QUEUE_PACKETS
         assert 0 <= config.link_txqueuelen <= MAX_LINK_QUEUE_PACKETS
+
+
+class TestNetworkConfigSingleSource:
+    def test_custom_controller_fields_survive_roundtrip(self, topology, tmp_path):
+        config = NetworkConfig(
+            project_name="custom",
+            controller_veth_host="mgmt0",
+            controller_veth_peer="mgmt1",
+            controller_host_ip="10.255.0.1",
+            controller_subnet_prefix=24,
+            controller_bridge_name="MgmtBridge",
+            controller_node_iface_pattern="eth5{node_id}",
+        )
+        path = tmp_path / "custom.json"
+
+        topology.to_file(str(path), config)
+        reloaded = TopologyManager.from_file(str(path))
+
+        assert reloaded.controller_veth_host == "mgmt0"
+        assert reloaded.controller_veth_peer == "mgmt1"
+        assert reloaded.controller_host_ip == "10.255.0.1"
+        assert reloaded.controller_subnet_prefix == 24
+        assert reloaded.controller_bridge_name == "MgmtBridge"
+        assert reloaded.controller_node_iface_pattern == "eth5{node_id}"

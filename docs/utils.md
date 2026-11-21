@@ -6,7 +6,7 @@ users writing constellation scripts. It covers four broad areas:
 1. **Project construction** — build `SimulationProperty` objects, ground-object
    files, custom satellites, and mesh links (`project_builder.py`).
 2. **Geometry and orbital helpers** — distance, coverage, TLE generation and
-   fetching (`utils.py`, `coverage.py`, `satcom_fix.py`).
+   fetching (`utils.py`, `satellite_coverage.py`, `satcom_fix.py`).
 3. **Compatibility** — the sat_com_topology monkey patch and the built-in
    connection strategies (`satcom_fix.py`, `custom_connection_strategies.py`).
 4. **Runtime helpers** — IP math, shared-memory graph export, the interactive
@@ -38,9 +38,12 @@ through its project-builder import.
 
 ## `project_builder`
 
-This module is the primary Python entry point for creating projects without
-hand-writing YAML or sat_com JSON. It complements the narrative guide in
-[Project Creation](project_creation.md); this section is the API reference.
+`project_builder.py` is the primary Python entry point for creating projects
+without hand-writing YAML or sat_com JSON. Its implementation is split across
+`project_ground_objects.py` (CSV objects), `project_mesh.py` (orbital grouping
+and mesh links), and `project_fixtures.py` (test/empty projects); the public
+imports remain in `project_builder`. See
+[Project Creation](project_creation.md) for the narrative guide.
 
 ### Ground-object files
 
@@ -211,7 +214,7 @@ validation matters.
 
 ## Coverage
 
-`coverage.py` estimates constellation ground coverage from satellite
+`satellite_coverage.py` estimates constellation ground coverage from satellite
 positions. Satellite objects must expose a `position` dictionary with
 `latitude`, `longitude`, and `altitude` (km).
 
@@ -307,7 +310,7 @@ POSIX shared-memory segment. It is intended for external readers that need
 low-latency access to adjacency data without parsing JSON.
 
 ```python
-from satgonetem.utils.graph_shared_memory import GraphSharedMemory
+from satgonetem.routing.graph_shared_memory import GraphSharedMemory
 
 shm = GraphSharedMemory("satgraph", max_edges=10_000, create=True)
 shm.write_edges(
@@ -336,11 +339,19 @@ The segment layout is a header (`version`, `num_edges`, `max_edges`,
 updates `num_edges`, and increments `version`. `clear()` does not reset the
 header. There is no cross-process locking; consumers should poll `version`.
 
+`P4Daemon` owns a segment named `satgonetem_graph` by default; the name can be
+overridden with the `shared_memory_name` constructor argument. Re-initializing
+the daemon, failing to start the controller, or calling `remove()` closes and
+unlinks the owned segment.
+
 ## Interactive terminal bridge
 
-`node_terminal_bridge.py` is a command-line helper, not an API:
+`node_terminal_bridge.py` is a command-line helper, not an API. It lives in
+`satgonetem.cli`; the legacy module path remains an alias:
 
 ```bash
+python -m satgonetem.cli.node_terminal_bridge <server> <project_id> <node_name>
+# legacy alias:
 python -m satgonetem.utils.node_terminal_bridge <server> <project_id> <node_name>
 ```
 
@@ -384,7 +395,7 @@ ROUTE_APPLY_WORKERS = max(MAX_WORKERS, min(64, (os.cpu_count() or 4) * 2))
 tools. `ROUTE_APPLY_WORKERS` is higher because route installation is
 namespace-bound and benefits from more concurrency.
 
-`test.py` in this package is an **experimental geometry scratch module**
+`geodesy.py` (legacy alias: `test.py`) contains experimental geodesy helpers
 (`geodetic_to_orbital`, ECEF/ECI helpers). It is not a test suite and is not
 imported by the emulator; production orbital code lives in `satcom_fix.py`.
 

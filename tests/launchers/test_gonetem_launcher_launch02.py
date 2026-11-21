@@ -32,15 +32,15 @@ def _version_response(code=netem_pb2.StatusCode.OK, error=""):
 
 
 def _open_response(code=netem_pb2.StatusCode.OK, error="", project_id="abc123"):
-    return netem_pb2.PrjOpenResponse(
-        status=_status(code, error), id=project_id
-    )
+    return netem_pb2.PrjOpenResponse(status=_status(code, error), id=project_id)
 
 
 def _start(launcher, project_file):
-    with patch.object(launcher, "_get_client", return_value=launcher._client), patch.object(
-        launcher, "generate_project", return_value=str(project_file)
-    ), patch.object(launcher, "_attach_containers"):
+    with (
+        patch.object(launcher, "_get_client", return_value=launcher._client),
+        patch.object(launcher, "generate_project", return_value=str(project_file)),
+        patch.object(launcher, "_attach_containers"),
+    ):
         return launcher.start_containers([])
 
 

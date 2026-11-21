@@ -8,15 +8,14 @@ only used to access node/graph data.
 
 from __future__ import annotations
 
-import base64
 import gc
 import json
 import logging
 import re
-from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, List, Optional
+from typing import TYPE_CHECKING, Any
 
 import grpc
 import igraph as ig
@@ -29,14 +28,22 @@ from satgonetem.models.ground_station import GroundStation
 from satgonetem.models.routing_entry import RoutingEntry
 from satgonetem.models.satellite import Satellite
 from satgonetem.proto import netem_pb2
-from satgonetem.routing.base_daemon import RoutingDaemon
-from satgonetem.utils.utils import get_interface_from_name, time_
+from satgonetem.routing.base_daemon import RoutingContext, RoutingDaemon
+from satgonetem.routing.commands import encode_ip_batch
+from satgonetem.routing.static_route_ops import (
+    RouteOperation,
+    emit_batch_commands,
+    emit_route_operations,
+    entry_key,
+    format_route_operation,
+    route_operation,
+)
+from satgonetem.utils.utils import get_interface_from_name
 
 if TYPE_CHECKING:
     from satgonetem.models.interface import Interface
     from satgonetem.models.link import Link
     from satgonetem.models.node import Node
-    from satgonetem.services.topology_satcom import TopologyManager
 
 
 _PEER_IFACE_PATTERN = re.compile(r"^(Gnd|Sat)\d+\.\d+$")
@@ -49,16 +56,6 @@ MAX_ROUTE_REQUEST_BYTES = 2 * 1024 * 1024
 SLOW_ROUTE_DURATION_MICROS = 50_000
 
 
-@dataclass(frozen=True)
-class RouteOperation:
-    """One typed route operation sent through the RouteInstall RPC."""
-
-    action: str
-    destination: str
-    gateway: str
-    device: str
-
-
 @dataclass
 class _BatchOutcome:
     """Per-node outcome of one route-installation batch path."""
@@ -68,7 +65,7 @@ class _BatchOutcome:
     applied: int = 0
     durations: list[int] = field(default_factory=list)
 
-    def merge(self, other: "_BatchOutcome") -> None:
+    def merge(self, other: _BatchOutcome) -> None:
         self.ok_nodes.update(other.ok_nodes)
         self.error_nodes.update(other.error_nodes)
         self.applied += other.applied
@@ -109,7 +106,7 @@ class StaticRoutingDaemon(RoutingDaemon):
     update, recomputes and replaces routes after topology changes.
     """
 
-    def __init__(self, topology: "TopologyManager") -> None:
+    def __init__(self, topology: RoutingContext) -> None:
         """Initialize the daemon and its route-reuse caches.
 
         Args:
@@ -166,7 +163,7 @@ class StaticRoutingDaemon(RoutingDaemon):
             logging.error(f"Error initializing static IP routing: {e}")
             return False
 
-    def update(self, new_links: "List[Link]", max_workers: int = 128) -> None:
+    def update(self, new_links: list[Link], max_workers: int = 128) -> None:
         """Update static IP routing after topology changes.
 
         Recomputes shortest-path routing tables and pushes incremental route
@@ -190,7 +187,7 @@ class StaticRoutingDaemon(RoutingDaemon):
         else:
             logging.warning("Static routing update skipped: topology not yet active")
 
-    def remove(self, node: "Optional[Node]" = None, max_workers: int = 128) -> None:
+    def remove(self, node: Node | None = None, max_workers: int = 128) -> None:
         """Remove all installed static IP routes.
 
         Deletes routes from the container and clears the in-memory routing
@@ -213,9 +210,7 @@ class StaticRoutingDaemon(RoutingDaemon):
         nodes = list(self.topology.get_satellites()) + list(
             self.topology.get_ground_stations()
         )
-        batches = {
-            n: ops for n in nodes if (ops := self._delete_operations(n))
-        }
+        batches = {n: ops for n in nodes if (ops := self._delete_operations(n))}
         outcome = (
             self._install_route_batches(batches, max_workers=max_workers)
             if batches
@@ -265,9 +260,7 @@ class StaticRoutingDaemon(RoutingDaemon):
         nodes = list(self.topology.ground_stations.values()) + list(
             self.topology.satellites.values()
         )
-        return self._apply_route_changes(
-            nodes, max_workers=max_workers, label="static"
-        )
+        return self._apply_route_changes(nodes, max_workers=max_workers, label="static")
 
     def _apply_satellite_routes(self, max_workers: int = 128) -> _BatchOutcome:
         """Apply satellite IPv4 route changes to containers using a diff.
@@ -282,9 +275,7 @@ class StaticRoutingDaemon(RoutingDaemon):
             label="satellite",
         )
 
-    def _apply_ground_station_routes(
-        self, max_workers: int = 128
-    ) -> _BatchOutcome:
+    def _apply_ground_station_routes(self, max_workers: int = 128) -> _BatchOutcome:
         """Apply ground-station IPv4 route changes to containers using a diff.
 
         Args:
@@ -385,7 +376,7 @@ class StaticRoutingDaemon(RoutingDaemon):
             A tuple of (chunk, next_index), where chunk is a list of
             (node, RouteBatch) pairs.
         """
-        chunk = []
+        chunk: list[tuple[Any, Any]] = []
         total_size = 0
         index = start
         max_nodes = max(1, MAX_ROUTE_NODES_PER_REQUEST)
@@ -406,7 +397,7 @@ class StaticRoutingDaemon(RoutingDaemon):
             index += 1
         return chunk, index
 
-    def _build_route_batch(self, ops: list[RouteOperation]) -> netem_pb2.RouteBatch:
+    def _build_route_batch(self, ops: list[RouteOperation]) -> netem_pb2.RouteBatch:  # type: ignore[name-defined]
         """Convert typed route operations into a protobuf RouteBatch."""
         batch = netem_pb2.RouteBatch()
         for op in ops:
@@ -572,15 +563,13 @@ class StaticRoutingDaemon(RoutingDaemon):
                     fut.result()
                 except Exception as exc:
                     outcome.error_nodes.add(node.name)
-                    logging.exception(
-                        f"Route update failed on {node.name}: {exc}"
-                    )
+                    logging.exception(f"Route update failed on {node.name}: {exc}")
                 else:
                     outcome.ok_nodes.add(node.name)
                     outcome.applied += route_count
         return outcome
 
-    def _delete_operations(self, node: "Node") -> list[RouteOperation]:
+    def _delete_operations(self, node: Node) -> list[RouteOperation]:
         """Build delete operations for a node's current routing table.
 
         Entries whose device is no longer present are skipped: removing a veth
@@ -599,9 +588,7 @@ class StaticRoutingDaemon(RoutingDaemon):
             if entry.interface.get_iname() in live_devs
         ]
 
-    def _remove_node_routes(
-        self, node: "Node", max_workers: int = 128
-    ) -> None:
+    def _remove_node_routes(self, node: Node, max_workers: int = 128) -> None:
         """Delete all IPv4 routes from a single node.
 
         Builds a ROUTE_DELETE batch for the node's current routing table,
@@ -615,9 +602,7 @@ class StaticRoutingDaemon(RoutingDaemon):
         """
         ops = self._delete_operations(node)
         if ops:
-            outcome = self._install_route_batches(
-                {node: ops}, max_workers=max_workers
-            )
+            outcome = self._install_route_batches({node: ops}, max_workers=max_workers)
             if node.name in outcome.error_nodes:
                 logging.error(f"Failed to remove routes on {node.name}")
                 return
@@ -785,21 +770,18 @@ class StaticRoutingDaemon(RoutingDaemon):
             prefix: Prefix length used for all installed routes.
         """
         old_entries = self._entry_cache.get(src_id)
-        if (
-            signature == self._source_signatures.get(src_id)
-            and old_entries is not None
-        ):
-            table = [
+        if signature == self._source_signatures.get(src_id) and old_entries is not None:
+            cached_table = [
                 old_entries[dst_id] for dst_id in dst_ids if dst_id in old_entries
             ]
-            node.ipv4_routing_table = table
-            node.ipv4_previous_routing_table = table
+            node.ipv4_routing_table = cached_table
+            node.ipv4_previous_routing_table = cached_table
             return
 
         cached_entries = old_entries or {}
         new_entries: dict[int, RoutingEntry] = {}
         table: list[RoutingEntry] = []
-        for dst, next_hop in zip(dst_array, signature):
+        for dst, next_hop in zip(dst_array, signature, strict=False):
             if next_hop is None:
                 continue
             dst_id = dst.id
@@ -888,8 +870,7 @@ class StaticRoutingDaemon(RoutingDaemon):
         # each node and never resolves to one of its link interfaces.
         prefix = 32
         loopback_ips = {
-            node.id: node.loopback.ipv4
-            for node in list(gs_array) + list(sat_array)
+            node.id: node.loopback.ipv4 for node in list(gs_array) + list(sat_array)
         }
 
         dst_ids = [dst.id for dst in dst_array]
@@ -952,7 +933,7 @@ class StaticRoutingDaemon(RoutingDaemon):
             f"ts{self.topology.current_time_step}/routes_emulator.txt"
         )
         logging.info(f"Loading routes from {route_file}")
-        with open(route_file, "r") as f:
+        with open(route_file) as f:
             raw = json.load(f)
 
         return {
@@ -1022,7 +1003,7 @@ class StaticRoutingDaemon(RoutingDaemon):
                 continue
         return mapping
 
-    def _resolve_interface(self, src_node, src_id, next_hop, iface_map) -> "Interface":
+    def _resolve_interface(self, src_node, src_id, next_hop, iface_map) -> Interface:
         """Resolve the outgoing Interface toward next_hop.
 
         Tries the prebuilt iface_map first, then falls back to name-based lookup.
@@ -1048,7 +1029,7 @@ class StaticRoutingDaemon(RoutingDaemon):
                     )
                 case None:
                     match self.topology.ground_stations.get(int(next_hop)):
-                        case GroundStation() as peer:
+                        case GroundStation() as peer:  # type: ignore[misc]
                             interface = get_interface_from_name(
                                 src_node.interfaces, f"{src_id}.{peer.id}"
                             )
@@ -1123,38 +1104,16 @@ class StaticRoutingDaemon(RoutingDaemon):
         )
 
     def _entry_key(self, entry) -> tuple:
-        """Return an immutable key for a RoutingEntry used in diffs.
-
-        Args:
-            entry: A RoutingEntry object.
-
-        Returns:
-            Tuple of (destination, prefix, gateway, iface_name).
-        """
-        return (
-            entry.destination,
-            entry.get_prefix(),
-            entry.gateway,
-            entry.interface.get_iname(),
-        )
+        """Return an immutable key for a RoutingEntry used in diffs."""
+        return entry_key(entry)
 
     def _route_operation(self, op: str, entry) -> RouteOperation:
         """Build one typed route operation from a RoutingEntry."""
-        return RouteOperation(
-            action=op,
-            destination=entry.destination + entry.get_prefix(),
-            gateway=entry.gateway or "",
-            device=entry.interface.get_iname(),
-        )
+        return route_operation(op, entry)
 
     def _format_route_operation(self, op: RouteOperation) -> str:
         """Format a typed route operation for the legacy ``ip -batch`` path."""
-        if op.gateway:
-            return (
-                f"route {op.action} {op.destination} "
-                f"via {op.gateway} dev {op.device}"
-            )
-        return f"route {op.action} {op.destination} dev {op.device}"
+        return format_route_operation(op)
 
     def _route_line(self, op: str, entry) -> str:
         """Build a single ip route command line.
@@ -1169,65 +1128,16 @@ class StaticRoutingDaemon(RoutingDaemon):
         return self._format_route_operation(self._route_operation(op, entry))
 
     def _emit_route_operations(
-        self, prev_tbl, curr_tbl, live_devs: Optional[set[str]] = None
+        self, prev_tbl, curr_tbl, live_devs: set[str] | None = None
     ) -> list[RouteOperation]:
-        """Diff prev_tbl vs curr_tbl and return minimal typed route operations.
-
-        A destination prefix that disappeared entirely must be deleted
-        explicitly; otherwise the kernel keeps forwarding traffic to a next
-        hop that is no longer part of the topology. If the destination prefix
-        still exists with a different gateway/interface, ``ip route replace``
-        updates it in place and a preceding delete is redundant.
-
-        Deletions are skipped when the entry's outgoing device is no longer
-        present on the node. Removing a veth makes the kernel purge every
-        route that referenced it, so issuing ``ip route del ... dev <gone>``
-        is guaranteed to fail with "Cannot find device" and would mark an
-        otherwise successful batch as failed.
-
-        Args:
-            prev_tbl: Previous routing table (list of RoutingEntry).
-            curr_tbl: Current routing table (list of RoutingEntry).
-            live_devs: Device names currently present on the node. When
-                provided, stale entries whose device is absent are not
-                deleted. When None, every removed entry is deleted.
-
-        Returns:
-            List of route operations: deletions first, then
-            additions/replacements.
-        """
-        if prev_tbl is curr_tbl:
-            return []
-
-        curr = {self._entry_key(e): e for e in curr_tbl}
-        prev = {self._entry_key(e): e for e in prev_tbl}
-        curr_prefixes = {(e.destination, e.get_prefix()) for e in curr_tbl}
-        removed = [
-            self._route_operation("del", e)
-            for k, e in prev.items()
-            if k not in curr
-            and (e.destination, e.get_prefix()) not in curr_prefixes
-            and (live_devs is None or e.interface.get_iname() in live_devs)
-        ]
-        added = [
-            self._route_operation("replace", e)
-            for k, e in curr.items()
-            if k not in prev
-        ]
-        return removed + added
+        """Diff routing tables into minimal typed route operations."""
+        return emit_route_operations(prev_tbl, curr_tbl, live_devs)
 
     def _emit_batch_commands(
-        self, prev_tbl, curr_tbl, live_devs: Optional[set[str]] = None
+        self, prev_tbl, curr_tbl, live_devs: set[str] | None = None
     ) -> list:
-        """Legacy diff emitter returning ``ip route`` command strings.
-
-        Kept for the ``NodeRun`` fallback and for daemons that still consume
-        command strings.
-        """
-        return [
-            self._format_route_operation(op)
-            for op in self._emit_route_operations(prev_tbl, curr_tbl, live_devs)
-        ]
+        """Legacy diff emitter returning ``ip route`` command strings."""
+        return emit_batch_commands(prev_tbl, curr_tbl, live_devs)
 
     def _exec_batch(self, device, lines: list) -> None:
         """Execute a list of ip commands in a single batch on a container.
@@ -1239,7 +1149,4 @@ class StaticRoutingDaemon(RoutingDaemon):
             device: A node object with a .container attribute.
             lines: List of ip command strings (without the leading 'ip').
         """
-        payload = "\n".join(lines)
-        b64 = base64.b64encode(payload.encode()).decode()
-        cmd = f"echo {b64} | base64 -d | ip -force -batch -"
-        device.execute_command(cmd, detach=False)
+        device.execute_command(encode_ip_batch(lines), detach=False)

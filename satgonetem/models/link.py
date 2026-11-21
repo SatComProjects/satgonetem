@@ -1,18 +1,18 @@
 import logging
-from typing import Optional
+
+from sat_com_model.models import Link as SatComLink
 
 from satgonetem.link_budget.config import LinkBudgetConfig
 from satgonetem.link_budget.geometry import get_elevation_angle
 from satgonetem.link_budget.service import LinkBudgetInputs, LinkBudgetService
 from satgonetem.link_budget.strategies import (
+    CapacityStrategy,
     ModCodCapacityStrategy,
     ShannonCapacityStrategy,
 )
 from satgonetem.models.interface import Interface
 from satgonetem.models.node import Node
 from satgonetem.utils.utils import distance_3d_km
-
-from sat_com_model.models import Link as SatComLink
 
 # Use a module logger to control verbosity more easily
 logger = logging.getLogger(__name__)
@@ -23,7 +23,6 @@ DEFAULT_UPLINK_FREQ_GHZ = 14.25
 
 
 class Link:
-
     def __init__(
         self,
         source: Node,
@@ -34,7 +33,9 @@ class Link:
         is_active: bool = True,
         default_capacity_kbps: int = 1000,
         use_budget: bool = False,
-        link_budget_config: Optional[LinkBudgetConfig] = None,
+        link_budget_config: LinkBudgetConfig | None = None,
+        downlink_capacity_strategy: CapacityStrategy | None = None,
+        uplink_capacity_strategy: CapacityStrategy | None = None,
     ):
         self.source: Node = source
         self.target: Node = target
@@ -43,13 +44,19 @@ class Link:
         self.is_active: bool = is_active
         self.direction: str = direction
         self.use_budget: bool = use_budget
-        self.link_budget_config: Optional[LinkBudgetConfig] = link_budget_config
+        self.link_budget_config: LinkBudgetConfig | None = link_budget_config
+        self.downlink_capacity_strategy: CapacityStrategy = (
+            downlink_capacity_strategy or ModCodCapacityStrategy()
+        )
+        self.uplink_capacity_strategy: CapacityStrategy = (
+            uplink_capacity_strategy or ShannonCapacityStrategy()
+        )
 
         self.default_capacity_kbps = default_capacity_kbps
         self.peer1_capacity: int = 0
         self.peer2_capacity: int = 0
 
-        self.peer_interfaces: list["Interface"] = []
+        self.peer_interfaces: list[Interface] = []
 
         self.delay = int((self.distance / 299_792_458) * 1000)  # in ms, speed of light
 
@@ -188,7 +195,9 @@ class Link:
             rx_tsys_k=rx_tsys,
             unavailability_percent=unav,
         )
-        dl_service = LinkBudgetService(capacity_strategy=ModCodCapacityStrategy())
+        dl_service = LinkBudgetService(
+            capacity_strategy=self.downlink_capacity_strategy
+        )
         dl_capacity = dl_service.compute_one_way(dl_inputs)
         if dl_capacity > 0:
             self.peer1_capacity = dl_capacity
@@ -215,7 +224,7 @@ class Link:
             rx_tsys_k=rx_tsys,
             unavailability_percent=unav,
         )
-        ul_service = LinkBudgetService(capacity_strategy=ShannonCapacityStrategy())
+        ul_service = LinkBudgetService(capacity_strategy=self.uplink_capacity_strategy)
         ul_capacity = ul_service.compute_one_way(ul_inputs)
         if ul_capacity > 0:
             self.peer2_capacity = ul_capacity

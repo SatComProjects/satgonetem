@@ -4,26 +4,23 @@ from __future__ import annotations
 
 import logging
 import time
+from typing import TYPE_CHECKING
+
 import networkx as nx
+
 from satgonetem.models.ground_station import GroundStation
 from satgonetem.models.satellite import Satellite
-from satgonetem.routing.ospf_daemon import OSPFDaemon
-from satgonetem.routing.static_daemon import StaticRoutingDaemon
-from satgonetem.routing.srmpls_daemon import SRMPLSDaemon
-from satgonetem.routing.isis_sr_bird_daemon import ISISBirdSRDaemon
+from satgonetem.routing.registry import available_methods, create_daemon
 from satgonetem.utils.constants import MAX_WORKERS
-
-from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from satgonetem.models.node import Node
-    from typing import List
 
 
 class RoutingManagerMixin:
     """RoutingManager functionality."""
 
-    def get_path_between_nodes(self, source: Node, target: Node) -> List[Node]:
+    def get_path_between_nodes(self, source: Node, target: Node) -> list[Node]:
         """
         Get the path between two nodes using the specified preference.
         """
@@ -53,8 +50,6 @@ class RoutingManagerMixin:
         except nx.NetworkXNoPath:
             logging.warning(f"No path found between {source.id} and {target.id}")
             return []
-
-    from satgonetem.utils.utils import time_
 
     def init_routing(
         self, max_workers: int = MAX_WORKERS, routing_method: str = ""
@@ -87,28 +82,14 @@ class RoutingManagerMixin:
             finally:
                 self.routing_daemon = None
 
-        if effective_method == "static":
-            daemon = StaticRoutingDaemon(self)
-            failure_message = "Static IP routing initialization failed"
-        elif effective_method == "dynamic-ospf":
-            daemon = OSPFDaemon(self)
-            failure_message = "Dynamic OSPF routing initialization failed"
-        elif effective_method == "dynamic-isis":
-            daemon = ISISBirdSRDaemon(self)
-            failure_message = "Dynamic IS-IS SR (Bird) routing initialization failed"
-        elif effective_method == "sr-mpls":
-            daemon = SRMPLSDaemon(self)
-            failure_message = "SR-MPLS routing initialization failed"
-        elif effective_method in self._daemon_registry:
-            daemon = self._daemon_registry[effective_method](self)
-            failure_message = (
-                f"Custom routing daemon '{effective_method}' initialization failed"
-            )
-        else:
+        custom_registry = getattr(self, "_daemon_registry", None)
+        daemon = create_daemon(effective_method, self, custom_registry)
+        if daemon is None:
             logging.warning(
                 f"Unknown routing method '{effective_method}', cannot initialize routing"
             )
             return -1.0
+        failure_message = f"Routing daemon '{effective_method}' initialization failed"
 
         try:
             initialized = daemon.init(max_workers=max_workers)
@@ -149,9 +130,9 @@ class RoutingManagerMixin:
 
         return time.perf_counter() - tic
 
-    def get_allowed_routing_methods(self) -> List[str]:
+    def get_allowed_routing_methods(self) -> list[str]:
         """Return a list of allowed routing methods."""
-        return self.allowed_routing_methods
+        return available_methods(getattr(self, "_daemon_registry", None))
 
     def get_routing_initiated(self) -> bool:
         """Return whether routing has been initialised via init_routing()."""

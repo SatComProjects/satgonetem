@@ -1,13 +1,16 @@
 import math
 import time as _time
+from collections.abc import Callable
 from functools import wraps
-from typing import Any, Callable, Optional
+from typing import Any
 from urllib.request import urlopen
 
 import numpy as np
-
-from sgp4.api import Satrec, WGS72  # type: ignore
-from sgp4.api import jday  # type: ignore
+from sgp4.api import (  # type: ignore
+    WGS72,
+    Satrec,
+    jday,  # type: ignore
+)
 from sgp4.exporter import export_tle
 
 
@@ -34,14 +37,14 @@ def time_(func: Callable[..., Any]) -> Callable[..., Any]:
         original = func.__func__
 
         @wraps(original)
-        def _wrapper(*args: Any, **kwargs: Any) -> Any:
+        def _static_wrapper(*args: Any, **kwargs: Any) -> Any:
             start = _time.perf_counter()
             result = original(*args, **kwargs)
             elapsed = _time.perf_counter() - start
             print(f"[time] {original.__name__} executed in {elapsed:.6f}s")
             return result
 
-        return staticmethod(_wrapper)
+        return staticmethod(_static_wrapper)
 
     @wraps(func)
     def wrapper(*args: Any, **kwargs: Any) -> Any:
@@ -136,7 +139,7 @@ def _tle_line_checksum(tle_line_without_checksum: str) -> int:
     return total % 10
 
 
-def get_interface_from_name(interface_list: list[Any], intName: str) -> Optional[Any]:
+def get_interface_from_name(interface_list: list[Any], intName: str) -> Any | None:
     """Find an interface in a list by its trailing name segment.
 
     Args:
@@ -258,9 +261,7 @@ def fetch_iss_data() -> dict[str, str]:
         RuntimeError: If the data cannot be fetched or parsed.
     """
     try:
-        with urlopen(
-            "https://live.ariss.org/iss.txt", timeout=10
-        ) as response:  # noqa: S310
+        with urlopen("https://live.ariss.org/iss.txt", timeout=10) as response:  # noqa: S310
             text = response.read().decode("utf-8").strip()
     except Exception as exc:
         raise RuntimeError("Failed to fetch ISS TLE data") from exc
@@ -345,7 +346,7 @@ def read_satellites_data(filepath: str) -> list[dict[str, str]]:
         RuntimeError: If the file cannot be read or parsed.
     """
     try:
-        with open(filepath, "r", encoding="utf-8") as f:
+        with open(filepath, encoding="utf-8") as f:
             text = f.read().strip()
     except Exception as exc:
         raise RuntimeError(f"Failed to read satellite TLE file: {filepath}") from exc

@@ -40,13 +40,18 @@ Privileges required:
 import ctypes
 import logging
 import subprocess
+
 from pyroute2 import IPRoute
+
+from satgonetem.ports import CommandRunner, default_runner
 
 CLONE_NEWNET = 0x40000000
 HOST_NS_PATH = "/proc/1/ns/net"
 
 
-def _run_tc_batch(pid: int, commands: list[str]) -> None:
+def _run_tc_batch(
+    pid: int, commands: list[str], runner: CommandRunner = default_runner
+) -> None:
     """Run tc in batch mode inside the network namespace of pid.
 
     Args:
@@ -57,7 +62,7 @@ def _run_tc_batch(pid: int, commands: list[str]) -> None:
         RuntimeError: If tc exits with a non-zero return code.
     """
     batch_input = "\n".join(commands) + "\n"
-    r = subprocess.run(
+    r = runner.run(
         ["nsenter", f"--net=/proc/{pid}/ns/net", "tc", "-batch", "-"],
         input=batch_input,
         text=True,
@@ -68,7 +73,9 @@ def _run_tc_batch(pid: int, commands: list[str]) -> None:
         raise RuntimeError(r.stderr.strip())
 
 
-def _run_ip_batch(pid: int, commands: list[str]) -> None:
+def _run_ip_batch(
+    pid: int, commands: list[str], runner: CommandRunner = default_runner
+) -> None:
     """Run ip in batch mode inside the network namespace of pid.
 
     Args:
@@ -79,7 +86,7 @@ def _run_ip_batch(pid: int, commands: list[str]) -> None:
         RuntimeError: If ip exits with a non-zero return code.
     """
     batch_input = "\n".join(commands) + "\n"
-    r = subprocess.run(
+    r = runner.run(
         ["nsenter", f"--net=/proc/{pid}/ns/net", "ip", "-batch", "-"],
         input=batch_input,
         text=True,
@@ -127,6 +134,7 @@ class HILManager:
         gnd_capacity_kbps: int = 100_000,
         netem_limit: int = 1000,
         txqueuelen: int = 1000,
+        command_runner: CommandRunner | None = None,
     ) -> None:
         """
         Initialise the HIL manager.
@@ -146,6 +154,7 @@ class HILManager:
         self._gnd_capacity_kbps: int = gnd_capacity_kbps
         self._netem_limit: int = netem_limit
         self._txqueuelen: int = txqueuelen
+        self._command_runner: CommandRunner = command_runner or default_runner
         self._hil_bridges: dict[str, str] = {}
         self._hil_veths: dict[str, str] = {}
 
@@ -233,7 +242,7 @@ class HILManager:
         host_iface = f"hil{gnd_id}"
 
         libc = ctypes.CDLL("libc.so.6", use_errno=True)
-        saved_ns = open("/proc/self/ns/net", "rb")
+        saved_ns = open("/proc/self/ns/net", "rb")  # noqa: SIM115 - fd must stay open across namespaces
         try:
             with open(f"/proc/{sat_pid}/ns/net", "rb") as ns_fd:
                 if libc.setns(ns_fd.fileno(), CLONE_NEWNET) != 0:
@@ -329,7 +338,9 @@ class HILManager:
             logging.error("HIL: failed to create bridge for %s: %s", gnd_name, exc)
             return False
 
-    def _apply_qos(self, sat_name: str, sat_pid: int, gnd_id: int, delay_ms: int, rate_kbps: int) -> None:
+    def _apply_qos(
+        self, sat_name: str, sat_pid: int, gnd_id: int, delay_ms: int, rate_kbps: int
+    ) -> None:
         """
         Apply netem+TBF qdiscs to the SAT-side interface of a HIL link.
 
@@ -348,18 +359,14 @@ class HILManager:
         delay_ms = max(delay_ms, 1)
         rate_mbit = max(rate_kbps / 1000, 0.001)
         burst_bytes = max(rate_kbps * delay_ms // 8, 1500)
-        netem_limit = (
-            f" limit {self._netem_limit}" if self._netem_limit > 0 else ""
-        )
+        netem_limit = f" limit {self._netem_limit}" if self._netem_limit > 0 else ""
 
         if self._txqueuelen > 0:
             try:
                 _run_ip_batch(
                     sat_pid,
-                    [
-                        f"link set dev {sat_iface}"
-                        f" txqueuelen {self._txqueuelen}"
-                    ],
+                    [f"link set dev {sat_iface} txqueuelen {self._txqueuelen}"],
+                    runner=self._command_runner,
                 )
             except RuntimeError as exc:
                 logging.warning(
@@ -378,9 +385,12 @@ class HILManager:
                     f"qdisc add dev {sat_iface} parent 1:1 handle 10: tbf"
                     f" rate {rate_mbit:.3f}mbit burst {burst_bytes}b limit {burst_bytes}b",
                 ],
+                runner=self._command_runner,
             )
         except RuntimeError as exc:
-            logging.warning("HIL: qdisc setup failed on %s in %s: %s", sat_iface, sat_name, exc)
+            logging.warning(
+                "HIL: qdisc setup failed on %s in %s: %s", sat_iface, sat_name, exc
+            )
 
     def _teardown_bridge(self, gnd_name: str) -> None:
         """
@@ -422,8 +432,15 @@ class HILManager:
             gnd_id: Numeric ID of the ground station node.
         """
         sat_iface = f"eth{gnd_id}"
-        r = subprocess.run(
-            ["nsenter", f"--net=/proc/{sat_pid}/ns/net", "ip", "link", "delete", sat_iface],
+        r = self._command_runner.run(
+            [
+                "nsenter",
+                f"--net=/proc/{sat_pid}/ns/net",
+                "ip",
+                "link",
+                "delete",
+                sat_iface,
+            ],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -529,9 +546,7 @@ class HILManager:
         rate_kbps = self._link_capacity_kbps(link)
         rate_mbit = max(rate_kbps / 1000, 0.001)
         burst_bytes = max(rate_kbps * delay_ms // 8, 1500)
-        netem_limit = (
-            f" limit {self._netem_limit}" if self._netem_limit > 0 else ""
-        )
+        netem_limit = f" limit {self._netem_limit}" if self._netem_limit > 0 else ""
 
         try:
             _run_tc_batch(
@@ -542,6 +557,7 @@ class HILManager:
                     f"qdisc change dev {sat_iface} parent 1:1 handle 10: tbf"
                     f" rate {rate_mbit:.3f}mbit burst {burst_bytes}b limit {burst_bytes}b",
                 ],
+                runner=self._command_runner,
             )
             logging.debug(
                 "HIL: updated %s in %s: delay=%dms rate=%dkbps",

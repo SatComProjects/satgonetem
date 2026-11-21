@@ -7,17 +7,22 @@ Private helpers (prefixed with `_`) are excluded.
 
 ## Emulator lifecycle
 
-### `start_gonetem() -> float | None`
+### `start_gonetem(controller: bool = False) -> tuple[float, float] | None`
 
 Start the network emulator by launching containers and wiring links.
 
-Uses `GoNetEmLauncher` (gRPC-based) as the network launcher.
+Uses the backend selected by `network_launcher` (`GoNetEmLauncher` by default,
+gRPC-based).
 
 If `self.hil_manager` is set, HIL-managed nodes and links are excluded from
 the software launch and delegated to the HIL manager instead.
 
+**Args**
+- `controller` - generate the controller switch and its node links when
+  `True`.
+
 **Returns**
-- `float` - elapsed wall-clock seconds on success.
+- `tuple[float, float]` - container and link setup times, in seconds, on success.
 - `None` - if the emulator is already running (no-op).
 
 ---
@@ -61,9 +66,10 @@ Signal the background loop to stop and join its thread.
 
 ---
 
-### `next_step() -> None`
+### `next_step() -> float`
 
-Advance the simulation by exactly one tick.
+Advance the simulation by exactly one tick and return the elapsed wall-clock
+time in seconds.
 
 ---
 
@@ -109,11 +115,15 @@ The matching removal method is invoked on the underlying
 
 ## Addressing and routing
 
-### `set_ip_addresses() -> float`
+### `set_ip_addresses(satellites: bool = True, ground_stations: bool = True) -> float`
 
 Push the already-planned IPv4 addresses into every satellite and ground-station
 container. The plan is built during topology initialization; call this after
 `start_gonetem()`.
+
+**Args**
+- `satellites` - assign addresses to satellite interfaces when `True`.
+- `ground_stations` - assign addresses to ground-station interfaces when `True`.
 
 Addresses are applied with `ip addr replace`, one batched command per node,
 in parallel. The method raises after all nodes have been attempted if any node
@@ -247,7 +257,7 @@ ground stations.
 
 ---
 
-### `get_node_IP_addresses(name: str) -> List[str]`
+### `get_node_ip_addresses(name: str) -> List[str]`
 
 Return all IPv4 addresses assigned to a node's interfaces.
 
@@ -385,7 +395,7 @@ Check whether tcpdump is active on any satellite container.
 
 ---
 
-### `enable_tcpdump_on_satellites(satellites: list = [], dump_dir: str = "/tmp/dump") -> None`
+### `enable_tcpdump_on_satellites(satellites: list | None = None, dump_dir: str = "/tmp/dump") -> None`
 
 Enable tcpdump on satellites if not already running.
 
@@ -399,7 +409,7 @@ the call is a no-op.
 
 ---
 
-### `disable_tcpdump_on_satellites(satellites: list = []) -> None`
+### `disable_tcpdump_on_satellites(satellites: list | None = None) -> None`
 
 Stop tcpdump on satellite containers by killing the process.
 

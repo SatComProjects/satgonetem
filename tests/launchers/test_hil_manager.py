@@ -8,11 +8,11 @@ verify routing logic, state tracking, and the public interface used by
 TopologyManager.
 """
 
-import pytest
 from unittest.mock import MagicMock, patch
 
-from satgonetem.launchers.hil_manager import HILManager
+import pytest
 
+from satgonetem.launchers.hil_manager import HILManager
 
 # Fixtures
 
@@ -35,7 +35,14 @@ def _make_node(name: str, container_pid: int = 0):
     return node
 
 
-def _make_link(src_name: str, tgt_name: str, link_type: str, delay: int = 10, src_pid: int = 0, tgt_pid: int = 0):
+def _make_link(
+    src_name: str,
+    tgt_name: str,
+    link_type: str,
+    delay: int = 10,
+    src_pid: int = 0,
+    tgt_pid: int = 0,
+):
     """Build a minimal mock link."""
     link = MagicMock()
     link.source = _make_node(src_name, src_pid)
@@ -115,9 +122,11 @@ class TestSetupLink:
     def test_setup_link_calls_create_veth_and_bridge(self, manager):
         link = _make_link("Sat0", "Gnd0", "GroundStationLink", src_pid=1234)
 
-        with patch.object(manager, "_create_veth", return_value=True) as mock_veth, \
-             patch.object(manager, "_create_bridge", return_value=True) as mock_bridge, \
-             patch.object(manager, "_apply_qos") as mock_qos:
+        with (
+            patch.object(manager, "_create_veth", return_value=True) as mock_veth,
+            patch.object(manager, "_create_bridge", return_value=True) as mock_bridge,
+            patch.object(manager, "_apply_qos") as mock_qos,
+        ):
             manager.setup_link(link)
 
         mock_veth.assert_called_once_with("Sat0", 1234, 0)
@@ -134,8 +143,10 @@ class TestSetupLink:
     def test_setup_link_skips_bridge_when_veth_fails(self, manager):
         link = _make_link("Sat0", "Gnd0", "GroundStationLink", src_pid=1234)
 
-        with patch.object(manager, "_create_veth", return_value=False), \
-             patch.object(manager, "_create_bridge") as mock_bridge:
+        with (
+            patch.object(manager, "_create_veth", return_value=False),
+            patch.object(manager, "_create_bridge") as mock_bridge,
+        ):
             manager.setup_link(link)
             mock_bridge.assert_not_called()
 
@@ -147,8 +158,10 @@ class TestTeardownLink:
     def test_teardown_calls_bridge_then_veth_delete(self, manager):
         link = _make_link("Sat0", "Gnd0", "GroundStationLink", src_pid=5678)
 
-        with patch.object(manager, "_teardown_bridge") as mock_br, \
-             patch.object(manager, "_delete_sat_veth") as mock_veth:
+        with (
+            patch.object(manager, "_teardown_bridge") as mock_br,
+            patch.object(manager, "_delete_sat_veth") as mock_veth,
+        ):
             manager.teardown_link(link)
 
         mock_br.assert_called_once_with("Gnd0")
@@ -157,16 +170,20 @@ class TestTeardownLink:
     def test_teardown_skips_veth_delete_when_no_pid(self, manager):
         link = _make_link("Sat0", "Gnd0", "GroundStationLink", src_pid=0)
 
-        with patch.object(manager, "_teardown_bridge"), \
-             patch.object(manager, "_delete_sat_veth") as mock_veth:
+        with (
+            patch.object(manager, "_teardown_bridge"),
+            patch.object(manager, "_delete_sat_veth") as mock_veth,
+        ):
             manager.teardown_link(link)
             mock_veth.assert_not_called()
 
     def test_teardown_always_tears_down_bridge_even_without_pid(self, manager):
         link = _make_link("Sat0", "Gnd0", "GroundStationLink", src_pid=0)
 
-        with patch.object(manager, "_teardown_bridge") as mock_br, \
-             patch.object(manager, "_delete_sat_veth"):
+        with (
+            patch.object(manager, "_teardown_bridge") as mock_br,
+            patch.object(manager, "_delete_sat_veth"),
+        ):
             manager.teardown_link(link)
             mock_br.assert_called_once_with("Gnd0")
 
@@ -301,11 +318,10 @@ class TestQueueLength:
     def test_apply_qos_sets_netem_limit_and_txqueuelen(self):
         manager = self._manager(netem_limit=5000, txqueuelen=8000)
 
-        with patch(
-            "satgonetem.launchers.hil_manager._run_tc_batch"
-        ) as mock_tc, patch(
-            "satgonetem.launchers.hil_manager._run_ip_batch"
-        ) as mock_ip:
+        with (
+            patch("satgonetem.launchers.hil_manager._run_tc_batch") as mock_tc,
+            patch("satgonetem.launchers.hil_manager._run_ip_batch") as mock_ip,
+        ):
             manager._apply_qos(
                 sat_name="Sat0", sat_pid=1234, gnd_id=0, delay_ms=10, rate_kbps=1000
             )
@@ -321,30 +337,28 @@ class TestQueueLength:
     def test_apply_qos_omits_queue_settings_when_zero(self):
         manager = self._manager(netem_limit=0, txqueuelen=0)
 
-        with patch(
-            "satgonetem.launchers.hil_manager._run_tc_batch"
-        ) as mock_tc, patch(
-            "satgonetem.launchers.hil_manager._run_ip_batch"
-        ) as mock_ip:
+        with (
+            patch("satgonetem.launchers.hil_manager._run_tc_batch") as mock_tc,
+            patch("satgonetem.launchers.hil_manager._run_ip_batch") as mock_ip,
+        ):
             manager._apply_qos(
                 sat_name="Sat0", sat_pid=1234, gnd_id=0, delay_ms=10, rate_kbps=1000
             )
 
         mock_ip.assert_not_called()
-        netem_cmd = next(
-            cmd for cmd in mock_tc.call_args[0][1] if "netem" in cmd
-        )
+        netem_cmd = next(cmd for cmd in mock_tc.call_args[0][1] if "netem" in cmd)
         assert netem_cmd == "qdisc add dev eth0 root handle 1: netem delay 10ms"
 
     def test_apply_qos_continues_when_txqueuelen_fails(self):
         manager = self._manager(txqueuelen=8000)
 
-        with patch(
-            "satgonetem.launchers.hil_manager._run_ip_batch",
-            side_effect=RuntimeError("nope"),
-        ), patch(
-            "satgonetem.launchers.hil_manager._run_tc_batch"
-        ) as mock_tc:
+        with (
+            patch(
+                "satgonetem.launchers.hil_manager._run_ip_batch",
+                side_effect=RuntimeError("nope"),
+            ),
+            patch("satgonetem.launchers.hil_manager._run_tc_batch") as mock_tc,
+        ):
             manager._apply_qos(
                 sat_name="Sat0", sat_pid=1234, gnd_id=0, delay_ms=10, rate_kbps=1000
             )
@@ -352,16 +366,58 @@ class TestQueueLength:
         mock_tc.assert_called_once()
 
     def test_update_link_includes_netem_limit(self, manager):
-        link = _make_link(
-            "Sat0", "Gnd0", "GroundStationLink", delay=25, src_pid=9999
-        )
+        link = _make_link("Sat0", "Gnd0", "GroundStationLink", delay=25, src_pid=9999)
         manager._netem_limit = 5000
 
         with patch("satgonetem.launchers.hil_manager._run_tc_batch") as mock_tc:
             manager.update_link(link)
 
-        netem_cmd = next(
-            cmd for cmd in mock_tc.call_args[0][1] if "netem" in cmd
-        )
+        netem_cmd = next(cmd for cmd in mock_tc.call_args[0][1] if "netem" in cmd)
         assert netem_cmd.endswith("limit 5000")
 
+
+def test_delete_sat_veth_uses_injected_command_runner():
+    import subprocess
+    from unittest.mock import MagicMock
+
+    runner = MagicMock()
+    runner.run.return_value = subprocess.CompletedProcess(
+        args=[], returncode=0, stdout="", stderr=""
+    )
+    manager = HILManager({}, command_runner=runner)
+    manager._delete_sat_veth("Sat0", 1234, 4)
+
+    runner.run.assert_called_once()
+    assert runner.run.call_args.args[0][:2] == ["nsenter", "--net=/proc/1234/ns/net"]
+
+
+def test_run_batch_helpers_raise_on_failure():
+    from types import SimpleNamespace
+
+    from satgonetem.launchers.hil_manager import _run_ip_batch, _run_tc_batch
+
+    runner = MagicMock()
+    runner.run.return_value = SimpleNamespace(returncode=1, stderr="boom")
+    with pytest.raises(RuntimeError, match="boom"):
+        _run_tc_batch(1, ["qdisc show"], runner=runner)
+    with pytest.raises(RuntimeError, match="boom"):
+        _run_ip_batch(1, ["link show"], runner=runner)
+
+    runner.run.return_value = SimpleNamespace(returncode=0, stderr="")
+    _run_tc_batch(1, ["qdisc show"], runner=runner)
+    _run_ip_batch(1, ["link show"], runner=runner)
+
+
+def test_create_bridge_attaches_veth_and_hardware(monkeypatch):
+    from satgonetem.launchers import hil_manager
+
+    manager = HILManager({"Gnd0": "eth9"})
+    ipr = MagicMock()
+    ipr.link.return_value = [{"index": 7}]
+    ipr.__enter__.return_value = ipr
+    monkeypatch.setattr(hil_manager, "IPRoute", MagicMock(return_value=ipr))
+
+    assert manager._create_bridge("Gnd0", 0) is True
+    assert manager._hil_bridges["Gnd0"] == "brhil0"
+    assert manager._hil_veths["Gnd0"] == "hil0"
+    assert ipr.link.call_count >= 4

@@ -25,6 +25,8 @@ from satgonetem.routing.static_daemon import StaticRoutingDaemon
 if TYPE_CHECKING:
     from satgonetem.models.node import Node
 
+pytestmark = pytest.mark.benchmark
+
 
 def _make_iface(node_name: str, peer_id: int, peer_iface: Interface) -> Interface:
     """Create an Interface named like 'Gnd0.1' with a bidirectional peer."""
@@ -38,7 +40,7 @@ def _loopback_ip(node_id: int) -> str:
     return f"10.{node_id // 256}.{node_id % 256}.0"
 
 
-def _link_nodes(a: "Node", b: "Node") -> None:
+def _link_nodes(a: Node, b: Node) -> None:
     """Add cross-referenced interfaces between two nodes."""
     iface_a = Interface(name=f"{a.name}.{b.id}")
     iface_b = Interface(name=f"{b.name}.{a.id}")
@@ -64,13 +66,11 @@ def _build_topology(num_nodes: int, num_gs: int = 4, seed: int = 42):
     """
     rng = random.Random(seed)
     k = min(4, num_nodes - 1) if num_nodes > 1 else 0
-    graph = nx.connected_watts_strogatz_graph(
-        num_nodes, k=k, p=0.1, seed=seed
-    )
+    graph = nx.connected_watts_strogatz_graph(num_nodes, k=k, p=0.1, seed=seed)
     for u, v in graph.edges():
         graph[u][v]["weight"] = rng.uniform(1.0, 10.0)
 
-    nodes_by_id: dict[int, "Node"] = {}
+    nodes_by_id: dict[int, Node] = {}
     sats: list[Satellite] = []
     gs_list: list[GroundStation] = []
 
@@ -106,7 +106,7 @@ def _build_topology(num_nodes: int, num_gs: int = 4, seed: int = 42):
     return topo, graph, gs_list, sats
 
 
-def _routing_tables(nodes: list["Node"]) -> dict[int, list[tuple]]:
+def _routing_tables(nodes: list[Node]) -> dict[int, list[tuple]]:
     """Return a comparable representation of routing tables."""
     tables: dict[int, list[tuple]] = {}
     for node in nodes:
@@ -117,7 +117,7 @@ def _routing_tables(nodes: list["Node"]) -> dict[int, list[tuple]]:
     return tables
 
 
-def _clear_routing_tables(nodes: list["Node"]) -> None:
+def _clear_routing_tables(nodes: list[Node]) -> None:
     """Clear current routing tables on a list of nodes."""
     for node in nodes:
         node.ipv4_routing_table.clear()
@@ -159,9 +159,7 @@ def test_benchmark_dijkstra_networkx_vs_igraph(num_nodes: int, capsys) -> None:
     for _ in range(repeats):
         _clear_routing_tables(all_nodes)
         start = time.perf_counter()
-        daemon._populate_dijkstra_igraph(
-            graph, gs_list, sats, gs_ifaces, sat_ifaces
-        )
+        daemon._populate_dijkstra_igraph(graph, gs_list, sats, gs_ifaces, sat_ifaces)
         ig_times.append(time.perf_counter() - start)
 
     nx_avg_ms = (sum(nx_times) / len(nx_times)) * 1000

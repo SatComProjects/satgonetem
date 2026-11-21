@@ -50,7 +50,6 @@ class _FakeTopology(LinkOpsMixin):
         return True
 
 
-
 def test_interface_removals_run_on_the_calling_thread():
     removal_threads = []
     fake = SimpleNamespace(
@@ -212,15 +211,19 @@ def test_bulk_link_operations_reports_category_times_independently():
     pool.__enter__.return_value = executor
     pool.__exit__.return_value = False
 
-    with patch(
-        "satgonetem.services.mixins.link_ops.ThreadPoolExecutor",
-        return_value=pool,
-    ), patch(
-        "satgonetem.services.mixins.link_ops.as_completed",
-        return_value=[add_future],
-    ), patch(
-        "satgonetem.services.mixins.link_ops.time.perf_counter",
-        side_effect=[10.0, 10.4, 20.0, 20.1],
+    with (
+        patch(
+            "satgonetem.services.mixins.link_ops.ThreadPoolExecutor",
+            return_value=pool,
+        ),
+        patch(
+            "satgonetem.services.mixins.link_ops.as_completed",
+            return_value=[add_future],
+        ),
+        patch(
+            "satgonetem.services.mixins.link_ops.time.perf_counter",
+            side_effect=[10.0, 10.4, 20.0, 20.1],
+        ),
     ):
         stats = LinkOpsMixin.bulk_link_operations(
             fake,
@@ -412,9 +415,7 @@ def test_update_routing_after_link_changes_uses_route_apply_workers():
 
     LinkOpsMixin._update_routing_after_link_changes(fake, [])
 
-    routing_daemon.update.assert_called_once_with(
-        [], max_workers=ROUTE_APPLY_WORKERS
-    )
+    routing_daemon.update.assert_called_once_with([], max_workers=ROUTE_APPLY_WORKERS)
 
 
 def test_update_routing_after_link_changes_honors_explicit_workers():

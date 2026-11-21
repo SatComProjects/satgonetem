@@ -1,12 +1,13 @@
 """Geometric utilities for satellite-ground link calculations."""
 
 import math
-from typing import Tuple
 
 import numpy as np
 
 
-def latlonelev_to_xyz(lat: float, lon: float, elev: float) -> Tuple[float, float, float]:
+def latlonelev_to_xyz(
+    lat: float, lon: float, elev: float
+) -> tuple[float, float, float]:
     """Convert geodetic coordinates to Cartesian coordinates.
 
     Args:
@@ -28,8 +29,8 @@ def latlonelev_to_xyz(lat: float, lon: float, elev: float) -> Tuple[float, float
 
 
 def get_elevation_angle(
-    sat_coordinates: Tuple[float, float, float],
-    gnd_coordinates: Tuple[float, float, float],
+    sat_coordinates: tuple[float, float, float],
+    gnd_coordinates: tuple[float, float, float],
 ) -> float:
     """Compute the elevation angle from a ground station to a satellite.
 
