@@ -11,8 +11,8 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Optional
 
-import pandas as pd
 import matplotlib
+import pandas as pd
 
 matplotlib.use("Agg")  # non-GUI backend
 import matplotlib.pyplot as plt

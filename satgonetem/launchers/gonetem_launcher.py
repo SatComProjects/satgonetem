@@ -10,17 +10,17 @@ since it is the only launcher that needs the GoNetem .gnet format.
 
 import logging
 import os
-import tarfile
 import subprocess
+import tarfile
 import time
 from typing import Callable, Optional
 
 import grpc
 from google.protobuf import empty_pb2
 
-from satgonetem.proto import netem_pb2
 import satgonetem.proto.netem_pb2_grpc as netem_grpc
 from satgonetem.launchers.base_launcher import NetworkLauncher
+from satgonetem.proto import netem_pb2
 
 
 def _tbf_qos(rate_kbps: int, delay_ms: int) -> tuple[int, float]:

@@ -1,8 +1,6 @@
 import logging
-from typing import Optional
-
-
 import subprocess
+from typing import Optional
 
 from satgonetem.utils.ip_utils import IPUtils
 

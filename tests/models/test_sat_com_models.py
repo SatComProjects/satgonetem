@@ -15,7 +15,6 @@ from satgonetem.models.sat_com_models import (
     WalkerShell,
 )
 
-
 CONSTELLATION_DATA = {
     "identifier": "iris2",
     "amount_of_orbit_plane": 6,

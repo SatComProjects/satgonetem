@@ -1,7 +1,8 @@
 """Tests for OSPFDaemon and its Bird config helpers."""
 
-import pytest
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 from satgonetem.models.interface import Interface
 from satgonetem.models.node import Node

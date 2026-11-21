@@ -5,17 +5,17 @@ from __future__ import annotations
 import logging
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import TYPE_CHECKING
 
 from satgonetem.addressing import Ipv4AddressPlan, NodeKind
 from satgonetem.utils.constants import MAX_WORKERS
 
-from typing import TYPE_CHECKING
-
 if TYPE_CHECKING:
-    from satgonetem.models.node import Node
+    from typing import Optional
+
     from satgonetem.models.interface import Interface
     from satgonetem.models.link import Link
-    from typing import Optional
+    from satgonetem.models.node import Node
 
 
 class InterfaceMgrMixin:

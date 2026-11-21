@@ -1,8 +1,8 @@
 """Tests for satgonetem.link_budget.config."""
 
 
-from satgonetem.link_budget.config import AntennaConfig, LinkBudgetConfig
 from satgonetem.link_budget.antenna import Antenna
+from satgonetem.link_budget.config import AntennaConfig, LinkBudgetConfig
 
 
 class TestLinkBudgetConfig:

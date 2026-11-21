@@ -5,17 +5,17 @@ from __future__ import annotations
 import logging
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import TYPE_CHECKING
 
 import grpc
 
 from satgonetem.proto import netem_pb2
 from satgonetem.utils.constants import MAX_WORKERS, ROUTE_APPLY_WORKERS
 
-from typing import TYPE_CHECKING
-
 if TYPE_CHECKING:
-    from satgonetem.models.link import Link
     from typing import List
+
+    from satgonetem.models.link import Link
 
 
 def _collect_link_operation_lists(

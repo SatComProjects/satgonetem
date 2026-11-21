@@ -8,11 +8,11 @@ verify routing logic, state tracking, and the public interface used by
 TopologyManager.
 """
 
-import pytest
 from unittest.mock import MagicMock, patch
 
-from satgonetem.launchers.hil_manager import HILManager
+import pytest
 
+from satgonetem.launchers.hil_manager import HILManager
 
 # Fixtures
 

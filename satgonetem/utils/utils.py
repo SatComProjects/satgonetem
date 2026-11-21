@@ -5,9 +5,11 @@ from typing import Any, Callable, Optional
 from urllib.request import urlopen
 
 import numpy as np
-
-from sgp4.api import Satrec, WGS72  # type: ignore
-from sgp4.api import jday  # type: ignore
+from sgp4.api import (  # type: ignore
+    WGS72,
+    Satrec,
+    jday,  # type: ignore
+)
 from sgp4.exporter import export_tle
 
 
@@ -34,14 +36,14 @@ def time_(func: Callable[..., Any]) -> Callable[..., Any]:
         original = func.__func__
 
         @wraps(original)
-        def _wrapper(*args: Any, **kwargs: Any) -> Any:
+        def _static_wrapper(*args: Any, **kwargs: Any) -> Any:
             start = _time.perf_counter()
             result = original(*args, **kwargs)
             elapsed = _time.perf_counter() - start
             print(f"[time] {original.__name__} executed in {elapsed:.6f}s")
             return result
 
-        return staticmethod(_wrapper)
+        return staticmethod(_static_wrapper)
 
     @wraps(func)
     def wrapper(*args: Any, **kwargs: Any) -> Any:

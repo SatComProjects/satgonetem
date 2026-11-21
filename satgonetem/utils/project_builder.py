@@ -4,13 +4,14 @@ This module is the primary entry point for constructing and running satcom
 topology projects from Python.
 """
 
-from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
 import logging
 import math
-from typing import Any, Dict, List, Literal
 import pathlib
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, List, Literal
 
+from sat_com_application.simulation_manager import SimulationManager
 from sat_com_builder.configuration_manager import BaseConfigurationManager
 from sat_com_builder.models import (
     GroundConnectivityProperty,
@@ -20,15 +21,20 @@ from sat_com_builder.models import (
     WalkerShellProperty,
 )
 from sat_com_constellation.models import WalkerConstellationProperty
-from sat_com_application.simulation_manager import SimulationManager
 from sat_com_model.exceptions import GroundObjectDomainNotFoundError
 from sat_com_model.models import (
-    create_ground_station,
     GroundObject as SatComGroundObject,
+)
+from sat_com_model.models import (
     GroundObjectDomain,
-    GroundStation as SatComGroundStation,
-    Satellite as SatComSatellite,
     InterSatelliteLinkDirection,
+    create_ground_station,
+)
+from sat_com_model.models import (
+    GroundStation as SatComGroundStation,
+)
+from sat_com_model.models import (
+    Satellite as SatComSatellite,
 )
 
 from satgonetem.utils.satcom_fix import PyOrbitalModel

@@ -1,9 +1,10 @@
 import os
 import platform
-from pathlib import Path
 import re
-import pandas as pd
+from pathlib import Path
+
 import matplotlib
+import pandas as pd
 
 matplotlib.use("Agg")  # non-GUI backend
 import matplotlib.pyplot as plt

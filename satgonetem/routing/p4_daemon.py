@@ -1,14 +1,15 @@
-from satgonetem.models import Link, Node, Interface, Satellite, GroundStation
+import logging
+import os
+import subprocess
+import threading
+import time
+from typing import List, Optional
+
+from satgonetem.models import GroundStation, Interface, Link, Node, Satellite
 from satgonetem.routing import RoutingDaemon
 from satgonetem.services.topology_satcom import TopologyManager
 from satgonetem.utils.graph_shared_memory import GraphSharedMemory
 
-from typing import Optional, List
-import os
-import subprocess
-import threading
-import logging
-import time
 
 def safe_int(x, default=0):
     if x is None:

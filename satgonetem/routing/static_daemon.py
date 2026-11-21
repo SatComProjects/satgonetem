@@ -13,8 +13,8 @@ import gc
 import json
 import logging
 import re
-from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, List, Optional
 
@@ -30,7 +30,7 @@ from satgonetem.models.routing_entry import RoutingEntry
 from satgonetem.models.satellite import Satellite
 from satgonetem.proto import netem_pb2
 from satgonetem.routing.base_daemon import RoutingDaemon
-from satgonetem.utils.utils import get_interface_from_name, time_
+from satgonetem.utils.utils import get_interface_from_name
 
 if TYPE_CHECKING:
     from satgonetem.models.interface import Interface

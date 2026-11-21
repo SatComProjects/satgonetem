@@ -7,12 +7,12 @@ from satgonetem.traffic.hping3_utils import (
     run_hping3,
 )
 from satgonetem.traffic.iperf3_utils import (
+    FlowStatus,
     Iperf3Config,
     Iperf3Flow,
     Iperf3Results,
-    run_iperf3_flow,
-    FlowStatus,
     get_iperf3_port_range,
+    run_iperf3_flow,
     set_iperf3_port_range,
 )
 from satgonetem.traffic.ping_utils import (

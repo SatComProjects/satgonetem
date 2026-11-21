@@ -2,10 +2,12 @@
 
 from unittest.mock import patch
 
-
 from satgonetem.link_budget.antenna import Antenna
 from satgonetem.link_budget.service import LinkBudgetInputs, LinkBudgetService
-from satgonetem.link_budget.strategies import ModCodCapacityStrategy, ShannonCapacityStrategy
+from satgonetem.link_budget.strategies import (
+    ModCodCapacityStrategy,
+    ShannonCapacityStrategy,
+)
 
 
 class TestLinkBudgetInputs:

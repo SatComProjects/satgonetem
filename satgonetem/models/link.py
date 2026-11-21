@@ -1,6 +1,8 @@
 import logging
 from typing import Optional
 
+from sat_com_model.models import Link as SatComLink
+
 from satgonetem.link_budget.config import LinkBudgetConfig
 from satgonetem.link_budget.geometry import get_elevation_angle
 from satgonetem.link_budget.service import LinkBudgetInputs, LinkBudgetService
@@ -11,8 +13,6 @@ from satgonetem.link_budget.strategies import (
 from satgonetem.models.interface import Interface
 from satgonetem.models.node import Node
 from satgonetem.utils.utils import distance_3d_km
-
-from sat_com_model.models import Link as SatComLink
 
 # Use a module logger to control verbosity more easily
 logger = logging.getLogger(__name__)

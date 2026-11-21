@@ -1,6 +1,6 @@
-import numpy as np
 from datetime import datetime, timezone
 
+import numpy as np
 
 
 def geodetic_to_orbital(lat_deg, lon_deg, alt_km, incl_deg, epoch=None):
@@ -128,15 +128,6 @@ def geodetic_to_orbital_sgp4(lat_deg, lon_deg, alt_km, inc_deg, epoch):
     M = u  # for e = 0
 
     # 8) Prepare SGP4 epoch inputs
-    year = epoch.year % 100
-    day_of_year = epoch.timetuple().tm_yday
-    sec_of_day = (
-        epoch.hour * 3600 + epoch.minute * 60 + epoch.second + epoch.microsecond / 1e6
-    )
-    epoch_days = day_of_year + sec_of_day / 86400.0
-
-    # 9) Convert mean motion to rad/minute
-    n_rad_min = n_rad_s * 60.0  # (rad/s) × 60 = rad/min
 
     return {
         "mean_motion_rev_per_day": n_rev_per_day,

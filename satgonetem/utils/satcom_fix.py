@@ -1,19 +1,16 @@
 import datetime
 import math
-
-import numpy as np
-
 from datetime import timezone
 from typing import Optional, Tuple
 
-from pydantic import BaseModel
-from sgp4.api import Satrec, WGS72, jday, SGP4_ERRORS
-from astropy.coordinates import TEME, ITRS, CartesianRepresentation, EarthLocation
-from astropy.time import Time
 import astropy.units as u
-
+import numpy as np
+from astropy.coordinates import ITRS, TEME, CartesianRepresentation, EarthLocation
+from astropy.time import Time
+from pydantic import BaseModel
 from sat_com_application.time_managers import TimeManager
 from sat_com_model.models import MovementModel, SpatialPosition
+from sgp4.api import WGS72, Satrec, jday
 
 # WGS-84 ellipsoid constants (kilometres).
 WGS84_A = 6378.137
@@ -25,7 +22,7 @@ WGS84_EP2 = (WGS84_A * WGS84_A) / (WGS84_B * WGS84_B) - 1
 # Earth radius used by sat_com_trajectopy's sklearn distance model.
 EARTH_RADIUS_KM = 6371.009
 
-SGP4_ERRORS = {
+SGP4_ERROR_MESSAGES = {
     1: "Mean eccentricity is outside the range 0 ≤ e < 1",
     2: "Mean motion has fallen below zero",
     3: "Perturbed eccentricity is outside the range 0 ≤ e ≤ 1",
@@ -171,7 +168,7 @@ class PyOrbitalModel(MovementModel):
 
         error_code, r_teme, v_teme = self.orbital_object.sgp4(jd, fr)
         if error_code != 0:
-            msg = SGP4_ERRORS.get(error_code, "Unknown SGP4 error")
+            msg = SGP4_ERROR_MESSAGES.get(error_code, "Unknown SGP4 error")
             raise RuntimeError(f"SGP4/SDP4 propagation error {error_code}: {msg}")
 
         if self.high_precision_positions:
@@ -309,7 +306,7 @@ class PyOrbitalModel(MovementModel):
 
         error_code, r_teme, v_teme = self.orbital_object.sgp4(jd, fr)
         if error_code != 0:
-            msg = SGP4_ERRORS.get(error_code, "Unknown SGP4 error")
+            msg = SGP4_ERROR_MESSAGES.get(error_code, "Unknown SGP4 error")
             raise RuntimeError(f"SGP4/SDP4 propagation error {error_code}: {msg}")
 
         if delta_t == 0.0:

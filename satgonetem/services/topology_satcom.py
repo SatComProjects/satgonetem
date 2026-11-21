@@ -10,34 +10,38 @@ from satgonetem.utils.satcom_fix import apply_satcom_fix
 
 apply_satcom_fix()
 
-from satgonetem.utils.utils import fetch_iss_data, time_
 
-import threading
-from dataclasses import dataclass
-from typing import Any, ClassVar, Dict, List, Optional, Type, Union
 import json
 import logging
 import os
-import subprocess
+import threading
 import time
-
-from satgonetem.models.interface import Interface
-from satgonetem.launchers.base_launcher import NetworkLauncher
-
-from satgonetem.routing.base_daemon import RoutingDaemon
-
-from satgonetem.models.ground_station import GroundStation
-from satgonetem.models.link import Link
-from satgonetem.models.satellite import Satellite
-from satgonetem.link_budget.config import AntennaConfig, LinkBudgetConfig
-from satgonetem.traffic import PingConfig, PingFlow
-from satgonetem.traffic.ping_utils import PingStatus
+from dataclasses import dataclass
+from typing import Any, ClassVar, Dict, List, Optional, Type, Union
 
 from sat_com_adapter.adapters import NetworkXAdapter
 from sat_com_application.simulation_manager import (
     SimulationManager,
 )
 from sat_com_builder.models import SimulationProperty
+
+from satgonetem.launchers.base_launcher import NetworkLauncher
+from satgonetem.link_budget.config import AntennaConfig, LinkBudgetConfig
+from satgonetem.models.ground_station import GroundStation
+from satgonetem.models.interface import Interface
+from satgonetem.models.link import Link
+from satgonetem.models.satellite import Satellite
+from satgonetem.routing.base_daemon import RoutingDaemon
+from satgonetem.services.mixins.controller import ControllerMixin
+from satgonetem.services.mixins.diagnostics import DiagnosticsMixin
+from satgonetem.services.mixins.interface_mgr import InterfaceMgrMixin
+from satgonetem.services.mixins.link_ops import LinkOpsMixin
+from satgonetem.services.mixins.network_lifecycle import NetworkLifecycleMixin
+from satgonetem.services.mixins.routing_mgr import RoutingManagerMixin
+from satgonetem.services.mixins.simulation_loop import SimulationLoopMixin
+from satgonetem.services.mixins.topology_sync import TopologySyncMixin
+from satgonetem.services.mixins.traffic_testing import TrafficTestingMixin
+from satgonetem.traffic import PingConfig, PingFlow
 from satgonetem.utils.project_builder import (
     add_custom_ground_station,
     create_and_load_simulation,
@@ -45,17 +49,6 @@ from satgonetem.utils.project_builder import (
     create_custom_satellite,
     create_empty_project,
 )
-
-from satgonetem.services.mixins.topology_sync import TopologySyncMixin
-from satgonetem.services.mixins.link_ops import LinkOpsMixin
-from satgonetem.services.mixins.interface_mgr import InterfaceMgrMixin
-from satgonetem.services.mixins.network_lifecycle import NetworkLifecycleMixin
-from satgonetem.services.mixins.simulation_loop import SimulationLoopMixin
-from satgonetem.services.mixins.routing_mgr import RoutingManagerMixin
-from satgonetem.services.mixins.traffic_testing import TrafficTestingMixin
-from satgonetem.services.mixins.diagnostics import DiagnosticsMixin
-from satgonetem.services.mixins.controller import ControllerMixin
-
 
 # Upper bound for the netem queue limit and the interface txqueuelen, in
 # packets. It mirrors the GoNetEm server's maxQueuePackets so a configuration
@@ -457,7 +450,6 @@ class TopologyManager(
         Returns:
             A fully initialised TopologyManager.
         """
-        from datetime import datetime
 
         empty_project = create_empty_project(
             simulation_name=runtime_state.get("simulation_name", "Constellation"),

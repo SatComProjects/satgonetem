@@ -11,11 +11,10 @@ from __future__ import annotations
 
 import logging
 
-
-from satgonetem.models.node import Node
-from satgonetem.models.mixins.qos_mixin import QoSCapableMixin
-
 from sat_com_model.models import Satellite as SatComSatellite
+
+from satgonetem.models.mixins.qos_mixin import QoSCapableMixin
+from satgonetem.models.node import Node
 
 
 class Satellite(Node, QoSCapableMixin):

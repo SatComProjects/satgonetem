@@ -7,7 +7,6 @@ import logging
 import os
 import queue
 import threading
-import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import TYPE_CHECKING
 
@@ -362,7 +361,6 @@ class DiagnosticsMixin:
 
         total_sats = len(sats)
         max_workers = min(MAX_WORKERS, total_sats)
-        tic = time.perf_counter()
 
         def _start_tcpdump(sat):
             for interface in sat.interfaces:

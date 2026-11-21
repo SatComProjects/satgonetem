@@ -13,12 +13,11 @@ import random
 
 import astropy.units as u
 import pytest
-
-from astropy.coordinates import TEME, ITRS, CartesianRepresentation, EarthLocation
+from astropy.coordinates import ITRS, TEME, CartesianRepresentation, EarthLocation
 from astropy.time import Time
 from sat_com_model.models import SpatialPosition
 from sat_com_trajectopy.distance_models import SkLearningDistanceModel
-from sgp4.api import Satrec, WGS72, jday
+from sgp4.api import WGS72, Satrec, jday
 from sklearn.metrics.pairwise import haversine_distances
 
 from satgonetem.utils.satcom_fix import (

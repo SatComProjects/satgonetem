@@ -72,8 +72,8 @@ def calculate_atmospheric_attenuation_dB(
         raise ValueError("Longitude must be between -180 and 180 degrees.")
 
     try:
-        import itur
         import astropy.units as u
+        import itur
     except ImportError as exc:
         raise RuntimeError(
             "The 'itur' package is required for atmospheric attenuation calculations. "

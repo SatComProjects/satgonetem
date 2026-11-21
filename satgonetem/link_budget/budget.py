@@ -6,7 +6,7 @@ a satellite and a ground station.
 
 import math
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, cast
 
 from satgonetem.link_budget.antenna import Antenna
 from satgonetem.link_budget.conversions import linear_to_db
@@ -168,12 +168,12 @@ class LinkBudgetCalculator:
             eirp_db = calculate_transmitter_eirp(sspa, gdb, losses)
 
         rx_ant = getattr(rx_node, "antenna", None)
-        rx_gain_db = 0.0
+        rx_gain_db: float = 0.0
         if rx_ant is not None:
             try:
                 rx_gain_db = rx_ant.calculate_gain_db(frequency_ghz)
             except (AttributeError, TypeError, ValueError):
-                rx_gain_db = getattr(rx_ant, "gain_db", None)
+                rx_gain_db = cast(float, getattr(rx_ant, "gain_db", None))
             rx_gain_db = rx_gain_db if rx_gain_db is not None else 0.0
         g_over_t_db = rx_gain_db - linear_to_db(self.rx_tsys_k)
 

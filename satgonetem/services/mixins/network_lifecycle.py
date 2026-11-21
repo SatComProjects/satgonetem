@@ -5,9 +5,9 @@ from __future__ import annotations
 import logging
 import time
 import warnings
-from satgonetem.utils.constants import MAX_WORKERS
-from satgonetem.utils.utils import time_
 from typing import TYPE_CHECKING
+
+from satgonetem.utils.constants import MAX_WORKERS
 
 if TYPE_CHECKING:
     pass
@@ -20,13 +20,13 @@ _FLOW_STOP_TIMEOUT_SEC = 5.0
 class NetworkLifecycleMixin:
     """NetworkLifecycle functionality."""
 
-    def start_gonetem(self, controller: bool = False) -> float | None:
+    def start_gonetem(self, controller: bool = False) -> tuple[float, float] | None:
         """Start GoNetEm by launching containers and wiring links.
 
         Returns:
-            float: Time taken to start GoNetEm
+            tuple[float, float]: Container and link setup times, in seconds.
+            None: If the emulator is already running (no-op).
         """
-        tic = time.perf_counter()
         if self.get_gonetem_status():
             return
 

@@ -1,13 +1,13 @@
 """Tests for the Link model."""
 
-import pytest
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from satgonetem.link_budget.config import LinkBudgetConfig
+from satgonetem.models.interface import Interface
 from satgonetem.models.link import Link, LinkBudgetService
 from satgonetem.models.node import Node
-from satgonetem.models.interface import Interface
-
 
 SPEED_OF_LIGHT = 299_792_458  # m/s
 
@@ -344,7 +344,6 @@ class TestLinkSyncDistanceAndDelay:
         }
         gsl_link.target.position = {"latitude": 10.0, "longitude": 0.0, "altitude": 0.0}
 
-        old_delay = gsl_link.delay
         gsl_link.sync_distance_from_satcom_and_delay()
 
         assert isinstance(gsl_link.delay, int)

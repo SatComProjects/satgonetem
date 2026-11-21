@@ -1,11 +1,11 @@
 """Tests for StaticRoutingDaemon."""
 
 import logging
+from unittest.mock import MagicMock, patch
 
 import grpc
-import pytest
 import networkx as nx
-from unittest.mock import MagicMock, patch
+import pytest
 
 from satgonetem.models.interface import Interface
 from satgonetem.models.node import Node

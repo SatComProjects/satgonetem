@@ -6,21 +6,23 @@ import logging
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from satgonetem.models.ground_station import GroundStation
-from satgonetem.models.satellite import Satellite
-from satgonetem.models.link import Link
-from satgonetem.services.mixins.simulation_loop import ensure_simulation_lock
-from satgonetem.utils.utils import distance_3d_km, distance_3d_km_many
+from typing import TYPE_CHECKING
+
+from sat_com_model.models import GroundStation as SatComGroundStation
 from sat_com_model.models import InterSatelliteLinkDirection
 from sat_com_model.models import Link as SatComLink
 from sat_com_model.models import Satellite as SatComSatellite
-from sat_com_model.models import GroundStation as SatComGroundStation
 
-from typing import TYPE_CHECKING
+from satgonetem.models.ground_station import GroundStation
+from satgonetem.models.link import Link
+from satgonetem.models.satellite import Satellite
+from satgonetem.services.mixins.simulation_loop import ensure_simulation_lock
+from satgonetem.utils.utils import distance_3d_km, distance_3d_km_many
 
 if TYPE_CHECKING:
-    from satgonetem.models.node import Node
     from typing import Optional
+
+    from satgonetem.models.node import Node
 
 
 class TopologySyncMixin:

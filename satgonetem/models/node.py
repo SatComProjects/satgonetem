@@ -15,28 +15,24 @@ are handled by the mixin classes in satgonetem.models.mixins.
 from __future__ import annotations
 
 import base64
+import ctypes
 import ipaddress
 import logging
 import shlex
+from typing import Any
+
+import docker
+import docker.models
+import docker.models.containers
 
 # Ensure the protobuf dependency for netem_pb2 is loaded first.
 from google.protobuf import empty_pb2  # noqa: F401
-
 from pyroute2 import IPRoute
-import ctypes
 
-import docker.models
-import docker.models.containers
 from satgonetem.link_budget.antenna import Antenna
 from satgonetem.models.interface import Interface
-from satgonetem.utils.utils import unique_pair_id
-
-from typing import Any
-
-
-import docker
-
 from satgonetem.models.routing_entry import RoutingEntry
+from satgonetem.utils.utils import unique_pair_id
 
 
 class Node:
@@ -49,8 +45,8 @@ class Node:
         self.id = int(name[3:])
         self.ipv4_routing_table: list[RoutingEntry] = []
         self.interfaces: list[Interface] = []
-        self.ipv4_previous_routing_table = []
-        self.entries_to_edit = []
+        self.ipv4_previous_routing_table: list[RoutingEntry] = []
+        self.entries_to_edit: list[Any] = []
         self.type: str
         self.command_output = ""
 
@@ -129,7 +125,7 @@ class Node:
             )
         return decoded
     
-    def create_dummy_interface(self, name: str) -> Interface:
+    def create_dummy_interface(self, name: str) -> None:
         """
         Create a dummy interface inside the node's container namespace.
         """
@@ -279,10 +275,11 @@ class Node:
             return self.execute_command_docker(command, detach, ok_exit_codes)
         if self.grpc_client and not detach:
             import grpc
+
             from satgonetem.proto import netem_pb2
 
             cmd = self._prepare_command(command)
-            request = netem_pb2.NodeRunRequest(
+            request = netem_pb2.NodeRunRequest(  # type: ignore[attr-defined]
                 prjId=self.project_id,
                 node=self.name,
                 cmd=cmd,
@@ -295,7 +292,7 @@ class Node:
                         command, detach, ok_exit_codes
                     )
                 raise
-            if response.status.code == netem_pb2.StatusCode.ERROR:
+            if response.status.code == netem_pb2.StatusCode.ERROR:  # type: ignore[attr-defined]
                 raise RuntimeError(
                     f"NodeRun failed for {self.name}: {response.status.error}"
                 )

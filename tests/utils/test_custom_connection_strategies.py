@@ -1,10 +1,11 @@
 """Tests that custom connection strategies are registered on import."""
 
-import satgonetem.utils  # noqa: F401  (registers the built-in strategies)
 from sat_com_connectivity.ground_object_to_space_connectivity.ground_connection_strategy_registry import (
     GROUND_TO_SPACE_CONNECTION_STRATEGY_REGISTRY,
     create_strategy,
 )
+
+import satgonetem.utils  # noqa: F401  (registers the built-in strategies)
 from satgonetem.utils.custom_connection_strategies import (
     LongestConnectionTimeStrategy,
     WeightedConnection,

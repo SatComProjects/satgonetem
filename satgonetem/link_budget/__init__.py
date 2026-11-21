@@ -10,9 +10,18 @@ from satgonetem.link_budget.config import AntennaConfig, LinkBudgetConfig
 from satgonetem.link_budget.conversions import db_to_linear, linear_to_db
 from satgonetem.link_budget.geometry import get_elevation_angle
 from satgonetem.link_budget.modcod import ModCod
-from satgonetem.link_budget.modulation import calculate_link_capacity, calculate_theoretical_link_capacity
-from satgonetem.link_budget.propagation import calculate_atmospheric_attenuation_dB, calculate_free_space_loss_db
-from satgonetem.link_budget.receiver import calculate_carrier_to_noise_power_spectral_density_ratio, calculate_carrier_to_noise_ratio
+from satgonetem.link_budget.modulation import (
+    calculate_link_capacity,
+    calculate_theoretical_link_capacity,
+)
+from satgonetem.link_budget.propagation import (
+    calculate_atmospheric_attenuation_dB,
+    calculate_free_space_loss_db,
+)
+from satgonetem.link_budget.receiver import (
+    calculate_carrier_to_noise_power_spectral_density_ratio,
+    calculate_carrier_to_noise_ratio,
+)
 from satgonetem.link_budget.service import LinkBudgetInputs, LinkBudgetService
 from satgonetem.link_budget.strategies import (
     CapacityStrategy,

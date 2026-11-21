@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import List, Optional, Union
+from typing import TYPE_CHECKING, List, Optional, Union
+
 from satgonetem.traffic import (
     Hping3Config,
     Hping3Flow,
@@ -11,8 +12,6 @@ from satgonetem.traffic import (
     PingConfig,
     PingFlow,
 )
-
-from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from satgonetem.models.node import Node

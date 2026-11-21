@@ -6,10 +6,10 @@ from unittest.mock import patch
 
 import pytest
 
-from satgonetem.services.topology_satcom import TopologyManager
 from satgonetem.link_budget.config import AntennaConfig, LinkBudgetConfig
-from satgonetem.models.node import Node
 from satgonetem.models.link import Link
+from satgonetem.models.node import Node
+from satgonetem.services.topology_satcom import TopologyManager
 
 
 @pytest.fixture

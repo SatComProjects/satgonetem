@@ -11,8 +11,6 @@ from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
-from sgp4.api import jday
-
 from sat_com_connectivity.ground_object_to_space_connectivity.models import (
     ComputedGroundObjectConnectionsResult,
 )
@@ -25,6 +23,7 @@ from sat_com_model.models import (
     Satellite,
     SpatialPosition,
 )
+from sgp4.api import jday
 
 from satgonetem.utils.custom_connection_strategies import (
     LongestConnectionTimeStrategy,

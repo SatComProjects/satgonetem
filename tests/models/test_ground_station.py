@@ -1,7 +1,8 @@
 """Tests for the GroundStation model."""
 
-import pytest
 from unittest.mock import MagicMock
+
+import pytest
 
 from satgonetem.models.ground_station import GroundStation
 from satgonetem.models.node import Node

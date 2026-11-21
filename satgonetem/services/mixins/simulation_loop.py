@@ -18,10 +18,10 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from typing import TYPE_CHECKING, Optional
+
 from satgonetem.utils.constants import MAX_WORKERS
 from satgonetem.utils.utils import time_
-
-from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
     from datetime import datetime

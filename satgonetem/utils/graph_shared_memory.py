@@ -1,5 +1,6 @@
 import ipaddress
 from multiprocessing import shared_memory
+
 import numpy as np
 
 HEADER_DTYPE = np.dtype([

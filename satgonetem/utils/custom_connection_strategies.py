@@ -1,27 +1,24 @@
 import datetime
 import logging
 from typing import List
-from sgp4.api import jday
 
 import numpy as np
-from sat_com_connectivity.ground_object_to_space_connectivity.ground_connection_strategy_registry import (
-    register_ground_to_space_connectivity_strategy,
-)
-
-
 from sat_com_connectivity.ground_object_to_space_connectivity.base import (
     GroundToSpaceConnectionStrategy,
+)
+from sat_com_connectivity.ground_object_to_space_connectivity.ground_connection_strategy_registry import (
+    register_ground_to_space_connectivity_strategy,
 )
 from sat_com_connectivity.ground_object_to_space_connectivity.models import (
     ComputedGroundObjectConnectionsResult,
     GroundToSpaceConnection,
 )
-
-from sat_com_model.models import Satellite, GroundObject, GroundToSpaceLink
 from sat_com_connectivity.ground_object_to_space_connectivity.visibility_angle_utils import (
     get_visible_satellites,
 )
+from sat_com_model.models import GroundObject, GroundToSpaceLink, Satellite
 from sat_com_trajectopy.angle_utils import get_elevation_angle
+from sgp4.api import jday
 
 
 @register_ground_to_space_connectivity_strategy

@@ -72,14 +72,13 @@ assert generate_satellite.PyOrbitalModel is satcom_fix.PyOrbitalModel
 def test_walker_constellation_uses_patched_orbital_model():
     """Satellites produced by the walker factory must use the patched model."""
     import sat_com_trajectopy.satellites.generate_satellite as generate_satellite
-
-    import satgonetem.utils.satcom_fix as satcom_fix
-
     from sat_com_application.time_managers import SimulationTimeManager
     from sat_com_constellation.models import (
         WalkerConstellation,
         WalkerConstellationProperty,
     )
+
+    import satgonetem.utils.satcom_fix as satcom_fix
 
     constellation = WalkerConstellation(
         WalkerConstellationProperty(

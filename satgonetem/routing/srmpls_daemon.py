@@ -16,11 +16,10 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 import networkx as nx
 
-from satgonetem.routing.base_daemon import RoutingDaemon
-from satgonetem.utils.utils import time_
+from satgonetem.models.ground_station import GroundStation
 from satgonetem.models.mpls_entry import SRForwardEntry, SRNodeSIDEntry
 from satgonetem.models.satellite import Satellite
-from satgonetem.models.ground_station import GroundStation
+from satgonetem.routing.base_daemon import RoutingDaemon
 
 if TYPE_CHECKING:
     from satgonetem.models.link import Link
