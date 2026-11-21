@@ -42,7 +42,8 @@ every change, including refactors. Phased specifications live in
   (failing test and command), the implementation summary, validation commands
   and results, architectural tradeoffs, and unverified assumptions.
 - Required CI checks (`Lint`, `Type check`, `Test` on 3.10–3.14, coverage at
-  least 62%, and `Build package`) must pass before merge. Do not bypass or
+  least 62%, and `Build package`) must pass before merge on `develop`. `main`
+  adds `Type check` when the Phase 0 workflow is promoted. Do not bypass or
   disable a gate to land a change.
 
 ## Six-stage workflow

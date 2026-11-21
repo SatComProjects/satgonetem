@@ -381,9 +381,10 @@ uvx twine@7.0.0 check dist/*
 
 ### Required checks
 
-The `develop` and `main` repository rulesets require pull requests and these
-status checks: `Lint`, `Type check`, `Test (Python 3.10)` through
-`Test (Python 3.14)`, and `Build package`.
+The `develop` and `main` repository rulesets require pull requests. `develop`
+also requires `Lint`, `Type check`, `Test (Python 3.10)` through
+`Test (Python 3.14)`, and `Build package`. `main` requires the same checks
+except `Type check` until the Phase 0 workflow is promoted from `develop`.
 
 ### Releasing
 
