@@ -106,9 +106,7 @@ class TestInitErrorReporting:
 class TestErrorCountAggregation:
     """_apply_sr_mpls_routes() must sum errors from every step."""
 
-    def test_aggregates_enable_and_all_apply_steps(
-        self, daemon: SRMPLSDaemon
-    ) -> None:
+    def test_aggregates_enable_and_all_apply_steps(self, daemon: SRMPLSDaemon) -> None:
         daemon._label_manager = MagicMock()
 
         with (
@@ -121,9 +119,7 @@ class TestErrorCountAggregation:
 
         assert errors == 10
 
-    def test_aggregates_same_steps_during_update(
-        self, daemon: SRMPLSDaemon
-    ) -> None:
+    def test_aggregates_same_steps_during_update(self, daemon: SRMPLSDaemon) -> None:
         daemon._label_manager = MagicMock()
 
         with (
@@ -138,9 +134,7 @@ class TestErrorCountAggregation:
         # ROUTE-05 made MPLS enablement run on every apply, not only on init.
         enable.assert_called_once_with(max_workers=32)
 
-    def test_rebuild_propagates_apply_errors(
-        self, daemon: SRMPLSDaemon
-    ) -> None:
+    def test_rebuild_propagates_apply_errors(self, daemon: SRMPLSDaemon) -> None:
         daemon._label_manager = MagicMock()
 
         with (

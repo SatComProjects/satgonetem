@@ -15,16 +15,14 @@ from satgonetem.services.link_backend import LinkBackend
 from satgonetem.utils.constants import MAX_WORKERS, ROUTE_APPLY_WORKERS
 
 if TYPE_CHECKING:
-    from typing import List
-
     from satgonetem.models.link import Link
 
 
 def _collect_link_operation_lists(
     links,
-    links_to_add: "List[Link] | None" = None,
-    links_to_update: "List[Link] | None" = None,
-    links_to_remove: "List[Link] | None" = None,
+    links_to_add: list[Link] | None = None,
+    links_to_update: list[Link] | None = None,
+    links_to_remove: list[Link] | None = None,
 ) -> tuple[list[Link], list[Link], list[Link]]:
     """Return add/update/remove lists, scanning ``links`` at most once."""
     if (
@@ -55,6 +53,8 @@ def _collect_link_operation_lists(
 class LinkOpsMixin:
     """LinkOps functionality."""
 
+    interfaces: list
+
     def _link_backend(self) -> LinkBackend | None:
         """Return the injected backend, falling back to the launcher."""
         backend = getattr(self, "link_backend", None)
@@ -66,9 +66,9 @@ class LinkOpsMixin:
         to_update: bool = True,
         to_del: bool = True,
         max_workers: int = MAX_WORKERS,
-        links_to_add: "List[Link] | None" = None,
-        links_to_update: "List[Link] | None" = None,
-        links_to_remove: "List[Link] | None" = None,
+        links_to_add: list[Link] | None = None,
+        links_to_update: list[Link] | None = None,
+        links_to_remove: list[Link] | None = None,
     ) -> dict:
         """
         Perform all link operations (add, update, delete) using a single gRPC channel
@@ -99,13 +99,11 @@ class LinkOpsMixin:
         # Collect all link operations that need to be performed. Callers that
         # already have the lists pass them in so this scan is done only once
         # per simulation step.
-        links_to_add, links_to_update, links_to_remove = (
-            _collect_link_operation_lists(
-                self.links,
-                links_to_add,
-                links_to_update,
-                links_to_remove,
-            )
+        links_to_add, links_to_update, links_to_remove = _collect_link_operation_lists(
+            self.links,
+            links_to_add,
+            links_to_update,
+            links_to_remove,
         )
 
         processed_add = links_to_add if to_add else []
@@ -250,9 +248,7 @@ class LinkOpsMixin:
             operation_stats["update_time_total"] = update_batch_wall
             operation_stats["update_time_wall"] = update_batch_wall
             operation_stats["update_time_per_link"] = (
-                update_batch_wall / len(processed_update)
-                if processed_update
-                else 0.0
+                update_batch_wall / len(processed_update) if processed_update else 0.0
             )
 
         return operation_stats
@@ -273,9 +269,7 @@ class LinkOpsMixin:
             return 0, 0
 
         update_many = getattr(launcher, "update_links", None)
-        if update_many is None or getattr(
-            self, "_link_update_many_unavailable", False
-        ):
+        if update_many is None or getattr(self, "_link_update_many_unavailable", False):
             for link in links:
                 self._execute_link_update(link)
             return len(links), 0
@@ -295,10 +289,7 @@ class LinkOpsMixin:
             return len(links), 0
 
         response_status = getattr(response, "status", None)
-        if (
-            response_status is not None
-            and response_status.code != netem_pb2.OK
-        ):
+        if response_status is not None and response_status.code != netem_pb2.OK:
             raise RuntimeError(
                 "LinkUpdateMany failed: "
                 + (response_status.error or "server returned a non-OK status")
@@ -313,7 +304,7 @@ class LinkOpsMixin:
 
         updated = 0
         errors = 0
-        for link, result in zip(links, results):
+        for link, result in zip(links, results, strict=False):
             status = getattr(result, "status", None)
             if status is not None and status.code == netem_pb2.OK:
                 updated += 1
@@ -337,7 +328,7 @@ class LinkOpsMixin:
         return updated, errors
 
     def _update_routing_after_link_changes(
-        self, new_links: List[Link], max_workers: int = ROUTE_APPLY_WORKERS
+        self, new_links: list[Link], max_workers: int = ROUTE_APPLY_WORKERS
     ) -> None:
         """
         Update routing after link topology changes based on the configured routing method.
@@ -376,9 +367,7 @@ class LinkOpsMixin:
         try:
             launcher.delete_link(link)
             link.to_delete = False
-            logging.debug(
-                "Deleted link %s -- %s", link.source.name, link.target.name
-            )
+            logging.debug("Deleted link %s -- %s", link.source.name, link.target.name)
         except (RuntimeError, OSError) as err:
             logging.error(
                 f"Unable to delete link {link.source.name}--{link.target.name}: {err}"
@@ -452,9 +441,9 @@ class LinkOpsMixin:
         to_update: bool = True,
         to_del: bool = True,
         max_workers: int = MAX_WORKERS,
-        links_to_add: "List[Link] | None" = None,
-        links_to_update: "List[Link] | None" = None,
-        links_to_remove: "List[Link] | None" = None,
+        links_to_add: list[Link] | None = None,
+        links_to_update: list[Link] | None = None,
+        links_to_remove: list[Link] | None = None,
     ) -> None:
         """
         Perform local link operations (interface management, state updates)
@@ -469,13 +458,11 @@ class LinkOpsMixin:
             links_to_update: Optional precomputed updates.
             links_to_remove: Optional precomputed removals.
         """
-        links_to_add, links_to_update, links_to_remove = (
-            _collect_link_operation_lists(
-                self.links,
-                links_to_add,
-                links_to_update,
-                links_to_remove,
-            )
+        links_to_add, links_to_update, links_to_remove = _collect_link_operation_lists(
+            self.links,
+            links_to_add,
+            links_to_update,
+            links_to_remove,
         )
         if not to_del:
             links_to_remove = []

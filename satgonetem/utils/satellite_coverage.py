@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-from typing import Any, Tuple
+from typing import Any
 
 import numpy as np
 
@@ -19,7 +19,7 @@ def coverage_ring_from_elevation(
     elev_min_deg: float = 10.0,
     n_pts: int = 180,
     R_earth_km: float = 6_371.0,
-) -> Tuple[np.ndarray, np.ndarray, bool] | Tuple[None, None, bool]:
+) -> tuple[np.ndarray, np.ndarray, bool] | tuple[None, None, bool]:
     """
     Compute the visibility boundary ring for a satellite given a minimum
     elevation constraint.
@@ -80,11 +80,11 @@ def coverage_ring_from_elevation(
         mean = float(np.mean(lat))
         north = mean > 0
 
-        paired = list(zip(lon, lat))
+        paired = list(zip(lon, lat, strict=False))
         paired.sort(key=lambda x: x[0])
-        lon, lat = zip(*paired)
-        lon = np.array(lon)
-        lat = np.array(lat)
+        lon, lat = zip(*paired, strict=False)  # type: ignore[assignment]
+        lon = np.array(lon)  # type: ignore[assignment]
+        lat = np.array(lat)  # type: ignore[assignment]
 
         # Expand range for seamless wrapping when rasterizing.
         lon = np.insert(lon, 0, -2 * np.pi)
@@ -100,8 +100,8 @@ def coverage_ring_from_elevation(
         lat = np.insert(lat, 0, pole)
         lat = np.append(lat, pole)
 
-    lat_deg = np.degrees(lat)
-    lon_deg = np.degrees(lon)
+    lat_deg = np.degrees(lat)  # type: ignore[assignment]
+    lon_deg = np.degrees(lon)  # type: ignore[assignment]
     return lon_deg, lat_deg, flag
 
 

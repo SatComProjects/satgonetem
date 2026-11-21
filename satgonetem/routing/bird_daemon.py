@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import TYPE_CHECKING, List, Optional
+from typing import TYPE_CHECKING
 
 from satgonetem.routing.base_daemon import RoutingDaemon
 from satgonetem.routing.bird_service import stop_bird
@@ -23,7 +23,7 @@ class BirdRoutingDaemon(RoutingDaemon):
 
     protocol_name = "Bird"
 
-    def _validate_nodes(self, nodes: list["Node"]) -> bool:
+    def _validate_nodes(self, nodes: list[Node]) -> bool:
         """Return False when the protocol cannot run on the selected image."""
         return True
 
@@ -51,7 +51,7 @@ class BirdRoutingDaemon(RoutingDaemon):
                     )
         return errors == 0
 
-    def update(self, new_links: "List[Link]", max_workers: int = 4) -> None:
+    def update(self, new_links: list[Link], max_workers: int = 4) -> None:
         if not self.topology.status:
             logging.warning(
                 "%s update skipped: topology not yet active", self.protocol_name
@@ -72,7 +72,7 @@ class BirdRoutingDaemon(RoutingDaemon):
                     exc,
                 )
 
-    def remove(self, node: "Optional[Node]" = None, max_workers: int = 4) -> None:
+    def remove(self, node: Node | None = None, max_workers: int = 4) -> None:
         if node is not None:
             self._stop_node(node)
             return
@@ -87,12 +87,10 @@ class BirdRoutingDaemon(RoutingDaemon):
                 try:
                     future.result()
                 except Exception as exc:
-                    logging.error(
-                        "Failed to stop Bird on %s: %s", node.name, exc
-                    )
+                    logging.error("Failed to stop Bird on %s: %s", node.name, exc)
 
-    def _init_node(self, node: "Node") -> None:
+    def _init_node(self, node: Node) -> None:
         raise NotImplementedError
 
-    def _stop_node(self, node: "Node") -> None:
+    def _stop_node(self, node: Node) -> None:
         stop_bird(node)

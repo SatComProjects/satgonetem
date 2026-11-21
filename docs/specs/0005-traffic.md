@@ -84,5 +84,5 @@ uv run --frozen --extra dev pytest -q --cov=satgonetem/traffic --cov-fail-under=
 
 - Ping/hping3 still kill all same-named processes on the source; iperf3 scopes
   its kill by port.
-- `FlowScheduler` timeout defaults remain `None`; changing them requires a
-  separate behavior spec.
+- `FlowScheduler` keeps `None` as the default timeout so long valid flows are
+  not truncated; changing it requires a separate behavior spec.

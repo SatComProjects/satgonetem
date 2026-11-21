@@ -49,9 +49,12 @@ implemented twice.
 
 These require explicit decisions before changing code:
 
-- `controller_node_iface_pattern` is documented but ignored; the implementation
-  hard-codes `eth(50000 + node_id)`.
-- Failed link operations may still be counted as attempted in stats.
+- `controller_node_iface_pattern` is supported end-to-end for patterns that
+  format to `eth<digits>`; the launcher maps the suffix into controller switch
+  links. Non-`eth`/non-numeric patterns are rejected.
+- Link-operation counts mean **attempted** operations; only
+  `update_error_count` reports failures. Changing that is a separate behavior
+  spec.
 - Public docs and annotations disagree on `start_gonetem()` and `next_step()`
   return values (resolved as documentation/annotation fixes in Spec 0001).
 

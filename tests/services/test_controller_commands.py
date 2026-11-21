@@ -81,9 +81,7 @@ def test_get_management_ip_matches_controller_address(
     assert controller_host.get_management_ip(node_id) == expected
 
 
-@pytest.mark.parametrize(
-    ("node_id", "expected"), [(0, "eth50000"), (87, "eth50087")]
-)
+@pytest.mark.parametrize(("node_id", "expected"), [(0, "eth50000"), (87, "eth50087")])
 def test_get_management_interface_uses_50000_offset(
     controller_host: _ControllerHost, node_id: int, expected: str
 ) -> None:
@@ -91,9 +89,9 @@ def test_get_management_interface_uses_50000_offset(
 
 
 def test_get_management_interface_formats_controller_node_iface_pattern() -> None:
-    host = _ControllerHost(controller_node_iface_pattern="mgmt{node_id}")
+    host = _ControllerHost(controller_node_iface_pattern="eth5{node_id}")
 
-    assert host.get_management_interface(7) == "mgmt50007"
+    assert host.get_management_interface(7) == "eth550007"
 
 
 # ----------------------------------------------------------------------

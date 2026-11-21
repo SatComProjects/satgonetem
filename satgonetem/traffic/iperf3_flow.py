@@ -6,7 +6,7 @@ import threading
 import time
 import uuid
 from dataclasses import replace
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 import matplotlib
 
@@ -16,6 +16,8 @@ matplotlib.use("Agg")  # non-GUI backend
 if TYPE_CHECKING:
     from satgonetem.models.node import Node
 
+
+import contextlib
 
 from satgonetem.traffic import iperf3_ports
 from satgonetem.traffic.iperf3_config import Iperf3Config
@@ -74,8 +76,8 @@ class Iperf3Flow:
 
     def __init__(
         self,
-        source: "Node",
-        destination: "Node",
+        source: Node,
+        destination: Node,
         config: Iperf3Config,
         delay: float = 0.0,
     ) -> None:
@@ -95,12 +97,12 @@ class Iperf3Flow:
         # Reserved on start so flows constructed up-front (for a scheduler
         # with hundreds of entries) do not exhaust the port pool. config.port
         # is left untouched so shared configs remain safe to reuse.
-        self._port: Optional[int] = None
+        self._port: int | None = None
 
         self._status = FlowStatus.IDLE
-        self._result: Optional[Iperf3Results] = None
-        self._error: Optional[Exception] = None
-        self._thread: Optional[threading.Thread] = None
+        self._result: Iperf3Results | None = None
+        self._error: Exception | None = None
+        self._thread: threading.Thread | None = None
         self._lock = threading.Lock()
         self._stop_event = threading.Event()
 
@@ -172,9 +174,7 @@ class Iperf3Flow:
                 case FlowStatus.RUNNING:
                     raise RuntimeError("Flow is still running")
                 case FlowStatus.ERROR:
-                    raise RuntimeError(
-                        f"Flow failed: {self._error}"
-                    ) from self._error
+                    raise RuntimeError(f"Flow failed: {self._error}") from self._error
                 case FlowStatus.DONE:
                     return self._result  # type: ignore[return-value]
                 case _ as unexpected:
@@ -203,7 +203,7 @@ class Iperf3Flow:
         return self.destination, server_json, self.source, client_json
 
     @staticmethod
-    def _read_temp_file(node: "Node", path: str) -> Optional[str]:
+    def _read_temp_file(node: Node, path: str) -> str | None:
         """Best-effort read of a temporary JSON file inside a node."""
         try:
             return node.execute_command(f"cat {shlex.quote(path)}")
@@ -212,7 +212,7 @@ class Iperf3Flow:
 
     def _read_json_output(
         self, client_json: str, server_json: str
-    ) -> tuple[Optional[str], Optional[str]]:
+    ) -> tuple[str | None, str | None]:
         """Read the flow's iperf3 JSON, from the preferred side first.
 
         The server file is written when the server's side of the test ends,
@@ -225,16 +225,14 @@ class Iperf3Flow:
         Returns:
             Tuple of (raw JSON or None, "client" / "server" or None).
         """
-        preferred_node, preferred_path, fallback_node, fallback_path = (
-            self._json_side(client_json, server_json)
+        preferred_node, preferred_path, fallback_node, fallback_path = self._json_side(
+            client_json, server_json
         )
 
         def side(path: str) -> str:
             return "client" if path == client_json else "server"
 
-        raw = _extract_iperf3_json(
-            self._read_temp_file(preferred_node, preferred_path)
-        )
+        raw = _extract_iperf3_json(self._read_temp_file(preferred_node, preferred_path))
         if raw is None and preferred_path == server_json:
             deadline = time.monotonic() + _IPERF3_RESULT_WAIT_TIMEOUT
             while raw is None and time.monotonic() < deadline:
@@ -245,12 +243,10 @@ class Iperf3Flow:
         if raw is not None:
             return raw, side(preferred_path)
 
-        raw = _extract_iperf3_json(
-            self._read_temp_file(fallback_node, fallback_path)
-        )
+        raw = _extract_iperf3_json(self._read_temp_file(fallback_node, fallback_path))
         return raw, (side(fallback_path) if raw is not None else None)
 
-    def _remove_temp_file(self, node: "Node", path: Optional[str]) -> None:
+    def _remove_temp_file(self, node: Node, path: str | None) -> None:
         """Best-effort removal of a temporary JSON file inside a node.
 
         Cleanup failures must never change the flow outcome, so every error
@@ -258,12 +254,10 @@ class Iperf3Flow:
         """
         if not path:
             return
-        try:
+        with contextlib.suppress(Exception):
             node.execute_command(f"rm -f {shlex.quote(path)}", detach=True)
-        except Exception:
-            pass
 
-    def _kill_server(self, dst_ip: Optional[str]) -> None:
+    def _kill_server(self, dst_ip: str | None) -> None:
         """Best-effort kill of this flow's detached one-shot iperf3 server.
 
         The pattern is scoped to the flow's bind address and port so that
@@ -276,17 +270,15 @@ class Iperf3Flow:
             pattern = f"iperf3 -s -1 -B {dst_ip} -p {port}"
         else:
             pattern = f"iperf3 -s -1 .* -p {port}"
-        try:
+        with contextlib.suppress(Exception):
             self.destination.execute_command(
                 f"pkill -f {shlex.quote(pattern)} 2>/dev/null; true"
             )
-        except Exception:
-            pass
 
     def _collect_diagnostics(
         self,
-        client_json: Optional[str],
-        server_json: Optional[str],
+        client_json: str | None,
+        server_json: str | None,
     ) -> list[str]:
         """Best-effort capture of client/server output for error reporting."""
         diagnostics: list[str] = []
@@ -315,26 +307,20 @@ class Iperf3Flow:
         are recorded before best-effort cleanup, and cleanup errors can
         never discard a valid measurement.
         """
-        client_json: Optional[str] = None
-        server_json: Optional[str] = None
-        dst_ip: Optional[str] = None
-        raw: Optional[str] = None
+        client_json: str | None = None
+        server_json: str | None = None
+        dst_ip: str | None = None
+        raw: str | None = None
         try:
             if self.delay > 0.0 and self._stop_event.wait(self.delay):
                 with self._lock:
-                    self._error = RuntimeError(
-                        "Flow stopped before it could start"
-                    )
+                    self._error = RuntimeError("Flow stopped before it could start")
                     self._status = FlowStatus.ERROR
                 return
 
             run_id = uuid.uuid4().hex[:8]
-            client_json = (
-                f"/tmp/iperf3_cli_{self.source.name}_{self.destination.name}_{run_id}.json"
-            )
-            server_json = (
-                f"/tmp/iperf3_srv_{self.source.name}_{self.destination.name}_{run_id}.json"
-            )
+            client_json = f"/tmp/iperf3_cli_{self.source.name}_{self.destination.name}_{run_id}.json"
+            server_json = f"/tmp/iperf3_srv_{self.source.name}_{self.destination.name}_{run_id}.json"
             dst_ip = self.destination.loopback.ipv4
             src_ip = self.source.loopback.ipv4
             run_config = replace(self.config, port=self._reserve_port())

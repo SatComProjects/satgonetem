@@ -1,6 +1,5 @@
 """Tests for the Interface model."""
 
-
 import ipaddress
 
 import pytest

@@ -37,6 +37,8 @@ jobs:
         run: uv sync --frozen --extra dev
       - name: Lint with ruff
         run: uv run --frozen --extra dev ruff check satgonetem tests
+      - name: Check formatting with ruff
+        run: uv run --frozen --extra dev ruff format --check satgonetem tests
 
   typecheck:
     name: Type check
@@ -54,7 +56,7 @@ jobs:
           cache-dependency-glob: uv.lock
       - name: Install development environment
         run: uv sync --frozen --extra dev
-      - name: Type check scoped packages
+      - name: Type check full package
         run: uv run --frozen --extra dev mypy
 
   test:
@@ -84,7 +86,7 @@ jobs:
           --cov=satgonetem
           --cov-report=term-missing
           --cov-report=xml
-          --cov-fail-under=65
+          --cov-fail-under=75
       - name: Run tests
         if: matrix.python-version != '3.12'
         run: uv run --frozen --extra dev pytest -q
@@ -95,6 +97,32 @@ jobs:
           name: coverage-xml
           path: coverage.xml
           retention-days: 7
+
+  security:
+    name: Security audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+      - name: Set up uv and Python
+        uses: astral-sh/setup-uv@v10.4.0
+        with:
+          version: "0.13.9"
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - name: Install development environment
+        run: uv sync --frozen --extra dev
+      - name: Audit installed dependencies
+        run: >-
+          uvx pip-audit@2.9.0 --path "$(uv run python -c
+          'import site; print(site.getsitepackages()[0])')"
+      - name: Scan for high-severity issues with bandit
+        run: >-
+          uvx bandit@1.8.6 -q -r satgonetem -x satgonetem/proto -lll
+      - name: Lint GitHub Actions workflows
+        run: uvx --from actionlint-py actionlint
 
   package:
     name: Build package

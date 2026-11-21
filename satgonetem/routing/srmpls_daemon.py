@@ -11,7 +11,7 @@ import logging
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any
 
 import networkx as nx
 
@@ -94,20 +94,20 @@ class SRMPLSDaemon(RoutingDaemon):
             topology: The TopologyManager instance that owns this daemon.
         """
         super().__init__(topology)
-        self._label_manager: Optional[SegmentRoutingManager] = None
-        self.sr_lfib: Dict[int, List] = {}
-        self._sr_graph: Optional[Any] = None
-        self.mpls_config: Optional[Any] = None
-        self._prev_sr_gs_routes: Dict[int, List[str]] = {}
-        self._prev_sr_sat_routes: Dict[int, List[str]] = {}
-        self._prev_sr_node_sid_routes: Dict[int, List[str]] = {}
+        self._label_manager: SegmentRoutingManager | None = None
+        self.sr_lfib: dict[int, list] = {}
+        self._sr_graph: Any | None = None
+        self.mpls_config: Any | None = None
+        self._prev_sr_gs_routes: dict[int, list[str]] = {}
+        self._prev_sr_sat_routes: dict[int, list[str]] = {}
+        self._prev_sr_node_sid_routes: dict[int, list[str]] = {}
 
     @property
     def is_initialized(self) -> bool:
         """Return True after init() has been called successfully."""
         return self._label_manager is not None
 
-    def get_node_sid(self, node_id: int) -> Optional[int]:
+    def get_node_sid(self, node_id: int) -> int | None:
         """Return the Node SID label for a node, or None if not allocated.
 
         Args:
@@ -134,7 +134,6 @@ class SRMPLSDaemon(RoutingDaemon):
             True if initialization succeeded, False otherwise.
         """
         try:
-
             self._configure_mpls()
 
             self._init_sr_mpls()
@@ -148,7 +147,7 @@ class SRMPLSDaemon(RoutingDaemon):
             logging.error(f"SR-MPLS initialization failed: {e}")
             return False
 
-    def update(self, _new_links: "List[Link]", max_workers: int = 128) -> None:
+    def update(self, _new_links: list[Link], max_workers: int = 128) -> None:
         """Rebuild SR-MPLS ground-station routes after topology changes.
 
         Satellite Node SID rules are stable and never touched here. Only
@@ -161,7 +160,7 @@ class SRMPLSDaemon(RoutingDaemon):
         """
         self._rebuild_sr_mpls_routing(init_flag=False, max_workers=max_workers)
 
-    def remove(self, node: "Optional[Node]" = None, max_workers: int = 128) -> None:
+    def remove(self, node: Node | None = None, max_workers: int = 128) -> None:
         """Remove all SR-MPLS forwarding entries.
 
         Flushes the kernel MPLS label-forwarding table on every node (or on a
@@ -185,8 +184,8 @@ class SRMPLSDaemon(RoutingDaemon):
         self._prev_sr_node_sid_routes.clear()
 
     def set_sr_custom_path(
-        self, source_id: int, dest_id: int, path: List[int]
-    ) -> Dict[str, Any]:
+        self, source_id: int, dest_id: int, path: list[int]
+    ) -> dict[str, Any]:
         """Set a custom SR-MPLS path for a source-destination pair.
 
         Validates the path, stores it in the label manager, and immediately
@@ -243,7 +242,7 @@ class SRMPLSDaemon(RoutingDaemon):
             "hop_count": len(path) - 1,
         }
 
-    def clear_sr_custom_path(self, source_id: int, dest_id: int) -> Dict[str, Any]:
+    def clear_sr_custom_path(self, source_id: int, dest_id: int) -> dict[str, Any]:
         """Remove a custom SR path and revert to shortest-path routing.
 
         Args:
@@ -273,7 +272,7 @@ class SRMPLSDaemon(RoutingDaemon):
             "reverted_to_shortest": removed,
         }
 
-    def get_sr_statistics(self) -> Dict[str, Any]:
+    def get_sr_statistics(self) -> dict[str, Any]:
         """Return SR-MPLS statistics.
 
         Returns:
@@ -289,7 +288,7 @@ class SRMPLSDaemon(RoutingDaemon):
         stats["ground_stations_with_routes"] = len(self.sr_lfib)
         return stats
 
-    def list_sr_custom_paths(self) -> List[Dict[str, Any]]:
+    def list_sr_custom_paths(self) -> list[dict[str, Any]]:
         """List all active custom SR paths.
 
         Returns:
@@ -446,9 +445,9 @@ class SRMPLSDaemon(RoutingDaemon):
         all_paths = dict(nx.all_pairs_dijkstra_path(graph, weight="weight"))
 
         # Pre-build interface lookup: {node_id: {peer_id: iface}}
-        iface_lookup: Dict[int, Dict[int, Any]] = {}
+        iface_lookup: dict[int, dict[int, Any]] = {}
         for node in gs_array + sat_array:
-            node_ifaces: Dict[int, Any] = {}
+            node_ifaces: dict[int, Any] = {}
             for iface in node.interfaces:
                 try:
                     peer_id = int(iface.name.split(".")[1])
@@ -474,24 +473,21 @@ class SRMPLSDaemon(RoutingDaemon):
 
                 try:
                     custom_path = self._label_manager.get_custom_path(src_id, gs_dst.id)
-                    if custom_path:
-                        path = custom_path
-                    else:
-                        path = src_paths[gs_dst.id]
+                    path = custom_path or src_paths[gs_dst.id]
 
                     if len(path) < 2:
                         continue
 
                     first_hop_id = path[1]
-                    iface = src_ifaces.get(first_hop_id)
+                    first_iface: Any = src_ifaces.get(first_hop_id)
 
-                    if iface is None or iface.peer is None:
+                    if first_iface is None or first_iface.peer is None:
                         logging.warning(
                             f"No interface from GS {src_id} to {first_hop_id}"
                         )
                         continue
 
-                    next_hop_ip = iface.peer.ipv4
+                    next_hop_ip = first_iface.peer.ipv4
                     if not next_hop_ip or next_hop_ip == "0.0.0.0":
                         continue
 
@@ -503,7 +499,7 @@ class SRMPLSDaemon(RoutingDaemon):
                         destination=gs_dst.loopback.ipv4,
                         label_stack=label_stack,
                         next_hop=next_hop_ip,
-                        interface=iface,
+                        interface=first_iface,
                         fec_prefix=32,
                     )
                     self.sr_lfib[src_id].append(entry)
@@ -559,7 +555,7 @@ class SRMPLSDaemon(RoutingDaemon):
         )
         return errors
 
-    def _enable_mpls(self, node: "Node") -> None:
+    def _enable_mpls(self, node: Node) -> None:
         """Enable MPLS forwarding on a node."""
         _enable_mpls_helper(node, load_modules=False)
 
@@ -653,7 +649,7 @@ class SRMPLSDaemon(RoutingDaemon):
                         neighbor_name = neighbor_node.name
                     case None:
                         match self.topology.ground_stations.get(neighbor_id):
-                            case GroundStation() as neighbor_node:
+                            case GroundStation() as neighbor_node:  # type: ignore[misc]
                                 neighbor_name = neighbor_node.name
                             case None:
                                 neighbor_name = f"Node{neighbor_id}"
@@ -707,7 +703,7 @@ class SRMPLSDaemon(RoutingDaemon):
         errors = 0
         with ThreadPoolExecutor(max_workers=workers) as pool:
             futures = [
-                pool.submit(install_sr_forwarding, sat)
+                pool.submit(install_sr_forwarding, sat)  # type: ignore[arg-type]
                 for sat in all_sats
                 if sat.container
             ]
@@ -741,7 +737,7 @@ class SRMPLSDaemon(RoutingDaemon):
             len(self.topology.ground_stations),
         )
 
-        def install_gs_routes(gs: "GroundStation") -> bool:
+        def install_gs_routes(gs: GroundStation) -> bool:
             if self._label_manager is None:
                 raise RuntimeError("SR-MPLS manager not initialized")
 
@@ -775,7 +771,7 @@ class SRMPLSDaemon(RoutingDaemon):
         errors = 0
         with ThreadPoolExecutor(max_workers=workers) as pool:
             futures = [
-                pool.submit(install_gs_routes, gs)
+                pool.submit(install_gs_routes, gs)  # type: ignore[arg-type]
                 for gs in self.topology.ground_stations.values()
                 if gs.container
             ]
@@ -809,7 +805,7 @@ class SRMPLSDaemon(RoutingDaemon):
             len(self.topology.satellites),
         )
 
-        def install_satellite_routes(sat: "Satellite") -> bool:
+        def install_satellite_routes(sat: Satellite) -> bool:
             if self._label_manager is None:
                 raise RuntimeError("SR-MPLS manager not initialized")
 
@@ -843,7 +839,7 @@ class SRMPLSDaemon(RoutingDaemon):
         errors = 0
         with ThreadPoolExecutor(max_workers=workers) as pool:
             futures = [
-                pool.submit(install_satellite_routes, sat)
+                pool.submit(install_satellite_routes, sat)  # type: ignore[arg-type]
                 for sat in [
                     satellite
                     for satellite in self.topology.satellites.values()
@@ -966,7 +962,7 @@ class SRMPLSDaemon(RoutingDaemon):
             except Exception as e:
                 logging.error(f"Failed to update SR routes on {gs_src.name}: {e}")
 
-    def _flush_node(self, node: "Node") -> None:
+    def _flush_node(self, node: Node) -> None:
         """Flush SR-MPLS and IPv4 routes on a single node container.
 
         Removes the IPv4 prefixes installed by this daemon (including those
@@ -980,7 +976,7 @@ class SRMPLSDaemon(RoutingDaemon):
         if node.container is None:
             return
 
-        cached_commands: List[str] = []
+        cached_commands: list[str] = []
         for cache in (
             self._prev_sr_gs_routes,
             self._prev_sr_sat_routes,
@@ -988,7 +984,7 @@ class SRMPLSDaemon(RoutingDaemon):
         ):
             cached_commands.extend(cache.pop(node.id, []))
 
-        prefixes: List[str] = []
+        prefixes: list[str] = []
         for command in cached_commands:
             for line in command.splitlines():
                 line = line.strip()
@@ -1005,9 +1001,7 @@ class SRMPLSDaemon(RoutingDaemon):
             try:
                 node.execute_command(["sh", "-lc", f"ip route del {prefix}"])
             except Exception as e:
-                logging.error(
-                    f"Failed to delete SR route {prefix} on {node.name}: {e}"
-                )
+                logging.error(f"Failed to delete SR route {prefix} on {node.name}: {e}")
 
         try:
             node.execute_command(["sh", "-lc", "ip -f mpls route flush table all"])

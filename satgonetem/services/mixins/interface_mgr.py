@@ -11,8 +11,6 @@ from satgonetem.addressing import Ipv4AddressPlan, NodeKind
 from satgonetem.utils.constants import MAX_WORKERS
 
 if TYPE_CHECKING:
-    from typing import Optional
-
     from satgonetem.models.interface import Interface
     from satgonetem.models.link import Link
     from satgonetem.models.node import Node
@@ -71,9 +69,7 @@ class InterfaceMgrMixin:
             register(user_terminal, NodeKind.USER_TERMINAL)
 
         for link in sorted(self.links.values(), key=self._address_link_sort_key):
-            plan.allocate_link(
-                self._link_key(link), link.source.id, link.target.id
-            )
+            plan.allocate_link(self._link_key(link), link.source.id, link.target.id)
 
         self.address_plan = plan
 
@@ -85,7 +81,10 @@ class InterfaceMgrMixin:
     @staticmethod
     def _address_link_sort_key(link: Link) -> tuple[int, int]:
         """Canonical order for initial link-slot allocation."""
-        return tuple(sorted((link.source.id, link.target.id)))
+        return (
+            min(link.source.id, link.target.id),
+            max(link.source.id, link.target.id),
+        )
 
     def _add_loopback_interfaces_to_list(self):
         """Add loopback interfaces to the global interface list."""
@@ -249,7 +248,7 @@ class InterfaceMgrMixin:
                 f"IPv4 assignment failed on {len(failures)} node(s): {names}"
             )
 
-    def _get_interface_to_peer(self, node: Node, peer_id: int) -> Optional[Interface]:
+    def _get_interface_to_peer(self, node: Node, peer_id: int) -> Interface | None:
         """Return the interface on *node* connected to *peer_id*, if any."""
         for iface in node.interfaces:
             try:

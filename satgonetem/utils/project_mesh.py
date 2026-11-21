@@ -305,8 +305,10 @@ def add_mesh_links(
                 if dist > 4000.0:
                     continue
 
-                link = simulation_manager.create_and_add_inter_satellite_link_connection(
-                    sat_a, sat_b
+                link = (
+                    simulation_manager.create_and_add_inter_satellite_link_connection(
+                        sat_a, sat_b
+                    )
                 )
                 link.inter_satellite_direction = InterSatelliteLinkDirection.ADJACENT
                 created_isls += 1

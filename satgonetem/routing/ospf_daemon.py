@@ -4,6 +4,7 @@ Bird OSPF routing daemon.
 All OSPF logic lives here. The daemon writes a declarative Bird2 config
 directly to each container and manages the Bird service lifecycle.
 """
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
@@ -28,7 +29,7 @@ class OSPFDaemon(BirdRoutingDaemon):
     only for the directly affected nodes (Bird requires a full reload).
     """
 
-    def _init_node(self, node: "Node") -> None:
+    def _init_node(self, node: Node) -> None:
         """Assign IPs, build Bird OSPF config, and start Bird on one node.
 
         Args:
@@ -39,7 +40,7 @@ class OSPFDaemon(BirdRoutingDaemon):
         _apply_config(node, config)
 
 
-def _build_ospf_config(node: "Node") -> str:
+def _build_ospf_config(node: Node) -> str:
     """Build a complete Bird2 OSPF configuration string for one node.
 
     Args:
@@ -89,7 +90,7 @@ def _build_ospf_config(node: "Node") -> str:
     return "\n".join(lines)
 
 
-def _apply_config(node: "Node", config: str) -> None:
+def _apply_config(node: Node, config: str) -> None:
     """Install a Bird config and start or reload Bird in the container.
 
     Args:

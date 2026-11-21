@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 import satgonetem.proto.netem_pb2_grpc as netem_grpc
 from satgonetem.launchers.gonetem_project import _tbf_qos
@@ -12,6 +13,12 @@ from satgonetem.proto import netem_pb2
 class GoNetEmClientMixin:
     """Connection and protobuf request construction for GoNetEm."""
 
+    _client: Any
+    _connection: Any
+    _channel: Any
+    _server_address: str
+    _client_factory: Any
+
     def _get_client(self) -> netem_grpc.NetemStub:
         if self._client is None:
             self._connection = self._client_factory.connect(self._server_address)
@@ -19,7 +26,7 @@ class GoNetEmClientMixin:
             self._client = self._connection.client
         return self._client
 
-    def _link_request(self, link) -> netem_pb2.LinkRequest:
+    def _link_request(self, link) -> netem_pb2.LinkRequest:  # type: ignore[name-defined]
         delay_ms = max(int(link.delay), 1)
         loss = float(getattr(link, "loss", 0) or 0)
         jitter = int(getattr(link, "jitter", 0) or 0)
@@ -88,4 +95,3 @@ class GoNetEmClientMixin:
         self._connection = None
         self._channel = None
         self._client = None
-

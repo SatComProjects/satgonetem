@@ -17,8 +17,8 @@ if TYPE_CHECKING:
 
 
 def run_iperf3_flow(
-    source: "Node",
-    destination: "Node",
+    source: Node,
+    destination: Node,
     config: Iperf3Config,
 ) -> Iperf3Results:
     """Launch an iperf3 flow between two nodes and return parsed results.
@@ -62,15 +62,12 @@ def run_iperf3_flow(
     run_config = replace(config, port=port)
     try:
         server_cmd = (
-            f'sh -c "iperf3 -s -1 -B {dst_ip} -p {port} '
-            f'--json > {server_json} 2>&1"'
+            f'sh -c "iperf3 -s -1 -B {dst_ip} -p {port} --json > {server_json} 2>&1"'
         )
         destination.execute_command(server_cmd, detach=True)
         _wait_for_iperf3_server(destination, dst_ip, port)
 
-        client_cmd = run_config.build_client_command(
-            dst_ip, src_ip, client_json
-        )
+        client_cmd = run_config.build_client_command(dst_ip, src_ip, client_json)
         source.execute_command(client_cmd, detach=False)
         time.sleep(0.3)
 

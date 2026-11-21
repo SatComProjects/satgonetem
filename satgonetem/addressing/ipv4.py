@@ -29,9 +29,9 @@ from __future__ import annotations
 import heapq
 import ipaddress
 import threading
+from collections.abc import Hashable
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Hashable
 
 __all__ = [
     "AddressPlanConfigurationError",
@@ -85,7 +85,7 @@ class NodeKind(str, Enum):
         return 2
 
     @classmethod
-    def from_type_name(cls, type_name: str) -> "NodeKind":
+    def from_type_name(cls, type_name: str) -> NodeKind:
         """Map the model's ``Node.type`` string to a planner kind."""
         try:
             return cls(type_name)
@@ -197,9 +197,7 @@ def _validate_pool(network: ipaddress.IPv4Network, label: str) -> None:
         )
 
 
-def _blocks_in_pool(
-    pool: ipaddress.IPv4Network, block_prefix_len: int
-) -> int:
+def _blocks_in_pool(pool: ipaddress.IPv4Network, block_prefix_len: int) -> int:
     if block_prefix_len <= pool.prefixlen:
         return 0
     return 1 << (block_prefix_len - pool.prefixlen)
@@ -294,9 +292,7 @@ class Ipv4AddressPlan:
 
         self._lock = threading.RLock()
         self._nodes: dict[int, NodeAddress] = {}
-        self._next_node_slot: dict[NodeKind, int] = {
-            kind: 0 for kind in self._pools
-        }
+        self._next_node_slot: dict[NodeKind, int] = {kind: 0 for kind in self._pools}
         self._owner_slots: dict[int, _OwnerSlots] = {}
         self._links: dict[Hashable, LinkAddress] = {}
 
@@ -356,9 +352,7 @@ class Ipv4AddressPlan:
             )
             self._nodes[node_id] = address
             self._next_node_slot[kind] = slot + 1
-            self._owner_slots[node_id] = _OwnerSlots(
-                capacity=self._capacities[kind]
-            )
+            self._owner_slots[node_id] = _OwnerSlots(capacity=self._capacities[kind])
             return address
 
     def node_address(self, node_id: int) -> NodeAddress:

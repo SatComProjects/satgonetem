@@ -41,10 +41,7 @@ def gnd_node():
 def topology_manager():
     """Return a fully initialised TopologyManager from the test topology."""
     return TopologyManager.from_file(
-        str(
-            Path(__file__).resolve().parents[2]
-            / "topology_files/test_topology.json"
-        )
+        str(Path(__file__).resolve().parents[2] / "topology_files/test_topology.json")
     )
 
 

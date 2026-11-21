@@ -8,29 +8,32 @@ tests substitute fakes without patching library internals.
 from __future__ import annotations
 
 import subprocess
-from typing import Any, Protocol, Sequence, runtime_checkable
+from collections.abc import Sequence
+from typing import Any, Protocol, runtime_checkable
 
 
 @runtime_checkable
 class CommandRunner(Protocol):
     """Run a finite command and return its completed-process result."""
 
-    def run(self, args: Sequence[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
-        ...
+    def run(
+        self, args: Sequence[str], **kwargs: Any
+    ) -> subprocess.CompletedProcess[str]: ...
 
 
 @runtime_checkable
 class ProcessRunner(Protocol):
     """Start a long-running process and return the handle."""
 
-    def popen(self, args: Sequence[str], **kwargs: Any) -> subprocess.Popen:
-        ...
+    def popen(self, args: Sequence[str], **kwargs: Any) -> subprocess.Popen: ...
 
 
 class SubprocessRunner:
     """Default adapter backed by :mod:`subprocess`."""
 
-    def run(self, args: Sequence[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+    def run(
+        self, args: Sequence[str], **kwargs: Any
+    ) -> subprocess.CompletedProcess[str]:
         if not any(key in kwargs for key in ("capture_output", "stdout", "stderr")):
             kwargs["capture_output"] = True
         kwargs.setdefault("text", True)
@@ -50,15 +53,13 @@ class GrpcConnection(Protocol):
     channel: Any
     client: Any
 
-    def close(self) -> None:
-        ...
+    def close(self) -> None: ...
 
 
 class GrpcClientFactory(Protocol):
     """Create a GoNetEm gRPC connection for a server address."""
 
-    def connect(self, server_address: str) -> GrpcConnection:
-        ...
+    def connect(self, server_address: str) -> GrpcConnection: ...
 
 
 class _GrpcConnection:

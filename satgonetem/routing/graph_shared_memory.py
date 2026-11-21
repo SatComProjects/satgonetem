@@ -3,25 +3,29 @@ from multiprocessing import shared_memory
 
 import numpy as np
 
-HEADER_DTYPE = np.dtype([
-    ("version", np.uint64),
-    ("num_edges", np.int32),
-    ("max_edges", np.int32),
-    ("schema_version", np.int32),
-])
+HEADER_DTYPE = np.dtype(
+    [
+        ("version", np.uint64),
+        ("num_edges", np.int32),
+        ("max_edges", np.int32),
+        ("schema_version", np.int32),
+    ]
+)
 
-EDGE_DTYPE = np.dtype([
-    ("src_ip", np.uint32),
-    ("dst_ip", np.uint32),
-    ("src_name", np.uint32),
-    ("dst_name", np.uint32),
-    ("src_mac", np.int64),
-    ("dst_mac", np.int64),
-    ("src_port", np.int32),
-    ("dst_port", np.int32),
-    ("flag_gateway", np.int32),
-    ("weight", np.float32),
-])
+EDGE_DTYPE = np.dtype(
+    [
+        ("src_ip", np.uint32),
+        ("dst_ip", np.uint32),
+        ("src_name", np.uint32),
+        ("dst_name", np.uint32),
+        ("src_mac", np.int64),
+        ("dst_mac", np.int64),
+        ("src_port", np.int32),
+        ("dst_port", np.int32),
+        ("flag_gateway", np.int32),
+        ("weight", np.float32),
+    ]
+)
 
 
 def ip_to_int(ip):
@@ -40,22 +44,14 @@ class GraphSharedMemory:
 
         total_size = self.header_size + self.edge_size
 
-        self.shm = shared_memory.SharedMemory(
-            name=name,
-            create=create,
-            size=total_size
-        )
+        self.shm = shared_memory.SharedMemory(name=name, create=create, size=total_size)
 
         self.header = np.ndarray(
-            (1,),
-            dtype=HEADER_DTYPE,
-            buffer=self.shm.buf[:self.header_size]
+            (1,), dtype=HEADER_DTYPE, buffer=self.shm.buf[: self.header_size]
         )
 
         self.edges = np.ndarray(
-            (max_edges,),
-            dtype=EDGE_DTYPE,
-            buffer=self.shm.buf[self.header_size:]
+            (max_edges,), dtype=EDGE_DTYPE, buffer=self.shm.buf[self.header_size :]
         )
 
         if create:
@@ -85,7 +81,7 @@ class GraphSharedMemory:
                 edge["src_port"],
                 edge["dst_port"],
                 edge["flag_gateway"],
-                edge["weight"]
+                edge["weight"],
             )
 
         self.header[0]["num_edges"] = num_edges

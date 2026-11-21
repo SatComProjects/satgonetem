@@ -18,7 +18,7 @@ from satgonetem.utils.constants import MAX_WORKERS
 from satgonetem.utils.satellite_coverage import coverage_percentage_fast
 
 if TYPE_CHECKING:
-    from typing import Any, Dict, List, Optional
+    from typing import Any
 
     from satgonetem.models.node import Node
 
@@ -54,7 +54,7 @@ class DiagnosticsMixin:
             return []
 
         out = []
-        link_usage_map = {}  # Track usage by link key to avoid duplicates
+        link_usage_map: dict[frozenset, dict[str, Any]] = {}  # Track usage by link key
         lock = threading.Lock()  # Protect concurrent access
         max_workers = min(MAX_WORKERS, len(self.links))
 
@@ -66,7 +66,7 @@ class DiagnosticsMixin:
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = {
                 executor.submit(self._process_interface_file, path): sat.name
-                for path, sat in zip(paths, self.get_satellites())
+                for path, sat in zip(paths, self.get_satellites(), strict=False)
             }
 
             for fut in as_completed(futures):
@@ -109,7 +109,6 @@ class DiagnosticsMixin:
                                         f"Expected Link in links, got {type(unexpected)}"
                                     )
                             try:
-
                                 # Use the proper link key for consistency
                                 link_key = self._build_link_key(
                                     link.source, link.target
@@ -141,9 +140,9 @@ class DiagnosticsMixin:
                                             "value"
                                         ]
                                         if usage_bps > current_usage:
-                                            link_usage_map[link_key][
-                                                "value"
-                                            ] = usage_bps
+                                            link_usage_map[link_key]["value"] = (
+                                                usage_bps
+                                            )
 
                                 # Also update the link object's tx value
                                 link.tx = usage_bps
@@ -195,7 +194,7 @@ class DiagnosticsMixin:
             Example: {"eth0": 656, "eth55": 272974304}
         """
         try:
-            with open(file_path, "r") as f:
+            with open(file_path) as f:
                 lines = f.readlines()
 
             if not lines:
@@ -218,7 +217,7 @@ class DiagnosticsMixin:
             raise
 
     def launch_tcpdump_on_satellites(
-        self, dump_dir: str = "/tmp/dump", satellites: list = list()
+        self, dump_dir: str = "/tmp/dump", satellites: list | None = None
     ) -> None:
         """
         Launch tcpdump on each interface of each satellite and dump traffic to .pcap files.
@@ -232,8 +231,12 @@ class DiagnosticsMixin:
         :param dump_dir: Directory where .pcap files are written.
                          Defaults to /tmp/interfaces/dump.
         """
+        if satellites is None:
+            satellites = list()
         sats = [
-            s for s in satellites if hasattr(s, "container") and s.container is not None
+            s
+            for s in (satellites or [])
+            if hasattr(s, "container") and s.container is not None
         ]
 
         if not sats:
@@ -287,7 +290,7 @@ class DiagnosticsMixin:
 
     def enable_tcpdump_on_satellites(
         self,
-        satellites: list = list(),
+        satellites: list | None = None,
         dump_dir: str = "/tmp/dump",
     ) -> None:
         """
@@ -299,6 +302,8 @@ class DiagnosticsMixin:
         Args:
             dump_dir: Directory where .pcap files are written (default: /tmp/dump)
         """
+        if satellites is None:
+            satellites = list()
         if not self.get_gonetem_status():
             logging.warning("GoNetEm is not running. Cannot enable tcpdump.")
             return
@@ -315,13 +320,15 @@ class DiagnosticsMixin:
         logging.info("Enabling tcpdump on satellites...")
         self.launch_tcpdump_on_satellites(dump_dir=dump_dir, satellites=satellites)
 
-    def disable_tcpdump_on_satellites(self, satellites: list = list()) -> None:
+    def disable_tcpdump_on_satellites(self, satellites: list | None = None) -> None:
         """
         Disable tcpdump on satellites by killing the process in each satellite container.
 
         Args:
             satellites: List of satellite objects to disable tcpdump on. If empty, disables on all satellites.
         """
+        if satellites is None:
+            satellites = list()
         if not self.get_gonetem_status():
             logging.warning("GoNetEm is not running. Cannot disable tcpdump.")
             return
@@ -339,7 +346,7 @@ class DiagnosticsMixin:
             except (RuntimeError, OSError) as e:
                 logging.error(f"Failed to disable tcpdump on {sat.name}: {e}")
 
-    def get_topology_summary(self) -> Dict[str, Any]:
+    def get_topology_summary(self) -> dict[str, Any]:
         """Return a summary of the topology including counts of satellites, ground stations, and links."""
         return {
             "satellites": len(self.satellites),
@@ -417,7 +424,7 @@ class DiagnosticsMixin:
             "Install one of: gnome-terminal, xterm, konsole, alacritty, kitty."
         )
 
-    def execute_command_on(self, node: str = "", command: str = "") -> Dict[str, Any]:
+    def execute_command_on(self, node: str = "", command: str = "") -> dict[str, Any]:
         """Execute a command on a specified node and return the output.
 
         Args:
@@ -441,7 +448,7 @@ class DiagnosticsMixin:
         elif node.startswith("Gnd"):
             node_id = int(node[3:]) if len(node) > 3 else 0
             match self.ground_stations.get(node_id):
-                case GroundStation() as target_node:
+                case GroundStation() as target_node:  # type: ignore[misc]
                     pass
                 case None:
                     logging.warning(f"Node '{node}' not found in topology")
@@ -469,7 +476,7 @@ class DiagnosticsMixin:
             logging.error(f"Error executing command on node '{node}': {e}")
             return {"output": "", "error": str(e)}
 
-    def get_node_by_name(self, name: str) -> Optional[Node]:
+    def get_node_by_name(self, name: str) -> Node | None:
         """Get a node (satellite or ground station) by its name."""
         if name.startswith("Sat"):
             match self.satellites.get(int(name[3:])):
@@ -483,7 +490,7 @@ class DiagnosticsMixin:
                     )
         elif name.startswith("Gnd"):
             match self.ground_stations.get(int(name[3:])):
-                case GroundStation() as node:
+                case GroundStation() as node:  # type: ignore[misc]
                     return node
                 case None:
                     return None
@@ -493,14 +500,14 @@ class DiagnosticsMixin:
                     )
         return None
 
-    def get_node_by_id(self, node_id: int) -> Optional[Node]:
+    def get_node_by_id(self, node_id: int) -> Node | None:
         """Get a node (satellite or ground station) by its ID."""
         match self.satellites.get(node_id):
             case Satellite() as node:
                 return node
             case None:
                 match self.ground_stations.get(node_id):
-                    case GroundStation() as node:
+                    case GroundStation() as node:  # type: ignore[misc]
                         return node
                     case None:
                         return None
@@ -513,7 +520,7 @@ class DiagnosticsMixin:
                     f"Expected Satellite in satellites, got {type(unexpected)}"
                 )
 
-    def get_node_ip_addresses(self, name: str) -> List[str]:
+    def get_node_ip_addresses(self, name: str) -> list[str]:
         """Get the list of IPv4 addresses assigned to a node."""
         node = self.get_node_by_name(name)
         if not node:
@@ -521,7 +528,7 @@ class DiagnosticsMixin:
             return []
         return [iface.ipv4 for iface in node.interfaces if iface.ipv4]
 
-    def get_node_ifaces(self, name: str) -> List[str]:
+    def get_node_ifaces(self, name: str) -> list[str]:
         """Get the list of interfaces for a node."""
         node = self.get_node_by_name(name)
         if not node:

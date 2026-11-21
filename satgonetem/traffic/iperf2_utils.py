@@ -224,14 +224,10 @@ def generate_iperf2_plots(
         try:
             system = platform.system()
             if system == "Darwin":
-                default_runner.run(
-                    ["open", str(out_dir)], check=False, capture=False
-                )
+                default_runner.run(["open", str(out_dir)], check=False, capture=False)
             elif system == "Windows":
                 win_path = Path(out_dir).as_posix().replace("/", "\\")
-                default_runner.run(
-                    ["explorer", win_path], check=False, capture=False
-                )
+                default_runner.run(["explorer", win_path], check=False, capture=False)
             else:
                 default_runner.run(
                     ["xdg-open", str(out_dir)], check=False, capture=False

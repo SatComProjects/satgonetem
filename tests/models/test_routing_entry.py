@@ -138,6 +138,7 @@ class TestRoutingEntryValidation:
                 protocol="ipv4",
             )
 
+
 class TestRoutingEntryEquality:
     """Tests for RoutingEntry.__eq__."""
 

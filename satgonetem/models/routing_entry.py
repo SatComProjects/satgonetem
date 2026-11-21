@@ -5,7 +5,6 @@ from satgonetem.utils.ip_utils import IPUtils
 
 
 class RoutingEntry:
-
     def __init__(
         self,
         destination: str,
@@ -72,7 +71,7 @@ class RoutingEntry:
         target_node: str,
         source_node: str,
         source: str,
-    ) -> "RoutingEntry":
+    ) -> RoutingEntry:
         """Create an entry without re-validating/summarizing IPs.
 
         Assumes ``destination`` and ``source`` are already summarized to

@@ -125,8 +125,8 @@ class Node:
                 f"Command failed in {self.name} (exit {exit_code}): {decoded}"
             )
         return decoded
-    
-    def _require_container_pid(self, node: "Node") -> int:
+
+    def _require_container_pid(self, node: Node) -> int:
         """Return *node*'s container PID, resolving and caching it if needed."""
         if node.container_pid is not None:
             return node.container_pid
@@ -155,7 +155,7 @@ class Node:
 
     def connect_to(
         self,
-        peer_node: "Node",
+        peer_node: Node,
         peer1_name: str,
         peer2_name: str,
     ) -> None:
@@ -205,7 +205,7 @@ class Node:
             RuntimeError: If the node is not ready, the command string is
                 malformed, or the command exits with an unexpected status.
         """
-        if use_docker_cli: #Skip directly to docker
+        if use_docker_cli:  # Skip directly to docker
             return self.execute_command_docker(command, detach, ok_exit_codes)
         if self.grpc_client and not detach:
             import grpc
@@ -222,21 +222,23 @@ class Node:
                 response = self.grpc_client.NodeRun(request)
             except grpc.RpcError as exc:
                 if exc.code() == grpc.StatusCode.UNIMPLEMENTED:
-                    return self.execute_command_docker(
-                        command, detach, ok_exit_codes
-                    )
+                    return self.execute_command_docker(command, detach, ok_exit_codes)
                 raise
             if response.status.code == netem_pb2.StatusCode.ERROR:  # type: ignore[attr-defined]
                 raise RuntimeError(
                     f"NodeRun failed for {self.name}: {response.status.error}"
                 )
             decoded = response.stdout.decode("utf-8").strip() if response.stdout else ""
-            decoded_err = response.stderr.decode("utf-8").strip() if response.stderr else ""
+            decoded_err = (
+                response.stderr.decode("utf-8").strip() if response.stderr else ""
+            )
             self.command_output = decoded
             if response.exitCode not in ok_exit_codes:
                 detail = decoded
                 if decoded_err:
-                    detail = f"{decoded}\nstderr: {decoded_err}" if decoded else decoded_err
+                    detail = (
+                        f"{decoded}\nstderr: {decoded_err}" if decoded else decoded_err
+                    )
                 raise RuntimeError(
                     f"Command failed in {self.name} (exit {response.exitCode}): {detail}"
                 )

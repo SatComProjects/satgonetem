@@ -86,9 +86,7 @@ def test_gmst_from_jd_is_reduced_to_one_turn(jd: float) -> None:
 
 def test_gmst_from_jd_advances_by_sidereal_rate() -> None:
     one_hour = 1.0 / 24.0
-    delta = float(gmst_from_jd(_J2000_JD + one_hour)) - float(
-        gmst_from_jd(_J2000_JD)
-    )
+    delta = float(gmst_from_jd(_J2000_JD + one_hour)) - float(gmst_from_jd(_J2000_JD))
 
     assert delta == pytest.approx(math.radians(360.98564736629 / 24.0), abs=1e-9)
 
@@ -137,9 +135,7 @@ def test_julian_date_at_j2000_epoch() -> None:
         (datetime(2025, 6, 10, 6, 0, 0, tzinfo=timezone.utc), 2460836.75),
     ],
 )
-def test_julian_date_for_known_utc_datetimes(
-    epoch: datetime, expected: float
-) -> None:
+def test_julian_date_for_known_utc_datetimes(epoch: datetime, expected: float) -> None:
     assert float(julian_date(epoch)) == pytest.approx(expected)
 
 

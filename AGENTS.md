@@ -42,7 +42,7 @@ every change, including refactors. Phased specifications live in
   (failing test and command), the implementation summary, validation commands
   and results, architectural tradeoffs, and unverified assumptions.
 - Required CI checks (`Lint`, `Type check`, `Test` on 3.10–3.14, coverage at
-  least 65%, and `Build package`) must pass before merge on `develop`. `main`
+  least 75%, and `Build package`) must pass before merge on `develop`. `main`
   adds `Type check` when the Phase 0 workflow is promoted. Do not bypass or
   disable a gate to land a change.
 
@@ -95,8 +95,8 @@ every change, including refactors. Phased specifications live in
 
 - Run the narrowest relevant tests first, then the full suite.
 - Run lint/static analysis. Run `uv lock --check` when dependencies change.
-- Run dependency/security checks when dependencies or packaging change; the
-  automated security gate lands in Spec 0008.
+- Run dependency/security checks when dependencies or packaging change
+  (`pip-audit`; see Spec 0008).
 - Inspect the complete `git diff`, including generated or untracked files.
 - Report: commands run, exit statuses, architectural tradeoffs, and anything
   unverified.
@@ -173,10 +173,12 @@ Run from the repository root with the locked environment:
 ```bash
 uv sync --frozen --extra dev                                  # install
 uv run --frozen --extra dev ruff check satgonetem tests       # lint
-uv run --frozen --extra dev mypy                              # scoped type check
+uv run --frozen --extra dev ruff format --check satgonetem tests  # format
+uv run --frozen --extra dev mypy                              # full type check
+uvx pip-audit@2.9.0 --path .venv/lib/python3.14/site-packages    # dependency audit
 uv run --frozen --extra dev pytest -q                         # full suite
 uv run --frozen --extra dev pytest tests/services/test_link_ops.py -q  # targeted
-uv run --frozen --extra dev pytest -q --cov=satgonetem --cov-report=term-missing --cov-fail-under=65
+uv run --frozen --extra dev pytest -q --cov=satgonetem --cov-report=term-missing --cov-fail-under=75
 uv lock --check                                               # dependencies changed
 ```
 
@@ -184,9 +186,8 @@ Notes:
 
 - Ruff's `select` list is a deliberate ratchet (see `pyproject.toml`). Never
   narrow it; widen it as findings are fixed.
-- `mypy` and `black` are installed as dev dependencies but are not yet enforced
-  in CI. Do not claim they pass unless you ran them. Type-checking adoption is
-  tracked in Spec 0001 (`docs/specs/0001-quality-gates.md`).
+- `mypy` is enforced over the whole package. `attr-defined` remains disabled
+  for generated protobuf and mixin-injected state (tracked in Spec 0008).
 - Docker/network-dependent tests may not run in every environment. Report that
   explicitly instead of treating it as a pass.
 

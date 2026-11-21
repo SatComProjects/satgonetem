@@ -54,8 +54,6 @@ extra = [
 dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",
-    "black>=23.0",
-    "flake8>=6.0",
     "mypy>=1.0",
     "ruff==0.17.6",
 ]
@@ -90,19 +88,18 @@ omit = [
 ]
 
 [tool.coverage.report]
-fail_under = 65
+fail_under = 75
 show_missing = true
 skip_covered = false
 
 [tool.mypy]
 python_version = "3.10"
-files = [
-    "satgonetem/models",
-    "satgonetem/addressing",
-    "satgonetem/link_budget",
-]
+files = ["satgonetem"]
 ignore_missing_imports = true
 warn_unused_configs = true
+# Generated protobuf attributes and mixin-injected state are not statically
+# visible. Keep this as a ratchet; remove categories as annotations land.
+disable_error_code = ["attr-defined"]
 
 [tool.ruff]
 target-version = "py310"
@@ -115,12 +112,14 @@ exclude = [
 [tool.ruff.lint]
 # Ratchet: this is the enforced subset. Widen it as findings are fixed; never
 # narrow it to make a change pass. Spec 0008 tracks the remaining rules.
-select = ["E4", "E7", "E9", "F401", "F63", "F7", "F811", "F82", "F841", "I"]
+select = ["B", "E4", "E7", "E9", "F401", "F63", "F7", "F811", "F82", "F841", "I", "SIM", "UP"]
 
 [tool.ruff.lint.per-file-ignores]
 # apply_satcom_fix() must run before the sat_com imports below it, so the import
 # block is intentionally not at the top of the file.
 "satgonetem/services/topology_satcom.py" = ["E402"]
+# Nested context managers keep setup/assertion phases readable in tests.
+"tests/**" = ["SIM117"]
 
 [tool.uv]
 required-version = ">=0.11.0"

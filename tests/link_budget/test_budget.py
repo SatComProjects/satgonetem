@@ -82,9 +82,7 @@ class TestComputeElevationAngle:
 class TestComputeOneWayShannonCapacity:
     @patch("satgonetem.link_budget.budget.calculate_atmospheric_attenuation_dB")
     @patch("satgonetem.link_budget.budget.calculate_free_space_loss_db")
-    def test_with_antenna(
-        self, mock_fsl, mock_atm, calculator, mock_sat, mock_gs
-    ):
+    def test_with_antenna(self, mock_fsl, mock_atm, calculator, mock_sat, mock_gs):
         mock_fsl.return_value = 200.0
         mock_atm.return_value = (1.0, 0.5, 0.2, 0.2, 0.1)
 
@@ -112,9 +110,7 @@ class TestComputeOneWayShannonCapacity:
         mock_fsl.return_value = 200.0
         mock_atm.return_value = (1.0, 0.5, 0.2, 0.2, 0.1)
 
-        tx_antenna = Antenna(
-            diameter=1.0, efficiency=0.6, sspa_output_power_db=40.0
-        )
+        tx_antenna = Antenna(diameter=1.0, efficiency=0.6, sspa_output_power_db=40.0)
         rx_antenna = Antenna(diameter=2.0, efficiency=0.6)
         assert tx_antenna.gain_db is None
         assert rx_antenna.gain_db is None
@@ -146,15 +142,19 @@ class TestComputeOneWayShannonCapacity:
         )
         rx_antenna = Antenna(diameter=2.0, efficiency=0.6)
 
-        with patch(
-            "satgonetem.link_budget.budget.calculate_free_space_loss_db",
-            return_value=200.0,
-        ), patch(
-            "satgonetem.link_budget.budget.calculate_atmospheric_attenuation_dB",
-            return_value=(1.0, 0.5, 0.2, 0.2, 0.1),
-        ), patch(
-            "satgonetem.link_budget.budget.calculate_transmitter_eirp"
-        ) as mock_component_eirp:
+        with (
+            patch(
+                "satgonetem.link_budget.budget.calculate_free_space_loss_db",
+                return_value=200.0,
+            ),
+            patch(
+                "satgonetem.link_budget.budget.calculate_atmospheric_attenuation_dB",
+                return_value=(1.0, 0.5, 0.2, 0.2, 0.1),
+            ),
+            patch(
+                "satgonetem.link_budget.budget.calculate_transmitter_eirp"
+            ) as mock_component_eirp,
+        ):
             capacity = calculator.compute_one_way_shannon_capacity(
                 tx_node=SimpleNamespace(antenna=tx_antenna),
                 rx_node=SimpleNamespace(antenna=rx_antenna),
@@ -190,9 +190,7 @@ class TestComputeOneWayShannonCapacity:
 class TestComputeDownlinkModcod:
     @patch("satgonetem.link_budget.budget.calculate_atmospheric_attenuation_dB")
     @patch("satgonetem.link_budget.budget.calculate_free_space_loss_db")
-    def test_full_budget(
-        self, mock_fsl, mock_atm, calculator, mock_sat, mock_gs
-    ):
+    def test_full_budget(self, mock_fsl, mock_atm, calculator, mock_sat, mock_gs):
         mock_fsl.return_value = 200.0
         mock_atm.return_value = (1.0, 0.5, 0.2, 0.2, 0.1)
 

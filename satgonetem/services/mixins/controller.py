@@ -1,6 +1,5 @@
 import logging
 import subprocess
-from typing import Optional
 
 from satgonetem.ports import default_runner
 from satgonetem.utils.ip_utils import IPUtils
@@ -21,7 +20,7 @@ class ControllerMixin:
         veth_host: str,
         veth_peer: str,
         bridge: str,
-        ovs_cid: Optional[str] = None,
+        ovs_cid: str | None = None,
     ) -> None:
         """Idempotently tear down a controller veth pair.
 

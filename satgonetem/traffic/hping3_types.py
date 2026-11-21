@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import contextlib
 import math
 import re
 from dataclasses import dataclass, field
-from typing import Any, List, Optional
+from typing import Any
 
 _TCP_FLAG_MAP: dict[str, str] = {
     "S": "-S",
@@ -25,7 +26,6 @@ _STATS_RE = re.compile(
 )
 _RTT_LINE_RE = re.compile(r"(?:rtt|time)=([0-9]+\.?[0-9]*)\s*ms")
 _PAYLOAD_RE = re.compile(r"(\d+) data bytes")
-
 
 
 @dataclass
@@ -60,14 +60,14 @@ class Hping3Config:
 
     proto: str = "tcp"
     dport: int = 0
-    sport: Optional[int] = None
+    sport: int | None = None
     count: int = 100
     size: int = 0
-    ttl: Optional[int] = None
+    ttl: int | None = None
     rate_type: str = "interval"
     interval: str = ""
-    flags: List[str] = field(default_factory=list)
-    spoof_src: Optional[str] = None
+    flags: list[str] = field(default_factory=list)
+    spoof_src: str | None = None
 
     def __post_init__(self) -> None:
         """Reject configurations that cannot produce a finite hping3 run.
@@ -90,14 +90,11 @@ class Hping3Config:
         proto = self.proto.lower() if isinstance(self.proto, str) else self.proto
         if proto not in _VALID_PROTOCOLS:
             raise ValueError(
-                f"proto must be one of {sorted(_VALID_PROTOCOLS)}, "
-                f"got {self.proto!r}"
+                f"proto must be one of {sorted(_VALID_PROTOCOLS)}, got {self.proto!r}"
             )
 
         if isinstance(self.count, bool) or not isinstance(self.count, int):
-            raise ValueError(
-                f"count must be an integer >= 1, got {self.count!r}"
-            )
+            raise ValueError(f"count must be an integer >= 1, got {self.count!r}")
         if self.count < 1:
             raise ValueError(
                 f"count must be >= 1 for a finite hping3 run, got {self.count}; "
@@ -164,9 +161,7 @@ class Hping3Config:
             parts.append(f"--ttl {self.ttl}")
 
         if proto == "tcp" and self.flags:
-            parts.extend(
-                _TCP_FLAG_MAP[f] for f in self.flags if f in _TCP_FLAG_MAP
-            )
+            parts.extend(_TCP_FLAG_MAP[f] for f in self.flags if f in _TCP_FLAG_MAP)
 
         if self.rate_type == "interval" and self.interval:
             parts.append(f"-i {self.interval}")
@@ -212,15 +207,13 @@ class Hping3Results:
         self.raw_output: str = raw_output
         self.config: Hping3Config = config
 
-        self._payload_bytes: Optional[int] = None
+        self._payload_bytes: int | None = None
         payload_match = _PAYLOAD_RE.search(raw_output)
         if payload_match:
-            try:
+            with contextlib.suppress(ValueError):
                 self._payload_bytes = int(payload_match.group(1))
-            except ValueError:
-                pass
 
-        self._rtt_ms: List[float] = []
+        self._rtt_ms: list[float] = []
         for line in raw_output.splitlines():
             m = _RTT_LINE_RE.search(line)
             if m:
@@ -229,18 +222,18 @@ class Hping3Results:
                 except ValueError:
                     self._rtt_ms.append(math.nan)
 
-        self._seq: List[int] = list(range(1, len(self._rtt_ms) + 1))
+        self._seq: list[int] = list(range(1, len(self._rtt_ms) + 1))
 
         pb = self._payload_bytes or 0
         acc = 0.0
-        self._cumulative_mbit: List[float] = []
+        self._cumulative_mbit: list[float] = []
         for _ in self._seq:
             acc += pb * 8.0 / 1_000_000.0
             self._cumulative_mbit.append(acc)
 
-        self._transmitted: Optional[int] = None
+        self._transmitted: int | None = None
         self._received: int = len([x for x in self._rtt_ms if not math.isnan(x)])
-        self._loss_percent: Optional[float] = None
+        self._loss_percent: float | None = None
 
         stats_match = _STATS_RE.search(raw_output)
         if stats_match:
@@ -252,34 +245,34 @@ class Hping3Results:
                 pass
 
         valid_rtts = [x for x in self._rtt_ms if not math.isnan(x)]
-        self._rtt_min: Optional[float] = min(valid_rtts) if valid_rtts else None
-        self._rtt_avg: Optional[float] = (
+        self._rtt_min: float | None = min(valid_rtts) if valid_rtts else None
+        self._rtt_avg: float | None = (
             sum(valid_rtts) / len(valid_rtts) if valid_rtts else None
         )
-        self._rtt_max: Optional[float] = max(valid_rtts) if valid_rtts else None
+        self._rtt_max: float | None = max(valid_rtts) if valid_rtts else None
 
     @property
-    def payload_bytes(self) -> Optional[int]:
+    def payload_bytes(self) -> int | None:
         """Payload data size per packet in bytes, or None if not reported."""
         return self._payload_bytes
 
     @property
-    def seq(self) -> List[int]:
+    def seq(self) -> list[int]:
         """Packet sequence numbers for received replies (1-based)."""
         return list(self._seq)
 
     @property
-    def rtt_ms(self) -> List[float]:
+    def rtt_ms(self) -> list[float]:
         """Per-packet RTT values in milliseconds. NaN for missing replies."""
         return list(self._rtt_ms)
 
     @property
-    def cumulative_mbit(self) -> List[float]:
+    def cumulative_mbit(self) -> list[float]:
         """Cumulative bits transmitted in megabits, one value per reply."""
         return list(self._cumulative_mbit)
 
     @property
-    def packets_transmitted(self) -> Optional[int]:
+    def packets_transmitted(self) -> int | None:
         """Total packets sent, or None if the summary line was not found."""
         return self._transmitted
 
@@ -289,22 +282,22 @@ class Hping3Results:
         return self._received
 
     @property
-    def packet_loss_percent(self) -> Optional[float]:
+    def packet_loss_percent(self) -> float | None:
         """Packet loss percentage (0.0 - 100.0), or None if not available."""
         return self._loss_percent
 
     @property
-    def rtt_min_ms(self) -> Optional[float]:
+    def rtt_min_ms(self) -> float | None:
         """Minimum RTT in milliseconds across all received replies."""
         return self._rtt_min
 
     @property
-    def rtt_avg_ms(self) -> Optional[float]:
+    def rtt_avg_ms(self) -> float | None:
         """Average RTT in milliseconds across all received replies."""
         return self._rtt_avg
 
     @property
-    def rtt_max_ms(self) -> Optional[float]:
+    def rtt_max_ms(self) -> float | None:
         """Maximum RTT in milliseconds across all received replies."""
         return self._rtt_max
 
@@ -366,7 +359,4 @@ class Hping3Results:
         }
 
     def __repr__(self) -> str:
-        return (
-            f"Hping3Results(received={self._received}, "
-            f"rtt_avg={self._rtt_avg})"
-        )
+        return f"Hping3Results(received={self._received}, rtt_avg={self._rtt_avg})"

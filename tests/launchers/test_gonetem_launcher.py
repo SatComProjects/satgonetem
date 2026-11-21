@@ -113,7 +113,9 @@ def test_force_close_only_stops_and_removes_scoped_containers(launcher):
     assert ["docker", "stop", "-t", "0", "id2"] in docker_calls
     assert ["docker", "rm", "id1"] in docker_calls
     assert ["docker", "rm", "id2"] in docker_calls
-    assert all("id3" not in command and "id4" not in command for command in docker_calls)
+    assert all(
+        "id3" not in command and "id4" not in command for command in docker_calls
+    )
 
     client.ProjectClose.assert_called_once_with(launcher._request)
     channel.close.assert_called_once()
@@ -163,9 +165,7 @@ def test_start_containers_raises_runtime_error_when_server_unreachable(launcher)
     assert launcher._channel is None
 
 
-def test_start_containers_topology_failure_raises_and_cleans_up(
-    launcher, tmp_path
-):
+def test_start_containers_topology_failure_raises_and_cleans_up(launcher, tmp_path):
     launcher._request = None
     project_file = tmp_path / "project.gnet"
     project_file.write_bytes(b"fake-project")
@@ -175,9 +175,11 @@ def test_start_containers_topology_failure_raises_and_cleans_up(
     client.TopologyRun.side_effect = RuntimeError("topology exploded")
     channel = launcher._channel
 
-    with patch.object(launcher, "_get_client", return_value=client), patch.object(
-        launcher, "generate_project", return_value=str(project_file)
-    ), patch.object(launcher, "_list_project_containers", return_value=[]):
+    with (
+        patch.object(launcher, "_get_client", return_value=client),
+        patch.object(launcher, "generate_project", return_value=str(project_file)),
+        patch.object(launcher, "_list_project_containers", return_value=[]),
+    ):
         with pytest.raises(RuntimeError, match="TopologyRun failed"):
             launcher.start_containers([])
 
@@ -189,9 +191,7 @@ def test_start_containers_topology_failure_raises_and_cleans_up(
     assert launcher._channel is None
 
 
-def test_start_containers_rejects_empty_project_id_and_cleans_up(
-    launcher, tmp_path
-):
+def test_start_containers_rejects_empty_project_id_and_cleans_up(launcher, tmp_path):
     launcher._request = None
     project_file = tmp_path / "project.gnet"
     project_file.write_bytes(b"fake-project")
@@ -200,11 +200,12 @@ def test_start_containers_rejects_empty_project_id_and_cleans_up(
     client.ProjectOpen.return_value.id = ""
     channel = launcher._channel
 
-    with patch.object(launcher, "_get_client", return_value=client), patch.object(
-        launcher, "generate_project", return_value=str(project_file)
+    with (
+        patch.object(launcher, "_get_client", return_value=client),
+        patch.object(launcher, "generate_project", return_value=str(project_file)),
+        pytest.raises(RuntimeError, match="empty project id"),
     ):
-        with pytest.raises(RuntimeError, match="empty project id"):
-            launcher.start_containers([])
+        launcher.start_containers([])
 
     client.ProjectClose.assert_not_called()
     channel.close.assert_called_once()
@@ -232,14 +233,10 @@ def test_force_close_attempts_remove_even_when_stop_fails(launcher):
 
 
 def test_topology_omits_hil_nodes_and_links(topology_with_hil):
-    topology_manager, sat, gnd, _hil_gnd, sat_to_gnd, _sat_to_hil = (
-        topology_with_hil
-    )
+    topology_manager, sat, gnd, _hil_gnd, sat_to_gnd, _sat_to_hil = topology_with_hil
     launcher = GoNetEmLauncher(topology_manager, "localhost:10110", "test")
 
-    yaml = launcher.get_gonetem_topology(
-        nodes=[sat, gnd], links=[sat_to_gnd]
-    )
+    yaml = launcher.get_gonetem_topology(nodes=[sat, gnd], links=[sat_to_gnd])
 
     assert "Sat0:" in yaml
     assert "Gnd0:" in yaml
@@ -251,9 +248,7 @@ def test_topology_omits_hil_nodes_and_links(topology_with_hil):
 
 
 def test_topology_skips_inactive_links(topology_with_hil):
-    topology_manager, sat, gnd, hil_gnd, sat_to_gnd, sat_to_hil = (
-        topology_with_hil
-    )
+    topology_manager, sat, gnd, hil_gnd, sat_to_gnd, sat_to_hil = topology_with_hil
     sat_to_hil.is_active = False
     launcher = GoNetEmLauncher(topology_manager, "localhost:10110", "test")
 
@@ -267,9 +262,7 @@ def test_topology_skips_inactive_links(topology_with_hil):
 
 
 def test_ground_station_defaults_to_ground_station_image(topology_with_hil):
-    topology_manager, sat, gnd, _hil_gnd, sat_to_gnd, _sat_to_hil = (
-        topology_with_hil
-    )
+    topology_manager, sat, gnd, _hil_gnd, sat_to_gnd, _sat_to_hil = topology_with_hil
     gnd.image = ""
     launcher = GoNetEmLauncher(topology_manager, "localhost:10110", "test")
 
@@ -280,9 +273,7 @@ def test_ground_station_defaults_to_ground_station_image(topology_with_hil):
 
 
 def test_fallback_uses_docker_host_for_ground_stations(topology_with_hil):
-    topology_manager, sat, gnd, _hil_gnd, sat_to_gnd, _sat_to_hil = (
-        topology_with_hil
-    )
+    topology_manager, sat, gnd, _hil_gnd, sat_to_gnd, _sat_to_hil = topology_with_hil
     launcher = GoNetEmLauncher(topology_manager, "localhost:10110", "test")
 
     yaml = launcher.get_gonetem_topology(
@@ -294,9 +285,7 @@ def test_fallback_uses_docker_host_for_ground_stations(topology_with_hil):
 
 
 def test_topology_endpoint_filter_drops_links_to_unselected_nodes(topology_with_hil):
-    topology_manager, sat, gnd, _hil_gnd, _sat_to_gnd, _sat_to_hil = (
-        topology_with_hil
-    )
+    topology_manager, sat, gnd, _hil_gnd, _sat_to_gnd, _sat_to_hil = topology_with_hil
     launcher = GoNetEmLauncher(topology_manager, "localhost:10110", "test")
 
     yaml = launcher.get_gonetem_topology(nodes=[sat, gnd])
@@ -337,9 +326,7 @@ def test_set_link_capacities_updates_existing_non_budget_links(launcher):
     )
     launcher.update_link = MagicMock()
 
-    launcher.set_link_capacities(
-        500, 300, [isl, gsl, ground_object, budgeted]
-    )
+    launcher.set_link_capacities(500, 300, [isl, gsl, ground_object, budgeted])
 
     assert (isl.peer1_capacity, isl.peer2_capacity) == (500, 500)
     assert (gsl.peer1_capacity, gsl.peer2_capacity) == (300, 300)
@@ -352,9 +339,7 @@ def test_set_link_capacities_updates_existing_non_budget_links(launcher):
 
 
 def test_generate_project_forwards_filtered_sets(topology_with_hil, tmp_path):
-    topology_manager, sat, _gnd, _hil_gnd, _sat_to_gnd, _sat_to_hil = (
-        topology_with_hil
-    )
+    topology_manager, sat, _gnd, _hil_gnd, _sat_to_gnd, _sat_to_hil = topology_with_hil
     launcher = GoNetEmLauncher(topology_manager, "localhost:10110", "test")
 
     with patch.object(
@@ -362,13 +347,9 @@ def test_generate_project_forwards_filtered_sets(topology_with_hil, tmp_path):
         "get_gonetem_topology",
         return_value="nodes: \nlinks: \n",
     ) as mock_topology:
-        project_file = launcher.generate_project(
-            str(tmp_path), nodes=[sat], links=[]
-        )
+        project_file = launcher.generate_project(str(tmp_path), nodes=[sat], links=[])
 
-    mock_topology.assert_called_once_with(
-        controller=False, nodes=[sat], links=[]
-    )
+    mock_topology.assert_called_once_with(controller=False, nodes=[sat], links=[])
     assert project_file.endswith(".gnet")
 
 
@@ -385,9 +366,13 @@ def test_start_containers_passes_filtered_sets_to_project_generation(
     nodes = [SimpleNamespace(name="Sat0")]
     links = [SimpleNamespace(source=nodes[0], target=nodes[0])]
 
-    with patch.object(launcher, "_get_client", return_value=client), patch.object(
-        launcher, "generate_project", return_value=str(project_file)
-    ) as mock_generate, patch.object(launcher, "_attach_containers"):
+    with (
+        patch.object(launcher, "_get_client", return_value=client),
+        patch.object(
+            launcher, "generate_project", return_value=str(project_file)
+        ) as mock_generate,
+        patch.object(launcher, "_attach_containers"),
+    ):
         launcher.start_containers(nodes, links=links)
 
     mock_generate.assert_called_once_with(
@@ -396,6 +381,7 @@ def test_start_containers_passes_filtered_sets_to_project_generation(
         nodes=nodes,
         links=links,
     )
+
 
 def test_tbf_qos_uses_burst_plus_bdp():
     burst, buffer = _tbf_qos(100_000, 1)
@@ -409,9 +395,7 @@ def test_tbf_qos_uses_burst_plus_bdp():
 
 
 def test_write_links_uses_corrected_tbf_values(topology_with_hil):
-    topology_manager, sat, gnd, _hil_gnd, _sat_to_gnd, _sat_to_hil = (
-        topology_with_hil
-    )
+    topology_manager, sat, gnd, _hil_gnd, _sat_to_gnd, _sat_to_hil = topology_with_hil
     launcher = GoNetEmLauncher(topology_manager, "localhost:10110", "test")
 
     yaml = launcher.get_gonetem_topology(nodes=[sat, gnd])
@@ -421,9 +405,7 @@ def test_write_links_uses_corrected_tbf_values(topology_with_hil):
 
 
 def test_write_links_uses_default_queue_length(topology_with_hil):
-    topology_manager, sat, gnd, _hil_gnd, _sat_to_gnd, _sat_to_hil = (
-        topology_with_hil
-    )
+    topology_manager, sat, gnd, _hil_gnd, _sat_to_gnd, _sat_to_hil = topology_with_hil
     launcher = GoNetEmLauncher(topology_manager, "localhost:10110", "test")
 
     yaml = launcher.get_gonetem_topology(nodes=[sat, gnd])
@@ -435,9 +417,7 @@ def test_write_links_uses_default_queue_length(topology_with_hil):
 
 
 def test_write_links_uses_configured_queue_length(topology_with_hil):
-    topology_manager, sat, gnd, _hil_gnd, _sat_to_gnd, _sat_to_hil = (
-        topology_with_hil
-    )
+    topology_manager, sat, gnd, _hil_gnd, _sat_to_gnd, _sat_to_hil = topology_with_hil
     launcher = GoNetEmLauncher(
         topology_manager,
         "localhost:10110",
@@ -519,9 +499,7 @@ def test_update_links_chunks_and_merges_responses(launcher):
 
     response = launcher.update_links(links)
 
-    requests = [
-        call.args[0] for call in launcher._client.LinkUpdateMany.call_args_list
-    ]
+    requests = [call.args[0] for call in launcher._client.LinkUpdateMany.call_args_list]
     assert [len(request.links) for request in requests] == [
         LINK_UPDATE_CHUNK_SIZE,
         1,
@@ -557,10 +535,8 @@ def test_update_links_rejects_missing_results(launcher):
         )
         for i in range(2)
     ]
-    launcher._client.LinkUpdateMany.return_value = (
-        netem_pb2.LinkUpdateManyResponse(
-            status=netem_pb2.Status(code=netem_pb2.OK)
-        )
+    launcher._client.LinkUpdateMany.return_value = netem_pb2.LinkUpdateManyResponse(
+        status=netem_pb2.Status(code=netem_pb2.OK)
     )
     launcher._client.LinkUpdateMany.return_value.results.add(
         status=netem_pb2.Status(code=netem_pb2.OK)

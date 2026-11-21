@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Optional
+from typing import TYPE_CHECKING, Any
 
 import matplotlib
 import pandas as pd
@@ -43,15 +44,11 @@ class Iperf3Results:
             ValueError: If raw_json is empty or cannot be parsed as JSON.
         """
         if not raw_json or not raw_json.strip():
-            raise ValueError(
-                "iperf3 returned empty output; the flow may have failed."
-            )
+            raise ValueError("iperf3 returned empty output; the flow may have failed.")
         try:
             self._data: dict = json.loads(raw_json)
         except json.JSONDecodeError as exc:
-            raise ValueError(
-                f"Failed to parse iperf3 JSON output: {exc}"
-            ) from exc
+            raise ValueError(f"Failed to parse iperf3 JSON output: {exc}") from exc
 
         self._config = config
         self._protocol: str = str(
@@ -63,8 +60,8 @@ class Iperf3Results:
 
         # Set by Iperf3Flow: which side's JSON this is ("client" or "server")
         # and what iperf3 printed around the client's JSON (its warnings).
-        self.json_side: Optional[str] = None
-        self.client_notes: Optional[str] = None
+        self.json_side: str | None = None
+        self.client_notes: str | None = None
 
     def _flatten_intervals(self) -> tuple[pd.DataFrame, pd.DataFrame]:
         """Flatten iperf3 intervals into per-stream and per-summary DataFrames.
@@ -198,7 +195,7 @@ class Iperf3Results:
 
     # ---- Shared throughput metrics (TCP + UDP) ----
 
-    def _summary_series(self) -> Optional[pd.DataFrame]:
+    def _summary_series(self) -> pd.DataFrame | None:
         """Return one consistent interval summary series, if available.
 
         Prefers the aggregate ``sum`` rows, then sender/receiver summaries.
@@ -377,6 +374,7 @@ class Iperf3Results:
             A dict mapping iperf3 JSON field names to (axis_label, transform)
             tuples, where transform converts raw units to display units.
         """
+
         def _id(x: Any) -> Any:
             return x
 
@@ -409,7 +407,7 @@ class Iperf3Results:
         file_stem: str = "iperf3",
         use_summary: bool = True,
         fmt: str = "png",
-    ) -> Optional[str]:
+    ) -> str | None:
         """Plot a single time-series metric and save it to a file.
 
         Args:
@@ -516,7 +514,9 @@ class Iperf3Results:
             print(f"Total Retransmits:     {self.total_retransmits}")
             print(f"Avg RTT:               {self.avg_rtt_ms:.2f} ms")
             print(f"Max RTT:               {self.max_rtt_ms:.2f} ms")
-            print(f"Avg Send CWnd:         {self.avg_cwnd_bytes / self._BYTES_TO_KB:.2f} KB")
+            print(
+                f"Avg Send CWnd:         {self.avg_cwnd_bytes / self._BYTES_TO_KB:.2f} KB"
+            )
         elif proto == "UDP":
             print(
                 f"Total Bytes:           {self.total_bytes / self._BYTES_TO_MB:.2f} MB"
@@ -552,25 +552,29 @@ class Iperf3Results:
             "pmtu": self.pmtu,
         }
         if self._protocol == "TCP":
-            summary.update({
-                "total_bytes_sent": self.total_bytes_sent,
-                "total_bytes_received": self.total_bytes_received,
-                "total_retransmits": self.total_retransmits,
-                "avg_rtt_ms": self.avg_rtt_ms,
-                "max_rtt_ms": self.max_rtt_ms,
-                "avg_rtt_var_us": self.avg_rtt_var_us,
-                "avg_cwnd_bytes": self.avg_cwnd_bytes,
-                "avg_snd_wnd_bytes": self.avg_snd_wnd_bytes,
-            })
+            summary.update(
+                {
+                    "total_bytes_sent": self.total_bytes_sent,
+                    "total_bytes_received": self.total_bytes_received,
+                    "total_retransmits": self.total_retransmits,
+                    "avg_rtt_ms": self.avg_rtt_ms,
+                    "max_rtt_ms": self.max_rtt_ms,
+                    "avg_rtt_var_us": self.avg_rtt_var_us,
+                    "avg_cwnd_bytes": self.avg_cwnd_bytes,
+                    "avg_snd_wnd_bytes": self.avg_snd_wnd_bytes,
+                }
+            )
         elif self._protocol == "UDP":
-            summary.update({
-                "total_bytes": self.total_bytes,
-                "total_packets": self.total_packets,
-                "avg_jitter_ms": self.avg_jitter_ms,
-                "total_lost_packets": self.total_lost_packets,
-                "avg_loss_percent": self.avg_loss_percent,
-                "total_out_of_order": self.total_out_of_order,
-            })
+            summary.update(
+                {
+                    "total_bytes": self.total_bytes,
+                    "total_packets": self.total_packets,
+                    "avg_jitter_ms": self.avg_jitter_ms,
+                    "total_lost_packets": self.total_lost_packets,
+                    "avg_loss_percent": self.avg_loss_percent,
+                    "total_out_of_order": self.total_out_of_order,
+                }
+            )
         return {
             "config": {
                 "protocol": self._config.protocol,

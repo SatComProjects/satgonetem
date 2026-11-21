@@ -109,9 +109,7 @@ def test_route_prefers_custom_path_and_caches_default_stack():
     assert manager.get_statistics()["cached_stacks"] == 1
 
     manager.set_custom_path(1, 3, [1, 3])
-    path, labels = manager.get_sr_route_for_destination(
-        1, 3, default_path=[1, 2, 3]
-    )
+    path, labels = manager.get_sr_route_for_destination(1, 3, default_path=[1, 2, 3])
     assert path == [1, 3]
     assert labels == []
 

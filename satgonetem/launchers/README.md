@@ -34,13 +34,13 @@ gRPC-based backend that delegates all network operations to a running GoNetEm da
 ```python
 from satgonetem.launchers.base_launcher import NetworkLauncher
 
-class MyLauncher(NetworkLauncher):
 
+class MyLauncher(NetworkLauncher):
     def start_containers(self, nodes, workers=64, progress_cb=None):
         for node in nodes:
             # start container, then:
-            node.container = ...       # docker-py Container object
-            node.container_pid = ...   # kernel PID (int)
+            node.container = ...  # docker-py Container object
+            node.container_pid = ...  # kernel PID (int)
 
     def wire_links(self, links, workers=64, progress_cb=None): ...
     def close_project(self, progress_cb=None): ...

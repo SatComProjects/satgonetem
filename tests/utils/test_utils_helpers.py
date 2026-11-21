@@ -150,7 +150,7 @@ def test_distance_3d_km_many_matches_scalar_values() -> None:
     batch = distance_3d_km_many(lat1, lon1, alt1, lat2, lon2, alt2)
     scalar = [
         distance_3d_km(a, b, c, d, e, f)
-        for a, b, c, d, e, f in zip(lat1, lon1, alt1, lat2, lon2, alt2)
+        for a, b, c, d, e, f in zip(lat1, lon1, alt1, lat2, lon2, alt2, strict=False)
     ]
 
     assert isinstance(batch, np.ndarray)

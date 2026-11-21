@@ -1,6 +1,5 @@
 import datetime
 import logging
-from typing import List
 
 import numpy as np
 from sat_com_connectivity.ground_object_to_space_connectivity.base import (
@@ -35,18 +34,18 @@ class LongestConnectionTimeStrategy(GroundToSpaceConnectionStrategy):
     strategy_name = "longest-connection-time-strategy"
 
     def estimate_time_until_disconnection_2(
-            self,
-            ground_object: GroundObject,
-            satellite: Satellite,
-            minimum_elevation: float = 10.0,
-            max_time: float = 3600.0,
+        self,
+        ground_object: GroundObject,
+        satellite: Satellite,
+        minimum_elevation: float = 10.0,
+        max_time: float = 3600.0,
     ) -> float:
-        '''
+        """
         Analytically compute the time until the satellite drops below minimum elevation.
         Uses the movement model's TEME position and velocity
         (get_position_earth_general_inertial / get_velocity_earth_general_inertial)
         and transforms them to ECEF for a closed-form quadratic solution.
-        '''
+        """
 
         # Helpers
         def lla_to_ecef(lat_deg, lon_deg, alt_m):
@@ -55,17 +54,22 @@ class LongestConnectionTimeStrategy(GroundToSpaceConnectionStrategy):
             e2 = 0.00669437999013  # eccentricity squared
             lat = np.radians(lat_deg)
             lon = np.radians(lon_deg)
-            N = a / np.sqrt(1 - e2 * np.sin(lat)**2)
+            N = a / np.sqrt(1 - e2 * np.sin(lat) ** 2)
             x = (N + alt_m) * np.cos(lat) * np.cos(lon)
             y = (N + alt_m) * np.cos(lat) * np.sin(lon)
             z = (N * (1 - e2) + alt_m) * np.sin(lat)
             return np.array([x, y, z])  # meters
-        
+
         def teme_to_ecef(r_teme_km, t_utc: datetime.datetime):
             """Convert TEME position (km) to ECEF (km)."""
-            jd, fr = jday(t_utc.year, t_utc.month, t_utc.day,
-                        t_utc.hour, t_utc.minute, 
-                        t_utc.second + t_utc.microsecond * 1e-6)
+            jd, fr = jday(
+                t_utc.year,
+                t_utc.month,
+                t_utc.day,
+                t_utc.hour,
+                t_utc.minute,
+                t_utc.second + t_utc.microsecond * 1e-6,
+            )
             # GMST calculation (IAU 1982 model)
             JD_utc = jd + fr
             T = (JD_utc - 2451545.0) / 36525.0
@@ -79,33 +83,37 @@ class LongestConnectionTimeStrategy(GroundToSpaceConnectionStrategy):
             theta = np.deg2rad(gmst_deg)  # Earth rotation angle in radians
             # Rotation about Z-axis
             cos_t, sin_t = np.cos(theta), np.sin(theta)
-            r_ecef = np.array([
-                cos_t * r_teme_km[0] + sin_t * r_teme_km[1],
-                -sin_t * r_teme_km[0] + cos_t * r_teme_km[1],
-                r_teme_km[2]
-            ])
+            r_ecef = np.array(
+                [
+                    cos_t * r_teme_km[0] + sin_t * r_teme_km[1],
+                    -sin_t * r_teme_km[0] + cos_t * r_teme_km[1],
+                    r_teme_km[2],
+                ]
+            )
             return r_ecef
 
         # Current UTC time from satellite clock
         t_utc = satellite.movement_model.clock.get_current_time()
-        
+
         # Ground station LLA (lat, lon, alt in meters)
-        gs_lat, gs_lon, gs_alt = ground_object.get_coordinates().to_latitude_longitude_altitude()
-        
+        gs_lat, gs_lon, gs_alt = (
+            ground_object.get_coordinates().to_latitude_longitude_altitude()
+        )
+
         # Satellite TEME position and velocity from SGP4
         r_teme_km = satellite.movement_model.get_position_earth_general_inertial()
         v_teme_km_s = satellite.movement_model.get_velocity_earth_general_inertial()
-        
+
         # Convert satellite position to ECEF (meters)
         r_sat_ecef_km = teme_to_ecef(np.array(r_teme_km), t_utc)
         r_sat_ecef = r_sat_ecef_km * 1000.0  # to meters
-        
+
         # Ground station in ECEF (meters)
         R_gs_ecef = lla_to_ecef(gs_lat, gs_lon, gs_alt)
-        
+
         # Relative position (meters)
         s0 = r_sat_ecef - R_gs_ecef
-        
+
         # Velocity in ECEF (m/s)
         # v_ecef = R @ v_teme - omega_E × r_ecef
         omega_E = 7.2921158553e-5  # Earth rotation rate [rad/s]
@@ -113,29 +121,29 @@ class LongestConnectionTimeStrategy(GroundToSpaceConnectionStrategy):
         v_ecef_km_s[0] += omega_E * r_sat_ecef_km[1]
         v_ecef_km_s[1] -= omega_E * r_sat_ecef_km[0]
         v_ecef = v_ecef_km_s * 1000.0  # to m/s
-        
+
         # Local "up" unit vector at ground station
         R_gs_norm = np.linalg.norm(R_gs_ecef)
         if R_gs_norm < 1e-6:
             # Invalid ground-station position: no connection can be established.
             return 0.0
         up = R_gs_ecef / R_gs_norm
-        
+
         # Quadratic coefficients for elevation-angle constraint
         # (s · up)^2 = |s|^2 * sin^2(eps_min)  at the boundary
         sin_eps = np.sin(np.radians(minimum_elevation))
         sin2_eps = sin_eps**2
-        
+
         s0_dot_v = np.dot(s0, v_ecef)
         s0z = np.dot(s0, up)
         vz = np.dot(v_ecef, up)
         s0_sq = np.dot(s0, s0)
         v_sq = np.dot(v_ecef, v_ecef)
-        
+
         A = vz**2 - v_sq * sin2_eps
         B = 2 * (s0z * vz - s0_dot_v * sin2_eps)
         C = s0z**2 - s0_sq * sin2_eps
-        
+
         # Check if currently visible
         if C <= 0:
             return 0.0  # Already at or below minimum elevation
@@ -148,16 +156,16 @@ class LongestConnectionTimeStrategy(GroundToSpaceConnectionStrategy):
                 return max_time
             dt = -C / B
             return dt if 0 < dt <= max_time else max_time
-        
-        discriminant = B**2 - 4*A*C
+
+        discriminant = B**2 - 4 * A * C
         if discriminant < 0:
             # Parabola never crosses zero → stays above minimum elevation
             return max_time
-        
+
         sqrt_d = np.sqrt(discriminant)
-        dt1 = (-B - sqrt_d) / (2*A)
-        dt2 = (-B + sqrt_d) / (2*A)
-        
+        dt1 = (-B - sqrt_d) / (2 * A)
+        dt2 = (-B + sqrt_d) / (2 * A)
+
         # Pick the smallest positive root as the exit time
         candidates = [dt for dt in [dt1, dt2] if dt > 0]
         if not candidates:
@@ -232,7 +240,7 @@ class LongestConnectionTimeStrategy(GroundToSpaceConnectionStrategy):
     def compute_ground_object_connection_strategy(
         self,
         ground_object: GroundObject,
-        satellites: List[Satellite],
+        satellites: list[Satellite],
     ):
 
         maximum_number_of_links = (
@@ -266,7 +274,6 @@ class LongestConnectionTimeStrategy(GroundToSpaceConnectionStrategy):
         retained_satellite_ids = set()
 
         for visible_satellite in visible_satellites:
-
             if (
                 visible_satellite.satellite
                 in [
@@ -305,6 +312,7 @@ class LongestConnectionTimeStrategy(GroundToSpaceConnectionStrategy):
 
         list_of_satellites = []
         import time as _t
+
         for visible_satellite in visible_satellites:
             if id(visible_satellite.satellite) in retained_satellite_ids:
                 # Already kept above; do not create a duplicate connection.
@@ -323,7 +331,9 @@ class LongestConnectionTimeStrategy(GroundToSpaceConnectionStrategy):
             )
             print(time_until_disconnection, time_until_disconnection_2)
             toc = _t.perf_counter()
-            print(f"First method took {tac - tic:.4f} seconds, second method took {toc - tac:.4f} seconds for satellite {visible_satellite.satellite.satellite_name}")
+            print(
+                f"First method took {tac - tic:.4f} seconds, second method took {toc - tac:.4f} seconds for satellite {visible_satellite.satellite.satellite_name}"
+            )
             if time_until_disconnection is None:
                 # Defensive guard: older/overridden estimators may still return None,
                 # which cannot be compared while sorting. Treat it as the longest
@@ -334,7 +344,7 @@ class LongestConnectionTimeStrategy(GroundToSpaceConnectionStrategy):
         # Sort the visible satellites by time until disconnection
         list_of_satellites.sort(key=lambda x: x[1], reverse=True)
 
-        for visible_satellite, time_until_disconnection in list_of_satellites:
+        for visible_satellite, _time_until_disconnection in list_of_satellites:
             if (
                 len(
                     computed_ground_object_connections_result.new_ground_object_connections
@@ -373,7 +383,7 @@ class WeightedConnection(GroundToSpaceConnectionStrategy):
     def compute_ground_object_connection_strategy(
         self,
         ground_object: GroundObject,
-        satellites: List[Satellite],
+        satellites: list[Satellite],
     ):
 
         maximum_number_of_links = (
@@ -407,7 +417,6 @@ class WeightedConnection(GroundToSpaceConnectionStrategy):
         retained_satellite_ids = set()
 
         for visible_satellite in visible_satellites:
-
             if (
                 visible_satellite.satellite
                 in [
@@ -475,7 +484,7 @@ class WeightedConnection(GroundToSpaceConnectionStrategy):
         weighted_visible_satellites.sort(key=lambda x: x[1], reverse=True)
 
         # Connect the ground object to the best visible satellites based on the weights
-        for visible_satellite, weight in weighted_visible_satellites:
+        for visible_satellite, _weight in weighted_visible_satellites:
             # Check if we have reached the maximum number of links
             if (
                 len(

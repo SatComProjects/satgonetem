@@ -3,7 +3,7 @@ import os
 import subprocess
 import threading
 import time
-from typing import List, Optional
+from typing import Any
 
 from satgonetem.models import GroundStation, Interface, Link, Node, Satellite
 from satgonetem.ports import ProcessRunner, default_runner
@@ -15,6 +15,7 @@ def safe_int(x, default=0):
     if x is None:
         return default
     return int(x)
+
 
 def safe_ip(x):
     return x if x else "0.0.0.0"
@@ -49,6 +50,7 @@ def interface_port(interface: Interface) -> int:
         return int(suffix)
     except ValueError:
         return 0
+
 
 def build_edge_from_link(link: Link) -> dict:
     interface_source: Interface = link.peer_interfaces[0]
@@ -95,8 +97,8 @@ def build_edge_from_link(link: Link) -> dict:
     }
     return edge
 
-class P4Daemon(RoutingDaemon):
 
+class P4Daemon(RoutingDaemon):
     def __init__(
         self,
         topology_manager: RoutingContext,
@@ -105,12 +107,12 @@ class P4Daemon(RoutingDaemon):
         process_runner: ProcessRunner | None = None,
     ):
         super().__init__(topology_manager)
-        self.graph_shared_memory = None
+        self.graph_shared_memory: Any = None
         self.p4_controller_path = p4_controller_path
         self.shared_memory_name = shared_memory_name
         self._process_runner = process_runner or default_runner
         # Process handle for the controller
-        self.p4_controller_process: Optional[subprocess.Popen] = None
+        self.p4_controller_process: subprocess.Popen | None = None
         # Logger for controller output and events
         self.logger = logging.getLogger(__name__)
 
@@ -137,7 +139,7 @@ class P4Daemon(RoutingDaemon):
         self.graph_shared_memory = GraphSharedMemory(
             name=self.shared_memory_name,
             max_edges=len(self.topology.links),
-            create=True
+            create=True,
         )
 
         started = self.start_p4_controller()
@@ -162,11 +164,15 @@ class P4Daemon(RoutingDaemon):
             return False
 
         if not os.access(script_path, os.X_OK):
-            self.logger.warning(f"Controller script not executable, attempting to set executable: {script_path}")
+            self.logger.warning(
+                f"Controller script not executable, attempting to set executable: {script_path}"
+            )
             try:
                 os.chmod(script_path, os.stat(script_path).st_mode | 0o111)
             except Exception as e:
-                self.logger.exception(f"Failed to make controller script executable: {e}")
+                self.logger.exception(
+                    f"Failed to make controller script executable: {e}"
+                )
                 return False
 
         try:
@@ -189,22 +195,28 @@ class P4Daemon(RoutingDaemon):
         # Background threads to stream stdout/stderr into logger
         def _stream_reader(stream, log_fn):
             try:
-                for line in iter(stream.readline, ''):
+                for line in iter(stream.readline, ""):
                     if not line:
                         break
                     log_fn(line.rstrip())
             except Exception:
                 pass
 
-        t_out = threading.Thread(target=_stream_reader, args=(proc.stdout, self.logger.info), daemon=True)
-        t_err = threading.Thread(target=_stream_reader, args=(proc.stderr, self.logger.error), daemon=True)
+        t_out = threading.Thread(
+            target=_stream_reader, args=(proc.stdout, self.logger.info), daemon=True
+        )
+        t_err = threading.Thread(
+            target=_stream_reader, args=(proc.stderr, self.logger.error), daemon=True
+        )
         t_out.start()
         t_err.start()
 
         # Give the process a short moment to fail fast if something is wrong
         time.sleep(0.5)
         if proc.poll() is not None:
-            self.logger.error(f"P4 controller process exited immediately with code {proc.returncode}")
+            self.logger.error(
+                f"P4 controller process exited immediately with code {proc.returncode}"
+            )
             # Read any remaining stderr if available
             try:
                 err = proc.stderr.read() if proc.stderr is not None else None
@@ -218,18 +230,25 @@ class P4Daemon(RoutingDaemon):
         return True
 
     def is_p4_controller_running(self) -> bool:
-        return self.p4_controller_process is not None and self.p4_controller_process.poll() is None
+        return (
+            self.p4_controller_process is not None
+            and self.p4_controller_process.poll() is None
+        )
 
     def stop_p4_controller(self, timeout: int = 5) -> None:
         if self.p4_controller_process is None:
             return
         try:
-            self.logger.info(f"Stopping P4 controller (pid={self.p4_controller_process.pid})")
+            self.logger.info(
+                f"Stopping P4 controller (pid={self.p4_controller_process.pid})"
+            )
             self.p4_controller_process.terminate()
             try:
                 self.p4_controller_process.wait(timeout=timeout)
             except subprocess.TimeoutExpired:
-                self.logger.warning("P4 controller did not terminate gracefully, killing")
+                self.logger.warning(
+                    "P4 controller did not terminate gracefully, killing"
+                )
                 self.p4_controller_process.kill()
                 self.p4_controller_process.wait(timeout=timeout)
         except Exception:
@@ -237,7 +256,7 @@ class P4Daemon(RoutingDaemon):
         finally:
             self.p4_controller_process = None
 
-    def update(self, new_links: "List[Link]", max_workers: int = 4) -> None:
+    def update(self, new_links: "list[Link]", max_workers: int = 4) -> None:
         edges = []
 
         for link in self.topology.links.values():
@@ -246,7 +265,6 @@ class P4Daemon(RoutingDaemon):
 
         self.graph_shared_memory.write_edges(edges)
 
-
-    def remove(self, node: "Optional[Node]" = None, max_workers: int = 4) -> None:
+    def remove(self, node: "Node | None" = None, max_workers: int = 4) -> None:
         self.stop_p4_controller()
         self._release_graph_shared_memory()

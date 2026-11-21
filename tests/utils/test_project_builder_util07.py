@@ -37,14 +37,12 @@ def _teme_state(
     )
 
     r = tuple(
-        radius_km
-        * (math.cos(arg_lat) * x_hat[i] + math.sin(arg_lat) * y_hat[i])
+        radius_km * (math.cos(arg_lat) * x_hat[i] + math.sin(arg_lat) * y_hat[i])
         for i in range(3)
     )
     speed_km_s = math.sqrt(398600.4418 / radius_km)
     v = tuple(
-        speed_km_s
-        * (-math.sin(arg_lat) * x_hat[i] + math.cos(arg_lat) * y_hat[i])
+        speed_km_s * (-math.sin(arg_lat) * x_hat[i] + math.cos(arg_lat) * y_hat[i])
         for i in range(3)
     )
     return r, v

@@ -13,4 +13,4 @@ from satgonetem.cli.node_terminal_bridge import (
 __all__ = ["_find_python", "_log_error", "main"]
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    main()

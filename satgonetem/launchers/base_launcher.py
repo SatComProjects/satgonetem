@@ -12,7 +12,7 @@ Subclass and implement the abstract methods to plug in a different backend
 """
 
 from abc import ABC, abstractmethod
-from typing import Callable, Optional
+from collections.abc import Callable
 
 
 class NetworkLauncher(ABC):
@@ -43,9 +43,9 @@ class NetworkLauncher(ABC):
         self,
         nodes: list,
         workers: int = 64,
-        progress_cb: Optional[Callable[[str, int, int], None]] = None,
+        progress_cb: Callable[[str, int, int], None] | None = None,
         controller: bool = False,
-        links: Optional[list] = None,
+        links: list | None = None,
     ) -> tuple[float, float]:
         """Start (or provision) all node containers / processes.
 
@@ -58,14 +58,14 @@ class NetworkLauncher(ABC):
         self,
         links: list,
         workers: int = 64,
-        progress_cb: Optional[Callable[[str, int, int], None]] = None,
+        progress_cb: Callable[[str, int, int], None] | None = None,
     ) -> None:
         """Create all virtual links and apply initial qdiscs."""
 
     @abstractmethod
     def close_project(
         self,
-        progress_cb: Optional[Callable[[str, int, int], None]] = None,
+        progress_cb: Callable[[str, int, int], None] | None = None,
     ) -> None:
         """Tear down all containers / processes for this project."""
 

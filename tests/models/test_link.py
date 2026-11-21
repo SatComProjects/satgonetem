@@ -405,9 +405,7 @@ class TestLinkCapacityRefresh:
             use_budget=True,
         )
 
-    def test_refresh_marks_to_update_when_capacity_changes(
-        self, sat_node, gnd_node
-    ):
+    def test_refresh_marks_to_update_when_capacity_changes(self, sat_node, gnd_node):
         link = self._make_budget_link(sat_node, gnd_node)
         link.to_update = False
 
@@ -522,20 +520,14 @@ class TestLinkBudgetFallback:
         )
 
     def test_both_directions_falling_back_use_default(self, sat_node, gnd_node):
-        with patch.object(
-            LinkBudgetService, "compute_one_way", side_effect=[0, 0]
-        ):
+        with patch.object(LinkBudgetService, "compute_one_way", side_effect=[0, 0]):
             link = self._make_link(sat_node, gnd_node)
 
         assert link.peer1_capacity == 777
         assert link.peer2_capacity == 777
 
-    def test_single_failed_direction_falls_back_independently(
-        self, sat_node, gnd_node
-    ):
-        with patch.object(
-            LinkBudgetService, "compute_one_way", side_effect=[0, 4321]
-        ):
+    def test_single_failed_direction_falls_back_independently(self, sat_node, gnd_node):
+        with patch.object(LinkBudgetService, "compute_one_way", side_effect=[0, 4321]):
             link = self._make_link(sat_node, gnd_node)
 
         assert link.peer1_capacity == 777

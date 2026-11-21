@@ -6,8 +6,8 @@ containers or a topology manager.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Iterable, Optional
 
 
 @dataclass(frozen=True)
@@ -53,7 +53,7 @@ def format_route_operation(operation: RouteOperation) -> str:
 def emit_route_operations(
     prev_tbl: Iterable,
     curr_tbl: Iterable,
-    live_devs: Optional[set[str]] = None,
+    live_devs: set[str] | None = None,
 ) -> list[RouteOperation]:
     """Diff previous and current routing tables into minimal operations."""
     if prev_tbl is curr_tbl:
@@ -61,9 +61,7 @@ def emit_route_operations(
 
     current = {entry_key(entry): entry for entry in curr_tbl}
     previous = {entry_key(entry): entry for entry in prev_tbl}
-    current_prefixes = {
-        (entry.destination, entry.get_prefix()) for entry in curr_tbl
-    }
+    current_prefixes = {(entry.destination, entry.get_prefix()) for entry in curr_tbl}
     removed = [
         route_operation("del", entry)
         for key, entry in previous.items()
@@ -82,7 +80,7 @@ def emit_route_operations(
 def emit_batch_commands(
     prev_tbl: Iterable,
     curr_tbl: Iterable,
-    live_devs: Optional[set[str]] = None,
+    live_devs: set[str] | None = None,
 ) -> list[str]:
     """Return legacy ``ip route`` command strings for a table diff."""
     return [

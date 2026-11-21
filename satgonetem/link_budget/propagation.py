@@ -5,7 +5,6 @@ Install it with ``pip install satgonetem[extra]``.
 """
 
 import math
-from typing import Tuple
 
 from satgonetem.link_budget.constants import SPEED_OF_LIGHT
 from satgonetem.link_budget.conversions import linear_to_db
@@ -37,7 +36,7 @@ def calculate_atmospheric_attenuation_dB(
     elevation_angle: float,
     unavailability: float,
     antenna_diameter: float,
-) -> Tuple[float, float, float, float, float]:
+) -> tuple[float, float, float, float, float]:
     """Calculate atmospheric attenuation along a slant path using ITU-R models.
 
     This function wraps :func:`itur.atmospheric_attenuation_slant_path` and

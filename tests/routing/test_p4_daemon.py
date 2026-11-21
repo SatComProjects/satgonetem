@@ -132,9 +132,7 @@ def test_safe_ip_replaces_missing_values(value, expected):
     assert safe_ip(value) == expected
 
 
-def test_start_returns_false_when_controller_script_is_missing(
-    daemon, monkeypatch
-):
+def test_start_returns_false_when_controller_script_is_missing(daemon, monkeypatch):
     _patch_os(monkeypatch, exists=False)
     popen = _patch_popen(monkeypatch)
     _patch_sleep(monkeypatch)
@@ -257,9 +255,7 @@ def test_init_returns_false_when_controller_fails(daemon, monkeypatch):
 
     assert daemon.init() is False
 
-    graph_cls.assert_called_once_with(
-        name="satgonetem_graph", max_edges=2, create=True
-    )
+    graph_cls.assert_called_once_with(name="satgonetem_graph", max_edges=2, create=True)
     graph.close.assert_called_once_with()
     graph.unlink.assert_called_once_with()
     assert daemon.graph_shared_memory is None
@@ -272,9 +268,7 @@ def test_init_returns_true_when_controller_starts(daemon, monkeypatch):
     monkeypatch.setattr(daemon, "start_p4_controller", lambda timeout=10: True)
 
     assert daemon.init() is True
-    graph_cls.assert_called_once_with(
-        name="satgonetem_graph", max_edges=1, create=True
-    )
+    graph_cls.assert_called_once_with(name="satgonetem_graph", max_edges=1, create=True)
 
 
 def test_init_reinitializes_owned_shared_memory(daemon, monkeypatch):

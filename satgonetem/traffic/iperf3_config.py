@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import shlex
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 import matplotlib
 
@@ -59,18 +59,18 @@ class Iperf3Config:
     interval: float = 1.0
     port: int = 5201
     congestion_control: str = "bbr"
-    window_size: Optional[str] = None
-    mss: Optional[int] = None
+    window_size: str | None = None
+    mss: int | None = None
     no_delay: bool = False
-    length: Optional[str] = None
-    pacing_timer: Optional[int] = None
+    length: str | None = None
+    pacing_timer: int | None = None
     reverse: bool = False
     bidir: bool = False
-    tos: Optional[int] = None
-    ttl: Optional[int] = None
-    num_bytes: Optional[int] = None
+    tos: int | None = None
+    ttl: int | None = None
+    num_bytes: int | None = None
     omit: int = 0
-    affinity: Optional[str] = None
+    affinity: str | None = None
 
     def build_client_command(
         self,
@@ -93,9 +93,7 @@ class Iperf3Config:
             A shell command string ready for Node.execute_command.
         """
         if self.bandwidth_mbps < 0:
-            raise ValueError(
-                f"bandwidth_mbps must be >= 0, got {self.bandwidth_mbps}"
-            )
+            raise ValueError(f"bandwidth_mbps must be >= 0, got {self.bandwidth_mbps}")
 
         parts = [
             "iperf3",

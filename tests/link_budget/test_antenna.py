@@ -8,7 +8,9 @@ from satgonetem.link_budget.antenna import Antenna
 from satgonetem.link_budget.constants import SPEED_OF_LIGHT
 
 
-def _expected_gain_db(diameter: float, frequency_ghz: float, efficiency: float) -> float:
+def _expected_gain_db(
+    diameter: float, frequency_ghz: float, efficiency: float
+) -> float:
     """Compute expected parabolic antenna gain analytically."""
     wavelength = SPEED_OF_LIGHT / (frequency_ghz * 1e9)
     gain_linear = (math.pi * diameter / wavelength) ** 2 * efficiency
@@ -35,7 +37,9 @@ class TestAntennaCalculateGainDb:
         ant2 = Antenna(diameter=2.0, efficiency=0.6)
         gain1 = ant1.calculate_gain_db(10.0)
         gain2 = ant2.calculate_gain_db(10.0)
-        assert gain2 - gain1 == pytest.approx(6.0 * math.log10(4.0) / math.log10(4.0), abs=0.05)
+        assert gain2 - gain1 == pytest.approx(
+            6.0 * math.log10(4.0) / math.log10(4.0), abs=0.05
+        )
 
     def test_gain_scales_with_frequency_squared(self):
         """Doubling the frequency increases gain by ~6 dB."""
@@ -60,7 +64,9 @@ class TestAntennaCalculateGainDb:
 class TestAntennaGetEirpDb:
     def test_eirp_from_components(self):
         """EIRP = sspa_output_power + gain - losses."""
-        ant = Antenna(diameter=1.0, efficiency=1.0, sspa_output_power_db=10.0, losses_db=2.0)
+        ant = Antenna(
+            diameter=1.0, efficiency=1.0, sspa_output_power_db=10.0, losses_db=2.0
+        )
         expected = 10.0 + ant.calculate_gain_db(12.0) - 2.0
         assert ant.get_eirp_db(12.0) == pytest.approx(expected, abs=0.01)
 

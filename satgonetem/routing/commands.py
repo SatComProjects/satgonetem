@@ -68,7 +68,9 @@ def enable_mpls_commands(node: Any, *, load_modules: bool = True) -> list[str]:
 
 def enable_mpls(node: Any, *, load_modules: bool = True) -> None:
     """Enable kernel MPLS forwarding on a node."""
-    node.execute_command("; ".join(enable_mpls_commands(node, load_modules=load_modules)))
+    node.execute_command(
+        "; ".join(enable_mpls_commands(node, load_modules=load_modules))
+    )
 
 
 def format_net_address(loopback_ip: str) -> str:

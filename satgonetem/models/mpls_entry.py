@@ -7,7 +7,7 @@ This module provides classes for SR-MPLS (Segment Routing MPLS) entries.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, List
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from satgonetem.models.interface import Interface
@@ -118,7 +118,7 @@ class SRForwardEntry:
 
     target_sid: int
     next_hop: str
-    interface: "Interface"
+    interface: Interface
     target_name: str = ""
 
     def to_iproute2_command(self) -> str:
@@ -166,9 +166,9 @@ class SRLabelStackEntry:
     """
 
     destination: str
-    label_stack: List[int]
+    label_stack: list[int]
     next_hop: str
-    interface: "Interface"
+    interface: Interface
     fec_prefix: int = 32
 
     def to_iproute2_command(self) -> str:

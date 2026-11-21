@@ -57,9 +57,7 @@ def test_connect_to_delegates_to_namespace():
 
     source.connect_to(target, "eth0", "eth1")
 
-    source.network_namespace.create_veth.assert_called_once_with(
-        10, 11, "eth0", "eth1"
-    )
+    source.network_namespace.create_veth.assert_called_once_with(10, 11, "eth0", "eth1")
 
 
 def test_docker_container_runtime_uses_container_attrs_and_exec():

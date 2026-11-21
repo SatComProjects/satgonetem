@@ -242,7 +242,7 @@ class HILManager:
         host_iface = f"hil{gnd_id}"
 
         libc = ctypes.CDLL("libc.so.6", use_errno=True)
-        saved_ns = open("/proc/self/ns/net", "rb")
+        saved_ns = open("/proc/self/ns/net", "rb")  # noqa: SIM115 - fd must stay open across namespaces
         try:
             with open(f"/proc/{sat_pid}/ns/net", "rb") as ns_fd:
                 if libc.setns(ns_fd.fileno(), CLONE_NEWNET) != 0:
@@ -338,7 +338,9 @@ class HILManager:
             logging.error("HIL: failed to create bridge for %s: %s", gnd_name, exc)
             return False
 
-    def _apply_qos(self, sat_name: str, sat_pid: int, gnd_id: int, delay_ms: int, rate_kbps: int) -> None:
+    def _apply_qos(
+        self, sat_name: str, sat_pid: int, gnd_id: int, delay_ms: int, rate_kbps: int
+    ) -> None:
         """
         Apply netem+TBF qdiscs to the SAT-side interface of a HIL link.
 
@@ -357,18 +359,13 @@ class HILManager:
         delay_ms = max(delay_ms, 1)
         rate_mbit = max(rate_kbps / 1000, 0.001)
         burst_bytes = max(rate_kbps * delay_ms // 8, 1500)
-        netem_limit = (
-            f" limit {self._netem_limit}" if self._netem_limit > 0 else ""
-        )
+        netem_limit = f" limit {self._netem_limit}" if self._netem_limit > 0 else ""
 
         if self._txqueuelen > 0:
             try:
                 _run_ip_batch(
                     sat_pid,
-                    [
-                        f"link set dev {sat_iface}"
-                        f" txqueuelen {self._txqueuelen}"
-                    ],
+                    [f"link set dev {sat_iface} txqueuelen {self._txqueuelen}"],
                     runner=self._command_runner,
                 )
             except RuntimeError as exc:
@@ -391,7 +388,9 @@ class HILManager:
                 runner=self._command_runner,
             )
         except RuntimeError as exc:
-            logging.warning("HIL: qdisc setup failed on %s in %s: %s", sat_iface, sat_name, exc)
+            logging.warning(
+                "HIL: qdisc setup failed on %s in %s: %s", sat_iface, sat_name, exc
+            )
 
     def _teardown_bridge(self, gnd_name: str) -> None:
         """
@@ -434,7 +433,14 @@ class HILManager:
         """
         sat_iface = f"eth{gnd_id}"
         r = self._command_runner.run(
-            ["nsenter", f"--net=/proc/{sat_pid}/ns/net", "ip", "link", "delete", sat_iface],
+            [
+                "nsenter",
+                f"--net=/proc/{sat_pid}/ns/net",
+                "ip",
+                "link",
+                "delete",
+                sat_iface,
+            ],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -540,9 +546,7 @@ class HILManager:
         rate_kbps = self._link_capacity_kbps(link)
         rate_mbit = max(rate_kbps / 1000, 0.001)
         burst_bytes = max(rate_kbps * delay_ms // 8, 1500)
-        netem_limit = (
-            f" limit {self._netem_limit}" if self._netem_limit > 0 else ""
-        )
+        netem_limit = f" limit {self._netem_limit}" if self._netem_limit > 0 else ""
 
         try:
             _run_tc_batch(

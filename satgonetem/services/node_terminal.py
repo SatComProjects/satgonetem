@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import queue
 import threading
-from typing import TYPE_CHECKING, Any, Tuple
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     pass
@@ -49,7 +49,7 @@ class NodeTerminal:
         finally:
             self._response_queue.put(None)
 
-    def __enter__(self) -> "NodeTerminal":
+    def __enter__(self) -> NodeTerminal:
         self._stream = self._client.NodeExec(self._request_generator())
         self._recv_thread = threading.Thread(target=self._recv_loop, daemon=True)
         self._recv_thread.start()
@@ -106,7 +106,7 @@ class NodeTerminal:
         if self._recv_thread is not None:
             self._recv_thread.join(timeout=2)
 
-    def read(self, timeout: float | None = None) -> Tuple[str, bytes] | None:
+    def read(self, timeout: float | None = None) -> tuple[str, bytes] | None:
         """Read the next response from the terminal.
 
         Args:

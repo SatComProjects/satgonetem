@@ -116,9 +116,7 @@ class LinkBudgetService:
             return 0
 
         # --- Free-space loss ---
-        fsl_db = calculate_free_space_loss_db(
-            inputs.frequency_ghz, inputs.distance_km
-        )
+        fsl_db = calculate_free_space_loss_db(inputs.frequency_ghz, inputs.distance_km)
 
         # --- Atmospheric attenuation ---
         try:

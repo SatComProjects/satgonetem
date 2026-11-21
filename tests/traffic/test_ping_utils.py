@@ -248,9 +248,7 @@ class TestRunPing:
             run_ping(src, dst, PingConfig(count=2))
 
 
-_FULL_LOSS_OUTPUT = (
-    "2 packets transmitted, 0 received, 100% packet loss, time 1001ms\n"
-)
+_FULL_LOSS_OUTPUT = "2 packets transmitted, 0 received, 100% packet loss, time 1001ms\n"
 
 
 def test_flow_accepts_exit_code_one_and_reports_full_loss():
