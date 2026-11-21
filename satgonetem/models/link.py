@@ -7,6 +7,7 @@ from satgonetem.link_budget.config import LinkBudgetConfig
 from satgonetem.link_budget.geometry import get_elevation_angle
 from satgonetem.link_budget.service import LinkBudgetInputs, LinkBudgetService
 from satgonetem.link_budget.strategies import (
+    CapacityStrategy,
     ModCodCapacityStrategy,
     ShannonCapacityStrategy,
 )
@@ -35,6 +36,8 @@ class Link:
         default_capacity_kbps: int = 1000,
         use_budget: bool = False,
         link_budget_config: Optional[LinkBudgetConfig] = None,
+        downlink_capacity_strategy: CapacityStrategy | None = None,
+        uplink_capacity_strategy: CapacityStrategy | None = None,
     ):
         self.source: Node = source
         self.target: Node = target
@@ -44,6 +47,12 @@ class Link:
         self.direction: str = direction
         self.use_budget: bool = use_budget
         self.link_budget_config: Optional[LinkBudgetConfig] = link_budget_config
+        self.downlink_capacity_strategy: CapacityStrategy = (
+            downlink_capacity_strategy or ModCodCapacityStrategy()
+        )
+        self.uplink_capacity_strategy: CapacityStrategy = (
+            uplink_capacity_strategy or ShannonCapacityStrategy()
+        )
 
         self.default_capacity_kbps = default_capacity_kbps
         self.peer1_capacity: int = 0
@@ -188,7 +197,7 @@ class Link:
             rx_tsys_k=rx_tsys,
             unavailability_percent=unav,
         )
-        dl_service = LinkBudgetService(capacity_strategy=ModCodCapacityStrategy())
+        dl_service = LinkBudgetService(capacity_strategy=self.downlink_capacity_strategy)
         dl_capacity = dl_service.compute_one_way(dl_inputs)
         if dl_capacity > 0:
             self.peer1_capacity = dl_capacity
@@ -215,7 +224,7 @@ class Link:
             rx_tsys_k=rx_tsys,
             unavailability_percent=unav,
         )
-        ul_service = LinkBudgetService(capacity_strategy=ShannonCapacityStrategy())
+        ul_service = LinkBudgetService(capacity_strategy=self.uplink_capacity_strategy)
         ul_capacity = ul_service.compute_one_way(ul_inputs)
         if ul_capacity > 0:
             self.peer2_capacity = ul_capacity

@@ -15,23 +15,23 @@ are handled by the mixin classes in satgonetem.models.mixins.
 from __future__ import annotations
 
 import base64
-import ctypes
 import ipaddress
 import logging
 import shlex
 from typing import Any
 
-import docker
-import docker.models
-import docker.models.containers
-
 # Ensure the protobuf dependency for netem_pb2 is loaded first.
 from google.protobuf import empty_pb2  # noqa: F401
-from pyroute2 import IPRoute
 
 from satgonetem.link_budget.antenna import Antenna
 from satgonetem.models.interface import Interface
 from satgonetem.models.routing_entry import RoutingEntry
+from satgonetem.ports import (
+    ContainerRuntime,
+    DockerContainerRuntime,
+    LinuxNetworkNamespace,
+    NetworkNamespace,
+)
 from satgonetem.utils.utils import unique_pair_id
 
 
@@ -58,10 +58,12 @@ class Node:
         # We create a loopback interface for the node
         self.loopback = Interface("lo", iface_type="lo")
 
-        # New faster way to handle containers
-        self.container: docker.models.containers.Container | None = None
+        # Container/runtime boundaries; injectable for tests.
+        self.container: Any = None
         self.container_pid: int | None = None
         self.image = ""
+        self.container_runtime: ContainerRuntime = DockerContainerRuntime()
+        self.network_namespace: NetworkNamespace = LinuxNetworkNamespace()
 
         # gRPC client for GoNetem NodeRun (set by launcher after topology start)
         self.grpc_client: Any = None
@@ -111,10 +113,9 @@ class Node:
 
         cmd = self._prepare_command(command)
 
-        exit_code, output = self.container.exec_run(
-            cmd=cmd,
-            detach=detach,
-        )  # type: ignore
+        exit_code, output = self.container_runtime.exec(
+            self.container, cmd, detach=detach
+        )
         if detach:
             return ""
         decoded = output.decode("utf-8").strip() if output else ""
@@ -125,121 +126,54 @@ class Node:
             )
         return decoded
     
+    def _require_container_pid(self, node: "Node") -> int:
+        """Return *node*'s container PID, resolving and caching it if needed."""
+        if node.container_pid is not None:
+            return node.container_pid
+        if node.container is not None:
+            pid = self.container_runtime.pid(node.container)
+            if pid is not None:
+                node.container_pid = pid
+                return pid
+        raise RuntimeError(
+            f"Cannot create interface on {node.name}: container PID is not available"
+        )
+
     def create_dummy_interface(self, name: str) -> None:
-        """
-        Create a dummy interface inside the node's container namespace.
-        """
-        pid = self.container_pid
-        if pid is None:
-            if self.container is not None:
-                container_pid = self.container.attrs.get("State", {}).get("Pid")
-                if container_pid:
-                    pid = int(container_pid)
-                    self.container_pid = pid
-            if pid is None:
-                raise RuntimeError(
-                    f"Cannot create dummy interface on {self.name}: container PID is not available"
-                )
-
-        libc = ctypes.CDLL("libc.so.6", use_errno=True)
-        saved_ns = open("/proc/self/ns/net", "rb")
-
+        """Create a dummy interface inside the node's container namespace."""
+        pid = self._require_container_pid(self)
         try:
-            with open(f"/proc/{pid}/ns/net", "rb") as ns_fd:
-                CLONE_NEWNET = 0x40000000
-                if libc.setns(ns_fd.fileno(), CLONE_NEWNET) != 0:
-                    errno = ctypes.get_errno()
-                    raise OSError(errno, f"setns failed for PID {pid}")
-
-                with IPRoute() as ipr:
-                    ipr.link("add", ifname=name, kind="dummy")
-                    idx = ipr.link_lookup(ifname=name)[0]
-                    ipr.link("set", index=idx, state="up")
-
+            self.network_namespace.create_dummy_interface(pid, name)
         except Exception as exc:
             logging.error(
-                "Failed to create dummy interface %s on %s: %s", name, self.name, exc
+                "Failed to create dummy interface %s on %s: %s",
+                name,
+                self.name,
+                exc,
             )
             raise
 
-        finally:
-            libc.setns(saved_ns.fileno(), CLONE_NEWNET)
-            
-    def connect_to(self,
-                   peer_node: "Node",
-                   peer1_name: str,
-                   peer2_name: str,
-                   ) -> None:
-        
-        # Find src_pid (self) and dst_pid (peer)
-        src_pid = self.container_pid
-        if src_pid is None:
-            if self.container is not None:
-                pid = self.container.attrs.get("State", {}).get("Pid")
-                if pid:
-                    src_pid = int(pid)
-                    self.container_pid = src_pid
-            if src_pid is None:
-                raise RuntimeError(
-                    f"Cannot create interface on {self.name}: container PID is not available"
-                )
-
-        dst_pid = peer_node.container_pid
-        if dst_pid is None:
-            if peer_node.container is not None:
-                pid = peer_node.container.attrs.get("State", {}).get("Pid")
-                if pid:
-                    dst_pid = int(pid)
-                    peer_node.container_pid = dst_pid
-            if dst_pid is None:
-                raise RuntimeError(
-                    f"Cannot create interface on {peer_node.name}: container PID is not available"
-                )
-
-        # We load ctype
-        libc = ctypes.CDLL("libc.so.6", use_errno=True)
-        # We save current namespace
-        saved_ns = open("/proc/self/ns/net", "rb")
-        
+    def connect_to(
+        self,
+        peer_node: "Node",
+        peer1_name: str,
+        peer2_name: str,
+    ) -> None:
+        """Create a veth pair between this node and *peer_node*."""
+        source_pid = self._require_container_pid(self)
+        destination_pid = self._require_container_pid(peer_node)
         try:
-            with open(f"/proc/{src_pid}/ns/net", "rb") as ns_fd:
-                CLONE_NEWNET = 0x40000000 # Linux namespace flag for a network namespace from sched.h
-                if libc.setns(ns_fd.fileno(), CLONE_NEWNET) != 0:
-                    errno = ctypes.get_errno()
-                    raise OSError(errno, f"setns failed for PID {src_pid}")
-                
-                with IPRoute() as ipr:
-                    ipr.link(
-                        "add",
-                        ifname=peer1_name,
-                        kind="veth",
-                        peer={
-                                "ifname": peer2_name,
-                                "net_ns_fd": f"/proc/{dst_pid}/ns/net"
-                            },
-                    )
-                    idx1 = ipr.link_lookup(ifname=peer1_name)[0]
-                    ipr.link("set", index=idx1, state="up")
-            
-            with open(f"/proc/{dst_pid}/ns/net", "rb") as ns_fd:
-                if libc.setns(ns_fd.fileno(), CLONE_NEWNET) != 0:
-                    errno = ctypes.get_errno()
-                    raise OSError(errno, f"setns failed for PID {dst_pid}")
-                
-                with IPRoute() as ipr:
-                    idx2 = ipr.link_lookup(ifname=peer2_name)[0]
-                    ipr.link("set", index=idx2, state="up")
-        
+            self.network_namespace.create_veth(
+                source_pid, destination_pid, peer1_name, peer2_name
+            )
         except Exception as exc:
             logging.error(
-                "Failed to create veth %s<->%s: %s", peer1_name, peer2_name, exc
+                "Failed to create veth %s<->%s: %s",
+                peer1_name,
+                peer2_name,
+                exc,
             )
             raise
-            
-        finally:
-            libc.setns(saved_ns.fileno(), CLONE_NEWNET)  # Return to original namespace
-
-
 
     def execute_command(
         self,

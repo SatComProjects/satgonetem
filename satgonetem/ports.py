@@ -83,10 +83,15 @@ class GoNetEmGrpcClientFactory:
 
 
 class ContainerRuntime(Protocol):
-    """Look up containers by name."""
+    """Container lookup and command execution."""
 
-    def get(self, name: str) -> Any:
-        ...
+    def get(self, name: str) -> Any: ...
+
+    def pid(self, container: Any) -> int | None: ...
+
+    def exec(
+        self, container: Any, command: list[str], detach: bool = False
+    ) -> tuple[int, Any]: ...
 
 
 class DockerContainerRuntime:
@@ -105,6 +110,97 @@ class DockerContainerRuntime:
     def get(self, name: str) -> Any:
         return self._get_client().containers.get(name)
 
+    def pid(self, container: Any) -> int | None:
+        pid = container.attrs.get("State", {}).get("Pid")
+        return int(pid) if pid else None
+
+    def exec(
+        self, container: Any, command: list[str], detach: bool = False
+    ) -> tuple[int, Any]:
+        return container.exec_run(cmd=command, detach=detach)
+
+
+class NetworkNamespace(Protocol):
+    """Create interfaces inside Linux network namespaces."""
+
+    def create_dummy_interface(self, pid: int, name: str) -> None: ...
+
+    def create_veth(
+        self,
+        source_pid: int,
+        destination_pid: int,
+        source_name: str,
+        destination_name: str,
+    ) -> None: ...
+
+
+class LinuxNetworkNamespace:
+    """Default namespace adapter using setns and pyroute2."""
+
+    CLONE_NEWNET = 0x40000000
+
+    @staticmethod
+    def _setns(libc: Any, ns_fd: Any, pid: int) -> None:
+        import ctypes
+
+        if libc.setns(ns_fd.fileno(), LinuxNetworkNamespace.CLONE_NEWNET) != 0:
+            errno = ctypes.get_errno()
+            raise OSError(errno, f"setns failed for PID {pid}")
+
+    def create_dummy_interface(self, pid: int, name: str) -> None:
+        import ctypes
+
+        from pyroute2 import IPRoute
+
+        libc = ctypes.CDLL("libc.so.6", use_errno=True)
+        with open("/proc/self/ns/net", "rb") as saved_ns:
+            try:
+                with open(f"/proc/{pid}/ns/net", "rb") as ns_fd:
+                    self._setns(libc, ns_fd, pid)
+                    with IPRoute() as ipr:
+                        ipr.link("add", ifname=name, kind="dummy")
+                        idx = ipr.link_lookup(ifname=name)[0]
+                        ipr.link("set", index=idx, state="up")
+            finally:
+                libc.setns(saved_ns.fileno(), self.CLONE_NEWNET)
+
+    def create_veth(
+        self,
+        source_pid: int,
+        destination_pid: int,
+        source_name: str,
+        destination_name: str,
+    ) -> None:
+        import ctypes
+
+        from pyroute2 import IPRoute
+
+        libc = ctypes.CDLL("libc.so.6", use_errno=True)
+        with open("/proc/self/ns/net", "rb") as saved_ns:
+            try:
+                with open(f"/proc/{source_pid}/ns/net", "rb") as ns_fd:
+                    self._setns(libc, ns_fd, source_pid)
+                    with IPRoute() as ipr:
+                        ipr.link(
+                            "add",
+                            ifname=source_name,
+                            kind="veth",
+                            peer={
+                                "ifname": destination_name,
+                                "net_ns_fd": f"/proc/{destination_pid}/ns/net",
+                            },
+                        )
+                        idx = ipr.link_lookup(ifname=source_name)[0]
+                        ipr.link("set", index=idx, state="up")
+
+                with open(f"/proc/{destination_pid}/ns/net", "rb") as ns_fd:
+                    self._setns(libc, ns_fd, destination_pid)
+                    with IPRoute() as ipr:
+                        idx = ipr.link_lookup(ifname=destination_name)[0]
+                        ipr.link("set", index=idx, state="up")
+            finally:
+                libc.setns(saved_ns.fileno(), self.CLONE_NEWNET)
+
 
 __all__ = [
     "CommandRunner",
@@ -113,6 +209,8 @@ __all__ = [
     "GoNetEmGrpcClientFactory",
     "GrpcClientFactory",
     "GrpcConnection",
+    "LinuxNetworkNamespace",
+    "NetworkNamespace",
     "ProcessRunner",
     "SubprocessRunner",
     "default_runner",

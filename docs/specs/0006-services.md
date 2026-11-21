@@ -1,6 +1,6 @@
 # 0006 — Services and TopologyManager
 
-- Status: Partially implemented
+- Status: Implemented
 - Date: 2026-11-21
 - Depends on: 0001, 0002, 0003
 - Supersedes: —
@@ -88,7 +88,8 @@ uv run --frozen --extra dev pytest -q --cov=satgonetem/services --cov-fail-under
 - Added diagnostics tcpdump, monitor, command-execution, and terminal tests.
 - Coverage: controller 77%, diagnostics 78%, traffic_testing 100%; services
   total 75%.
-- Sub-phase 5b (`Node` container/namespace ports and `Link` capacity-strategy
-  injection) is **not implemented** and remains the next services task.
+- Sub-phase 5b is implemented: `Node` delegates container exec/PID lookup and
+  namespace/veth operations to `ContainerRuntime`/`NetworkNamespace`; `Link`
+  accepts injected downlink/uplink `CapacityStrategy` objects.
 - Known behavior questions (ignored controller interface pattern in old code,
   failed-operation stats) remain separate behavior specs.
