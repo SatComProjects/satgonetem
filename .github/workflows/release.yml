@@ -46,7 +46,7 @@ jobs:
         run: >-
           uv run --frozen --extra dev pytest -q
           --cov=satgonetem
-          --cov-fail-under=62
+          --cov-fail-under=65
 
   build:
     name: Build distributions

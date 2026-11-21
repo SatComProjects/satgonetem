@@ -10,7 +10,7 @@ recorded in [../adr/](../adr/).
 | Spec | Phase | Status |
 |---|---|---|
 | [0001 — Quality gates and baseline](0001-quality-gates.md) | 0 | Implemented |
-| [0002 — Test architecture](0002-test-architecture.md) | 1 | Proposed |
+| [0002 — Test architecture](0002-test-architecture.md) | 1 | Implemented |
 | [0003 — External boundaries](0003-external-boundaries.md) | 2 | Proposed |
 | [0004 — Routing subsystem](0004-routing.md) | 3 | Proposed |
 | [0005 — Traffic subsystem](0005-traffic.md) | 4 | Proposed |

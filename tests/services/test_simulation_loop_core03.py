@@ -15,8 +15,12 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 
+import pytest
+
 from satgonetem.services.mixins.simulation_loop import SimulationLoopMixin
 from satgonetem.services.mixins.topology_sync import TopologySyncMixin
+
+pytestmark = pytest.mark.slow
 
 
 class SectionTracker:

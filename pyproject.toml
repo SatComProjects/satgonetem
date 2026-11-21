@@ -74,7 +74,7 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
-addopts = "-ra --strict-markers"
+addopts = "-ra --strict-markers -m 'not slow and not benchmark'"
 markers = [
     "unit: fast, deterministic unit tests",
     "integration: requires Docker, root, network, or another external service",
@@ -90,7 +90,7 @@ omit = [
 ]
 
 [tool.coverage.report]
-fail_under = 62
+fail_under = 65
 show_missing = true
 skip_covered = false
 

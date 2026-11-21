@@ -1,6 +1,6 @@
 # 0002 — Test architecture
 
-- Status: Proposed
+- Status: Implemented
 - Date: 2026-11-21
 - Depends on: 0001
 - Supersedes: —
@@ -65,3 +65,28 @@ uv run --frozen --extra dev pytest -q
 uv run --frozen --extra dev pytest -q -m "slow or benchmark"
 uv run --frozen --extra dev pytest -q --cov=satgonetem --cov-fail-under=65
 ```
+
+## Implementation result (2026-11-21)
+
+- Added `tests/conftest.py` and `tests/support/` with node/link/interface
+  factories, dict-backed topology, command/container/gRPC fakes, and a
+  deterministic `RecordingFlow`.
+- Added 266 characterization/contract tests across services, routing, traffic,
+  and utils: controller command construction, diagnostics helpers, traffic
+  fan-out, interface manager, P4 controller lifecycle, shared-memory graph,
+  terminal bridge helpers, FlowScheduler lifecycle/error/timeout behavior, IP
+  utilities, coverage geometry, TLE/checksum/distance helpers, and geodesy.
+- Default suite: 1126 passed, 1 skipped, 9 deselected, 1 xfailed, 71.36%
+  coverage in 24.5 s. Extended set (`-m "slow or benchmark"`): 9 passed.
+- Added `unit`, `integration`, `slow`, and `benchmark` markers with
+  `--strict-markers`; the benchmark module and the sleep-heavy simulation-lock
+  regression module are marked, and the default selection excludes both.
+- Removed CWD-relative topology paths from the test suite, dead
+  `ospf_daemon.open` patches, and the tautological link-budget assertion.
+- Coverage floor raised from 62% to 65%; CI has a separate manual
+  `Extended tests` job for slow/benchmark tests.
+- Characterization exposed real defects that were not fixed in this phase:
+  P4 edge building converts names/MACs with `safe_int`; `NodeTerminalBridge`
+  logs to stdout; shared-memory graph names are fixed; `get_management_interface`
+  ignores `controller_node_iface_pattern`; and polar coverage geometry is
+  degenerate. These are tracked for the behavior/spec phases.

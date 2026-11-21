@@ -295,7 +295,6 @@ class TestIntegrationNoMocks:
 
         assert result.atmospheric_attenuation_db >= 0.0
         assert result.eirp_db == 60.0
-        assert result.g_over_t_db < result.g_over_t_db + result.free_space_loss_db
         assert result.cn0_dbhz > 50.0
         assert result.cn_db is not None
         assert result.cn_db < result.cn0_dbhz

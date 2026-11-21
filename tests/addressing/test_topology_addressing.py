@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ipaddress
+from pathlib import Path
 
 import pytest
 
@@ -13,7 +14,12 @@ from satgonetem.services.topology_satcom import TopologyManager
 
 @pytest.fixture(scope="module")
 def topology() -> TopologyManager:
-    return TopologyManager.from_file("topology_files/test_topology.json")
+    return TopologyManager.from_file(
+        str(
+            Path(__file__).resolve().parents[2]
+            / "topology_files/test_topology.json"
+        )
+    )
 
 
 def test_network_config_roundtrip(tmp_path, topology):

@@ -25,6 +25,8 @@ from satgonetem.routing.static_daemon import StaticRoutingDaemon
 if TYPE_CHECKING:
     from satgonetem.models.node import Node
 
+pytestmark = pytest.mark.benchmark
+
 
 def _make_iface(node_name: str, peer_id: int, peer_iface: Interface) -> Interface:
     """Create an Interface named like 'Gnd0.1' with a bidirectional peer."""
