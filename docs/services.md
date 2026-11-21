@@ -65,7 +65,7 @@ topology = TopologyManager.from_file("topology_files/iridium_topology.json")
 | `protocol` | `"ipv4"` | Network-layer protocol label |
 | `routing` | `"static"` | Default routing method |
 | `satellite_image` | `"jariassuarez/sgnt:satellite"` | Satellite container image |
-| `network_launcher` | `"GONETEM"` | Recorded backend identifier; see the launcher caveat below |
+| `network_launcher` | `"GONETEM"` | Backend name resolved through the launcher registry; see [Network Launchers](launchers.md) |
 | `gonetem_server` | `"localhost:10110"` | GoNetEm gRPC endpoint |
 | `use_budget` | `False` | Enable link-budget capacity computation for ground-station links |
 
@@ -109,10 +109,10 @@ See [IPv4 Addressing](addressing.md) for allocation rules.
 
 See [Controller Plane](controller.md) for the full workflow.
 
-> **Launcher caveat:** `network_launcher` is stored and serialized, but
-> `start_gonetem()` currently always constructs `GoNetEmLauncher`. Setting
-> this field to another value does not select a different backend. See
-> [Network Launchers](launchers.md).
+> **Launcher selection:** `start_gonetem()` resolves `network_launcher`
+> through `satgonetem.launchers.registry.create_launcher`. Register a custom
+> backend with `register_launcher()` before starting; `GONETEM` is the default.
+> See [Network Launchers](launchers.md).
 
 ## Constructors and persistence
 
@@ -502,8 +502,9 @@ of the data-plane address plan. The mixin provides:
 | `get_management_interface(node_id)` | Read back the interface name |
 | `cleanup_controller_connection()` | Delete the veth and OVS port |
 
-The controller helpers shell out to `sudo ip` and `docker`/`ovs-vsctl`; they
-require a running OVS container and host privileges. See
+The controller helpers run through the injected `CommandRunner` (`sudo ip` and
+`docker`/`ovs-vsctl`); they require a running OVS container and host
+privileges. See
 [Controller Plane](controller.md) for the complete workflow.
 
 ## Extension points
@@ -512,9 +513,9 @@ require a running OVS container and host privileges. See
 |---|---|
 | New routing protocol | Subclass `RoutingDaemon`, then `TopologyManager.register_routing_daemon()` |
 | New ground-to-space selection policy | Register a sat_com connection strategy; see [Utilities](utils.md#custom-connection-strategies) |
-| New network backend | Subclass `NetworkLauncher`; currently requires overriding `start_gonetem()` because the lifecycle hardcodes GoNetEm |
+| New network backend | Subclass `NetworkLauncher`, register it with `launchers.registry.register_launcher()`, and set `network_launcher` |
 | New diagnostics | Add a mixin with access to the shared state, or call `execute_command_on()` / `open_bash_terminal()` |
-| Custom link capacity | Set `Link.peer1_capacity` / `peer2_capacity` or enable link budget |
+| Custom link capacity | Set `Link.peer1_capacity` / `peer2_capacity`, enable the link budget, or inject `CapacityStrategy` objects |
 
 ## Failure and cleanup rules
 
