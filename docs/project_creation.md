@@ -407,41 +407,39 @@ satellites based on the current strategy, set a `ground_object_domain` on the
 station and call `simulation_manager.update_ground_station_links()` after all
 stations have been added.
 
+Manual links are created on the sat_com `SimulationManager`; `project_builder`
+does not wrap them. Both endpoints must already exist in the manager.
+
 ### Adding a manual inter-satellite link
 
 ```python
-from satgonetem.utils.project_builder import create_and_add_inter_satellite_link
-
-# Both satellites must already exist in the simulation manager
-create_and_add_inter_satellite_link("Sat1", "Sat2", sim_manager)
+sat_a = next(s for s in sim_manager.get_satellites() if s.satellite_name == "Sat1")
+sat_b = next(s for s in sim_manager.get_satellites() if s.satellite_name == "Sat2")
+sim_manager.create_and_add_inter_satellite_link_connection(sat_a, sat_b)
 ```
 
-Satellites are looked up by their `satellite_name`. The link is created as an
-`InterSatelliteLink` and appended to the simulation.
+The link is created as an `InterSatelliteLink` and appended to the simulation.
 
 ### Adding a manual ground-station link
 
 ```python
-from satgonetem.utils.project_builder import create_and_add_ground_station_link
-
-create_and_add_ground_station_link("Sat1", "Gnd7", sim_manager)
+sat = next(s for s in sim_manager.get_satellites() if s.satellite_name == "Sat1")
+gs = next(g for g in sim_manager.get_ground_stations() if g.label == "Gnd7")
+sim_manager.create_and_add_ground_station_link_connection(sat, gs)
 ```
 
-The satellite is looked up by `satellite_name` and the ground station by its
-`label`. The link is created as a `GroundStationLink` and appended to the
-simulation.
+The link is created as a `GroundStationLink` and appended to the simulation.
 
 ### Adding a manual ground-object link
 
 ```python
-from satgonetem.utils.project_builder import create_and_add_ground_object_link
-
 # Connect two ground objects (ground stations, user terminals, etc.)
-create_and_add_ground_object_link("Gnd7", "Gnd8", sim_manager)
+go_a = next(g for g in sim_manager.get_all_ground_objects() if g.label == "Gnd7")
+go_b = next(g for g in sim_manager.get_all_ground_objects() if g.label == "Gnd8")
+sim_manager.create_and_add_ground_object_link_connection(go_a, go_b)
 ```
 
-Both endpoints are looked up by their `label` across all ground objects. The
-link is created as a `GroundObjectLink` and appended to the simulation.  You
+The link is created as a `GroundObjectLink` and appended to the simulation. You
 can also connect a ground station to a user terminal this way.
 
 ### Full example: modify then build
@@ -452,9 +450,6 @@ from satgonetem.utils.project_builder import (
     create_custom_satellite,
     create_custom_ground_station,
     add_custom_ground_station,
-    create_and_add_inter_satellite_link,
-    create_and_add_ground_station_link,
-    create_and_add_ground_object_link,
 )
 from satgonetem.services.topology_satcom import TopologyManager
 from sat_com_builder.models import SimulationProperty
@@ -466,16 +461,28 @@ sim_manager = create_and_load_simulation(
 )
 
 # 2. Add custom objects BEFORE creating TopologyManager
-sat_id = create_custom_satellite({"name": "SatX", "tle_line1": "...", "tle_line2": "..."}, sim_manager)
+create_custom_satellite(
+    {"name": "SatX", "tle_line1": "...", "tle_line2": "..."}, sim_manager
+)
+create_custom_satellite(
+    {"name": "SatY", "tle_line1": "...", "tle_line2": "..."}, sim_manager
+)
 
 gs = create_custom_ground_station("Gnd7", 48.856, 2.352, 0.035)
 add_custom_ground_station(gs, sim_manager)
+gs_2 = create_custom_ground_station("Gnd8", 48.857, 2.353, 0.035)
+add_custom_ground_station(gs_2, sim_manager)
 
-create_and_add_inter_satellite_link("SatX", "SatY", sim_manager)
-create_and_add_ground_station_link("SatX", "Gnd7", sim_manager)
-create_and_add_ground_object_link("Gnd7", "Gnd8", sim_manager)
+# 3. Wire manual links through the simulation manager
+sat_x = next(s for s in sim_manager.get_satellites() if s.satellite_name == "SatX")
+sat_y = next(s for s in sim_manager.get_satellites() if s.satellite_name == "SatY")
+gnd_7 = next(g for g in sim_manager.get_ground_stations() if g.label == "Gnd7")
+gnd_8 = next(g for g in sim_manager.get_ground_stations() if g.label == "Gnd8")
+sim_manager.create_and_add_inter_satellite_link_connection(sat_x, sat_y)
+sim_manager.create_and_add_ground_station_link_connection(sat_x, gnd_7)
+sim_manager.create_and_add_ground_object_link_connection(gnd_7, gnd_8)
 
-# 3. Create the topology manager
+# 4. Create the topology manager
 topology = TopologyManager.from_simulation_manager(sim_manager)
 ```
 
@@ -525,6 +532,18 @@ topology._apply_network_config(net_cfg)
 | `network_launcher` | str | `"GONETEM"` | Emulation backend |
 | `gonetem_server` | str | `"localhost:10110"` | GoNetem gRPC server address |
 | `use_budget` | bool | `False` | Enable link-budget-based capacity calculation |
+| `controller_veth_host` | str | `"veth-host"` | Host-side veth name for the controller link |
+| `controller_veth_peer` | str | `"veth-controller"` | Peer veth name moved into the OVS container |
+| `controller_host_ip` | str | `"248.0.0.2"` | Host-side controller IP |
+| `controller_subnet_prefix` | int | `16` | Controller subnet prefix length |
+| `controller_bridge_name` | str | `"Controller"` | OVS bridge inside the GoNetEm/OVS container |
+| `controller_node_iface_pattern` | str | `"eth{node_id}"` | Node interface format; must produce `eth<digits>` |
+| `ground_station_pool` | str | `"10.0.0.0/10"` | Data-plane pool for ground stations |
+| `satellite_pool` | str | `"10.128.0.0/9"` | Data-plane pool for satellites |
+| `user_terminal_pool` | str | `"10.64.0.0/10"` | Data-plane pool for user terminals |
+| `ground_station_prefix_len` | int | `20` | Prefix length of each ground-station block |
+| `satellite_prefix_len` | int | `27` | Prefix length of each satellite block |
+| `user_terminal_prefix_len` | int | `20` | Prefix length of each user-terminal block |
 
 `link_netem_limit` bounds the packets the netem qdisc can hold, i.e. the modelled
 link buffer, while `link_txqueuelen` sets the transmit queue of the interfaces

@@ -36,7 +36,7 @@ SatGoNetem bridges orbital mechanics and Linux network emulation. It computes sa
 
 **Support**
 
-- [`docs/utils.md`](docs/utils.md) — Project builder, coverage/IP helpers, connection strategies, compatibility patch
+- [`docs/utils.md`](docs/utils.md) — Project builder, geodesy/coverage helpers, connection strategies, shared memory, compatibility patch
 - [`docs/ports.md`](docs/ports.md) — External-boundary ports, adapters, and injection points
 
 **Development**
@@ -399,6 +399,22 @@ also requires `Lint`, `Type check`, `Test (Python 3.10)` through
 `Test (Python 3.14)`, `Security audit`, and `Build package`. `main` requires the
 pre-existing checks and adds `Type check`/`Security audit` when the Phase 0
 workflow is promoted from `develop`.
+
+### Technical debt
+
+Known follow-ups and intentional exceptions are tracked here and in
+[`docs/specs/`](docs/specs/README.md):
+
+| Area | Debt | Next step |
+|---|---|---|
+| Type checking | `attr-defined` is disabled globally because generated protobuf and mixin-injected state are not statically visible | Add protocols/annotations and re-enable the category |
+| Coverage | `utils/project_mesh.py` (~30%) and `launchers/gonetem_lifecycle.py` (~58%) are below the global floor's spirit | Add mesh-construction and lifecycle branch tests |
+| Behavior | Link-operation counts mean “attempted”, not “succeeded”; `FlowScheduler` defaults to no timeout | Separate behavior specs and tests |
+| Controller | Custom interface patterns must format to `eth<digits>` | Decide whether arbitrary prefixes are needed |
+| P4 | `P4Daemon` is experimental and not registered as a routing method | Support or remove it explicitly |
+| Compatibility | `satcom_fix` patches third-party internals at import time | Separate removal spec if upstream fixes land |
+| Integration | Docker/root/GoNetEm paths run only via manual scripts, not CI | Add a privileged integration runner when available |
+| Release | `main` lacks the new type/security workflows until the next develop→main promotion | Promote and re-add the required checks |
 
 ### Releasing
 

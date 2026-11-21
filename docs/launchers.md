@@ -15,7 +15,12 @@ Hardware-in-the-loop links are **not** a launcher: they are handled by
 | Module | Contents |
 |---|---|
 | `base_launcher.py` | `NetworkLauncher` abstract base class |
-| `gonetem_launcher.py` | `GoNetEmLauncher`, project generation, gRPC calls |
+| `registry.py` | Backend registry used by `network_launcher` |
+| `gonetem_launcher.py` | Thin composition of the GoNetEm mixins |
+| `gonetem_client.py` | gRPC connection, link requests, capacities |
+| `gonetem_lifecycle.py` | Start/wire/link/close orchestration |
+| `gonetem_cleanup.py` | Docker cleanup and force-close |
+| `gonetem_project.py` | `network.yml` and `.gnet` generation |
 | `hil_manager.py` | `HILManager` (standalone, not a `NetworkLauncher`) |
 
 `satgonetem.launchers` re-exports only `HILManager`. Import the GoNetEm
@@ -27,7 +32,7 @@ from satgonetem.launchers.gonetem_launcher import GoNetEmLauncher
 
 ## `NetworkLauncher` contract
 
-`NetworkLauncher` is an `abc.ABC` with a shared constructor and six abstract
+`NetworkLauncher` is an `abc.ABC` with a shared constructor and eight abstract
 methods.
 
 ```python
@@ -47,9 +52,10 @@ class NetworkLauncher(ABC):
 
 | Method | Purpose |
 |---|---|
-| `start_containers(nodes, workers=64, progress_cb=None)` | Provision containers/processes |
+| `start_containers(nodes, workers=64, progress_cb=None, controller=False, links=None)` | Provision containers/processes; returns `(container_time, link_time)` |
 | `wire_links(links, workers=64, progress_cb=None)` | Create veths/bridges and apply initial qdiscs |
 | `close_project(progress_cb=None)` | Tear down all containers and links |
+| `force_close_project()` | Best-effort teardown after a failed startup |
 
 ### Per-tick link methods
 
@@ -113,7 +119,7 @@ expected to run on the same trusted host. The channel is closed by
 2. Generate `project.gnet` from the current topology.
 3. `ProjectOpen` with the archive bytes; store the returned project ID.
 4. Consume the `TopologyRun` server stream, forwarding progress events.
-5. Attach docker-py `Container` objects and PIDs to nodes, and set
+5. Attach container handles and PIDs to nodes through `ContainerRuntime`, and set
    `node.grpc_client` / `node.project_id` for `NodeRun` execution.
 6. Return `(container_time, link_time)` in seconds.
 
@@ -251,7 +257,7 @@ unless you are debugging the backend.
 ```python
 topology.start_gonetem()
 # internally:
-#   launcher = GoNetEmLauncher(...)
+#   launcher = create_launcher(network_launcher, ...)
 #   nodes = all nodes minus HIL-managed ones
 #   links = active links minus HIL-managed ones
 #   launcher.start_containers(nodes, links=links)
@@ -259,11 +265,10 @@ topology.start_gonetem()
 ```
 
 The manager stores the active launcher on `topology.launcher` and resets it
-on teardown. `NetworkConfig.network_launcher` is currently metadata: the
-lifecycle always constructs `GoNetEmLauncher` and does not branch on that
-string. A custom backend therefore requires overriding `start_gonetem()` (or
-driving `NetworkLauncher` yourself); merely setting
-`network_launcher="MY_BACKEND"` has no effect in this version.
+on teardown. `NetworkConfig.network_launcher` selects the backend through
+`satgonetem.launchers.registry.create_launcher`; register a custom backend with
+`register_launcher("MY_BACKEND", MyLauncher)`. GoNetEm remains the default and
+is resolved dynamically for compatibility.
 
 ## Troubleshooting
 

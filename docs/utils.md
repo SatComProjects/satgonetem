@@ -38,9 +38,12 @@ through its project-builder import.
 
 ## `project_builder`
 
-This module is the primary Python entry point for creating projects without
-hand-writing YAML or sat_com JSON. It complements the narrative guide in
-[Project Creation](project_creation.md); this section is the API reference.
+`project_builder.py` is the primary Python entry point for creating projects
+without hand-writing YAML or sat_com JSON. Its implementation is split across
+`project_ground_objects.py` (CSV objects), `project_mesh.py` (orbital grouping
+and mesh links), and `project_fixtures.py` (test/empty projects); the public
+imports remain in `project_builder`. See
+[Project Creation](project_creation.md) for the narrative guide.
 
 ### Ground-object files
 

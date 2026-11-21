@@ -80,7 +80,7 @@ assert node.id == 7
 | `loopback` | `Interface("lo", iface_type="lo")`, assigned a `/32` by the address plan |
 | `ipv4_routing_table` | `RoutingEntry` objects installed by the routing daemon |
 | `ipv4_previous_routing_table` | Previous table used for diffing |
-| `container` | docker-py `Container` attached by the launcher |
+| `container` | Container handle attached by the launcher; accessed through `ContainerRuntime` |
 | `container_pid` | Container PID used for netns operations |
 | `grpc_client`, `project_id` | GoNetEm `NodeRun` context |
 | `image` | Container image override |
@@ -104,9 +104,10 @@ assert iface.get_iname() == "eth1"
 `peer.name` matches `<peer.name>.<self.id>`. It logs a warning if no match is
 found and never raises for a missing interface.
 
-`create_dummy_interface(name)` creates and brings up a dummy interface inside
-the container network namespace using `setns` + pyroute2. It requires
-`container_pid` (or a container whose `State.Pid` is available).
+`create_dummy_interface(name)` and `connect_to(peer, ...)` resolve container
+PIDs and delegate namespace/veth work to the injected `NetworkNamespace`
+adapter. Tests can replace `node.network_namespace`; the defaults use `setns`
+and pyroute2.
 
 ### Command execution
 
@@ -114,7 +115,8 @@ the container network namespace using `setns` + pyroute2. It requires
 
 1. **GoNetEm gRPC `NodeRun`** when `node.grpc_client` is set, the command is
    not detached, and `use_docker_cli=False`.
-2. **docker-py `exec_run`** otherwise (including every detached command).
+2. **`ContainerRuntime.exec`** otherwise (including every detached command);
+   the default adapter uses docker-py `exec_run`.
 
 ```python
 stdout = node.execute_command("ip -brief address")
@@ -127,6 +129,8 @@ If `NodeRun` reports `UNIMPLEMENTED`, execution transparently falls back to
 Docker.
 
 `execute_command_docker()` remains public as the explicit Docker-only path.
+`node.container_runtime` and `node.network_namespace` are injectable test
+seams; no Docker or pyroute2 imports remain in `models/node.py`.
 
 ### Address application
 
@@ -257,6 +261,8 @@ assert link.delay == 4            # int(distance / c * 1000)
 | `default_capacity_kbps` | `1000` | Fallback capacity per peer |
 | `use_budget` | `False` | Compute GSL capacity from the link budget |
 | `link_budget_config` | `None` | Frequencies/bandwidth used by the budget |
+| `downlink_capacity_strategy` | ModCod | Optional `CapacityStrategy` for downlink |
+| `uplink_capacity_strategy` | Shannon | Optional `CapacityStrategy` for uplink |
 
 ### Delay and distance
 
