@@ -42,6 +42,7 @@ from satgonetem.services.mixins.routing_mgr import RoutingManagerMixin
 from satgonetem.services.mixins.simulation_loop import SimulationLoopMixin
 from satgonetem.services.mixins.topology_sync import TopologySyncMixin
 from satgonetem.services.mixins.traffic_testing import TrafficTestingMixin
+from satgonetem.services.topology_link_plan import ensure_inter_satellite_directions
 from satgonetem.traffic import PingConfig, PingFlow
 from satgonetem.utils.project_builder import (
     add_custom_ground_station,
@@ -928,6 +929,11 @@ class TopologyManager(
             self.preference = "latency_no_preference"
 
         nx_adapter = self.nx_adapter
+        # Custom-created links may leave the optional direction unset, while
+        # the networkx adapter assumes an enum. Normalize before export.
+        ensure_inter_satellite_directions(
+            self.simulation_manager.get_inter_satellites_links()
+        )
         graph = nx_adapter.create_full_networkx_graph(
             export_object_position=True,
             enable_export_flows_data=False,

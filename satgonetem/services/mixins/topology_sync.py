@@ -15,7 +15,10 @@ from satgonetem.models.ground_station import GroundStation
 from satgonetem.models.link import Link
 from satgonetem.models.satellite import Satellite
 from satgonetem.services.mixins.simulation_loop import ensure_simulation_lock
-from satgonetem.services.topology_link_plan import build_link_key, removed_link_keys
+from satgonetem.services.topology_link_plan import (
+    build_link_key,
+    removed_link_keys,
+)
 from satgonetem.utils.utils import distance_3d_km, distance_3d_km_many
 
 if TYPE_CHECKING:

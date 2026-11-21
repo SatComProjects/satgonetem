@@ -61,3 +61,22 @@ def test_removed_link_keys_returns_only_missing_keys():
     new = {frozenset({"Sat1", "Sat2"})}
 
     assert removed_link_keys(current, new) == {frozenset({"Sat2", "Sat3"})}
+
+
+def test_ensure_inter_satellite_directions_fills_none():
+    from types import SimpleNamespace
+
+    from sat_com_model.models import InterSatelliteLinkDirection
+
+    from satgonetem.services.topology_link_plan import (
+        ensure_inter_satellite_directions,
+    )
+
+    missing = SimpleNamespace(inter_satellite_direction=None)
+    present = SimpleNamespace(
+        inter_satellite_direction=InterSatelliteLinkDirection.ORBITAL
+    )
+
+    assert ensure_inter_satellite_directions([missing, present]) == 1
+    assert missing.inter_satellite_direction is InterSatelliteLinkDirection.UNDEFINED
+    assert present.inter_satellite_direction is InterSatelliteLinkDirection.ORBITAL
