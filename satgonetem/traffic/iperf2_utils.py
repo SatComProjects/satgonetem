@@ -1,4 +1,3 @@
-import os
 import platform
 import re
 from pathlib import Path
@@ -8,6 +7,8 @@ import pandas as pd
 
 matplotlib.use("Agg")  # non-GUI backend
 import matplotlib.pyplot as plt
+
+from satgonetem.ports import default_runner
 
 
 def generate_iperf2_plots(
@@ -223,12 +224,18 @@ def generate_iperf2_plots(
         try:
             system = platform.system()
             if system == "Darwin":
-                os.system(f'open "{out_dir}"')
+                default_runner.run(
+                    ["open", str(out_dir)], check=False, capture=False
+                )
             elif system == "Windows":
                 win_path = Path(out_dir).as_posix().replace("/", "\\")
-                os.system(f'explorer "{win_path}"')
+                default_runner.run(
+                    ["explorer", win_path], check=False, capture=False
+                )
             else:
-                os.system(f'xdg-open "{out_dir}"')
+                default_runner.run(
+                    ["xdg-open", str(out_dir)], check=False, capture=False
+                )
         except Exception:
             pass
 

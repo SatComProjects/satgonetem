@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 from satgonetem.models.ground_station import GroundStation
 from satgonetem.models.link import Link
 from satgonetem.models.satellite import Satellite
+from satgonetem.ports import default_runner
 from satgonetem.utils.constants import MAX_WORKERS
 from satgonetem.utils.coverage import coverage_percentage_fast
 
@@ -144,6 +145,11 @@ class NodeTerminal:
 
 class DiagnosticsMixin:
     """Diagnostics functionality."""
+
+    def _popen(self, *args, **kwargs):
+        """Start a process through the injected process port."""
+        runner = getattr(self, "process_runner", default_runner)
+        return runner.popen(*args, **kwargs)
 
     def monitor_links(self, debug: bool = False):
         """
@@ -517,7 +523,7 @@ class DiagnosticsMixin:
         for term, extra in candidates:
             if shutil.which(term):
                 full_cmd = [term, *extra, *bridge_cmd]
-                subprocess.Popen(
+                self._popen(
                     full_cmd,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,

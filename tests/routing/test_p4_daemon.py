@@ -323,3 +323,30 @@ def test_remove_stops_controller_and_releases_shared_memory(daemon):
     graph.unlink.assert_called_once_with()
     assert daemon.graph_shared_memory is None
     assert daemon.p4_controller_process is None
+
+
+def test_start_p4_controller_uses_injected_process_runner(
+    topology, tmp_path, monkeypatch
+):
+    class RecordingRunner:
+        def __init__(self, process):
+            self.process = process
+            self.calls = []
+
+        def popen(self, args, **kwargs):
+            self.calls.append((args, kwargs))
+            return self.process
+
+    process = FakeProcess()
+    runner = RecordingRunner(process)
+    daemon = P4Daemon(
+        topology,
+        str(tmp_path / "controller"),
+        process_runner=runner,
+    )
+    _patch_os(monkeypatch, exists=True, executable=True)
+    _patch_sleep(monkeypatch)
+
+    assert daemon.start_p4_controller() is True
+    assert runner.calls
+    assert runner.calls[0][0] == [str(tmp_path / "controller" / "run_controller.sh")]

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import subprocess
 from types import SimpleNamespace
-from unittest.mock import call, patch
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 
@@ -20,13 +20,15 @@ class _ControllerHost(ControllerMixin, DummyTopology):
 
 @pytest.fixture
 def controller_host() -> _ControllerHost:
-    return _ControllerHost(
+    host = _ControllerHost(
         controller_veth_host="veth-host",
         controller_veth_peer="veth-controller",
         controller_host_ip="248.0.0.2",
         controller_subnet_prefix=16,
         controller_bridge_name="Controller",
     )
+    host.command_runner = MagicMock()
+    return host
 
 
 def _completed(stdout: str = "", returncode: int = 0) -> SimpleNamespace:
@@ -102,10 +104,10 @@ def test_get_management_interface_formats_controller_node_iface_pattern() -> Non
 def test_remove_controller_veth_removes_ovs_port_then_host_link(
     controller_host: _ControllerHost,
 ) -> None:
-    with patch("satgonetem.services.mixins.controller.subprocess.run") as run:
-        controller_host._remove_controller_veth(
-            "veth-host", "veth-controller", "Controller", ovs_cid="ovs-123"
-        )
+    run = controller_host.command_runner.run
+    controller_host._remove_controller_veth(
+        "veth-host", "veth-controller", "Controller", ovs_cid="ovs-123"
+    )
 
     assert run.call_args_list == [
         call(
@@ -133,10 +135,10 @@ def test_remove_controller_veth_removes_ovs_port_then_host_link(
 def test_remove_controller_veth_without_container_only_deletes_host_link(
     controller_host: _ControllerHost,
 ) -> None:
-    with patch("satgonetem.services.mixins.controller.subprocess.run") as run:
-        controller_host._remove_controller_veth(
-            "veth-host", "veth-controller", "Controller", ovs_cid=None
-        )
+    run = controller_host.command_runner.run
+    controller_host._remove_controller_veth(
+        "veth-host", "veth-controller", "Controller", ovs_cid=None
+    )
 
     run.assert_called_once_with(
         ["sudo", "ip", "link", "delete", "veth-host"],
@@ -159,10 +161,9 @@ def test_setup_controller_connection_builds_full_veth_command_sequence(
         _completed(),
     ]
 
-    with patch(
-        "satgonetem.services.mixins.controller.subprocess.run", side_effect=results
-    ) as run:
-        controller_host.setup_controller_connection()
+    run = controller_host.command_runner.run
+    run.side_effect = results
+    controller_host.setup_controller_connection()
 
     commands = [invocation.args[0] for invocation in run.call_args_list]
     assert commands == [
@@ -225,11 +226,10 @@ def test_setup_controller_connection_builds_full_veth_command_sequence(
 def test_setup_controller_connection_requires_an_ovs_container(
     controller_host: _ControllerHost, result: SimpleNamespace
 ) -> None:
-    with patch(
-        "satgonetem.services.mixins.controller.subprocess.run", return_value=result
-    ) as run:
-        with pytest.raises(RuntimeError, match="Could not find an OVS container"):
-            controller_host.setup_controller_connection()
+    run = controller_host.command_runner.run
+    run.return_value = result
+    with pytest.raises(RuntimeError, match="Could not find an OVS container"):
+        controller_host.setup_controller_connection()
 
     run.assert_called_once()
     assert run.call_args.args[0] == [
@@ -251,15 +251,13 @@ def test_setup_controller_connection_rolls_back_when_a_command_fails(
         stderr="boom\n",
     )
 
-    with patch(
-        "satgonetem.services.mixins.controller.subprocess.run",
-        side_effect=[_completed("ovs-abc\n"), failure],
-    ) as run:
-        with patch.object(controller_host, "_remove_controller_veth") as rollback:
-            with pytest.raises(
-                RuntimeError, match="Failed to set up controller connection: boom"
-            ):
-                controller_host.setup_controller_connection()
+    run = controller_host.command_runner.run
+    run.side_effect = [_completed("ovs-abc\n"), failure]
+    with patch.object(controller_host, "_remove_controller_veth") as rollback:
+        with pytest.raises(
+            RuntimeError, match="Failed to set up controller connection: boom"
+        ):
+            controller_host.setup_controller_connection()
 
     assert run.call_count == 2
     rollback.assert_called_once_with(
@@ -289,11 +287,9 @@ def test_cleanup_controller_connection_passes_discovered_container_id(
 ) -> None:
     result = _completed(stdout, returncode=returncode)
 
-    with patch(
-        "satgonetem.services.mixins.controller.subprocess.run", return_value=result
-    ):
-        with patch.object(controller_host, "_remove_controller_veth") as remove:
-            controller_host.cleanup_controller_connection()
+    controller_host.command_runner.run.return_value = result
+    with patch.object(controller_host, "_remove_controller_veth") as remove:
+        controller_host.cleanup_controller_connection()
 
     remove.assert_called_once_with(
         "veth-host", "veth-controller", "Controller", expected_cid

@@ -265,3 +265,25 @@ def test_get_coverage_percentage_reports_a_percentage_for_overhead_satellite(
 
     assert isinstance(result, float)
     assert 0.0 < result <= 100.0
+
+
+def test_open_bash_terminal_uses_injected_process_runner(
+    diagnostics_host: _DiagnosticsHost, monkeypatch
+) -> None:
+    from unittest.mock import MagicMock
+
+    diagnostics_host.add_satellite("Sat0")
+    diagnostics_host.project_id = "project-1"
+    diagnostics_host.gonetem_server = "localhost:10110"
+    diagnostics_host.process_runner = MagicMock()
+
+    monkeypatch.setattr(
+        "shutil.which", lambda name: "/usr/bin/xterm" if name == "xterm" else None
+    )
+
+    diagnostics_host.open_bash_terminal("Sat0")
+
+    diagnostics_host.process_runner.popen.assert_called_once()
+    command = diagnostics_host.process_runner.popen.call_args.args[0]
+    assert command[0] == "xterm"
+    assert "satgonetem.utils.node_terminal_bridge" in command
