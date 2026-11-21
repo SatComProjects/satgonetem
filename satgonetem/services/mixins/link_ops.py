@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 import grpc
 
 from satgonetem.proto import netem_pb2
+from satgonetem.routing.registry import is_known_method
 from satgonetem.utils.constants import MAX_WORKERS, ROUTE_APPLY_WORKERS
 
 if TYPE_CHECKING:
@@ -347,14 +348,7 @@ class LinkOpsMixin:
             logging.debug("Skipping routing update - routing daemon not initialized")
             return
 
-        _builtin_methods = {
-            "dynamic-ospf",
-            "dynamic-isis",
-            "sr-mpls",
-            "static",
-        }
-
-        if self.routing in _builtin_methods or self.routing in self._daemon_registry:
+        if is_known_method(self.routing, getattr(self, "_daemon_registry", None)):
             self.routing_daemon.update(new_links, max_workers=max_workers)
             logging.info(f"Updated {self.routing} routing after link changes")
         else:

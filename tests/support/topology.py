@@ -41,6 +41,12 @@ class DummyTopology:
         self.links[len(self.links)] = link
         return link
 
+    def get_satellites(self):
+        return list(self.satellites.values())
+
+    def get_ground_stations(self):
+        return list(self.ground_stations.values())
+
     def get_node_by_name(self, name: str):
         for node in self.satellites.values():
             if node.name == name:

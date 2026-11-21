@@ -8,7 +8,6 @@ only used to access node/graph data.
 
 from __future__ import annotations
 
-import base64
 import gc
 import json
 import logging
@@ -29,14 +28,22 @@ from satgonetem.models.ground_station import GroundStation
 from satgonetem.models.routing_entry import RoutingEntry
 from satgonetem.models.satellite import Satellite
 from satgonetem.proto import netem_pb2
-from satgonetem.routing.base_daemon import RoutingDaemon
+from satgonetem.routing.base_daemon import RoutingContext, RoutingDaemon
+from satgonetem.routing.commands import encode_ip_batch
+from satgonetem.routing.static_route_ops import (
+    RouteOperation,
+    emit_batch_commands,
+    emit_route_operations,
+    entry_key,
+    format_route_operation,
+    route_operation,
+)
 from satgonetem.utils.utils import get_interface_from_name
 
 if TYPE_CHECKING:
     from satgonetem.models.interface import Interface
     from satgonetem.models.link import Link
     from satgonetem.models.node import Node
-    from satgonetem.services.topology_satcom import TopologyManager
 
 
 _PEER_IFACE_PATTERN = re.compile(r"^(Gnd|Sat)\d+\.\d+$")
@@ -48,15 +55,6 @@ MAX_ROUTE_NODES_PER_REQUEST = 1024
 MAX_ROUTE_REQUEST_BYTES = 2 * 1024 * 1024
 SLOW_ROUTE_DURATION_MICROS = 50_000
 
-
-@dataclass(frozen=True)
-class RouteOperation:
-    """One typed route operation sent through the RouteInstall RPC."""
-
-    action: str
-    destination: str
-    gateway: str
-    device: str
 
 
 @dataclass
@@ -109,7 +107,7 @@ class StaticRoutingDaemon(RoutingDaemon):
     update, recomputes and replaces routes after topology changes.
     """
 
-    def __init__(self, topology: "TopologyManager") -> None:
+    def __init__(self, topology: RoutingContext) -> None:
         """Initialize the daemon and its route-reuse caches.
 
         Args:
@@ -1123,38 +1121,16 @@ class StaticRoutingDaemon(RoutingDaemon):
         )
 
     def _entry_key(self, entry) -> tuple:
-        """Return an immutable key for a RoutingEntry used in diffs.
-
-        Args:
-            entry: A RoutingEntry object.
-
-        Returns:
-            Tuple of (destination, prefix, gateway, iface_name).
-        """
-        return (
-            entry.destination,
-            entry.get_prefix(),
-            entry.gateway,
-            entry.interface.get_iname(),
-        )
+        """Return an immutable key for a RoutingEntry used in diffs."""
+        return entry_key(entry)
 
     def _route_operation(self, op: str, entry) -> RouteOperation:
         """Build one typed route operation from a RoutingEntry."""
-        return RouteOperation(
-            action=op,
-            destination=entry.destination + entry.get_prefix(),
-            gateway=entry.gateway or "",
-            device=entry.interface.get_iname(),
-        )
+        return route_operation(op, entry)
 
     def _format_route_operation(self, op: RouteOperation) -> str:
         """Format a typed route operation for the legacy ``ip -batch`` path."""
-        if op.gateway:
-            return (
-                f"route {op.action} {op.destination} "
-                f"via {op.gateway} dev {op.device}"
-            )
-        return f"route {op.action} {op.destination} dev {op.device}"
+        return format_route_operation(op)
 
     def _route_line(self, op: str, entry) -> str:
         """Build a single ip route command line.
@@ -1171,63 +1147,14 @@ class StaticRoutingDaemon(RoutingDaemon):
     def _emit_route_operations(
         self, prev_tbl, curr_tbl, live_devs: Optional[set[str]] = None
     ) -> list[RouteOperation]:
-        """Diff prev_tbl vs curr_tbl and return minimal typed route operations.
-
-        A destination prefix that disappeared entirely must be deleted
-        explicitly; otherwise the kernel keeps forwarding traffic to a next
-        hop that is no longer part of the topology. If the destination prefix
-        still exists with a different gateway/interface, ``ip route replace``
-        updates it in place and a preceding delete is redundant.
-
-        Deletions are skipped when the entry's outgoing device is no longer
-        present on the node. Removing a veth makes the kernel purge every
-        route that referenced it, so issuing ``ip route del ... dev <gone>``
-        is guaranteed to fail with "Cannot find device" and would mark an
-        otherwise successful batch as failed.
-
-        Args:
-            prev_tbl: Previous routing table (list of RoutingEntry).
-            curr_tbl: Current routing table (list of RoutingEntry).
-            live_devs: Device names currently present on the node. When
-                provided, stale entries whose device is absent are not
-                deleted. When None, every removed entry is deleted.
-
-        Returns:
-            List of route operations: deletions first, then
-            additions/replacements.
-        """
-        if prev_tbl is curr_tbl:
-            return []
-
-        curr = {self._entry_key(e): e for e in curr_tbl}
-        prev = {self._entry_key(e): e for e in prev_tbl}
-        curr_prefixes = {(e.destination, e.get_prefix()) for e in curr_tbl}
-        removed = [
-            self._route_operation("del", e)
-            for k, e in prev.items()
-            if k not in curr
-            and (e.destination, e.get_prefix()) not in curr_prefixes
-            and (live_devs is None or e.interface.get_iname() in live_devs)
-        ]
-        added = [
-            self._route_operation("replace", e)
-            for k, e in curr.items()
-            if k not in prev
-        ]
-        return removed + added
+        """Diff routing tables into minimal typed route operations."""
+        return emit_route_operations(prev_tbl, curr_tbl, live_devs)
 
     def _emit_batch_commands(
         self, prev_tbl, curr_tbl, live_devs: Optional[set[str]] = None
     ) -> list:
-        """Legacy diff emitter returning ``ip route`` command strings.
-
-        Kept for the ``NodeRun`` fallback and for daemons that still consume
-        command strings.
-        """
-        return [
-            self._format_route_operation(op)
-            for op in self._emit_route_operations(prev_tbl, curr_tbl, live_devs)
-        ]
+        """Legacy diff emitter returning ``ip route`` command strings."""
+        return emit_batch_commands(prev_tbl, curr_tbl, live_devs)
 
     def _exec_batch(self, device, lines: list) -> None:
         """Execute a list of ip commands in a single batch on a container.
@@ -1239,7 +1166,4 @@ class StaticRoutingDaemon(RoutingDaemon):
             device: A node object with a .container attribute.
             lines: List of ip command strings (without the leading 'ip').
         """
-        payload = "\n".join(lines)
-        b64 = base64.b64encode(payload.encode()).decode()
-        cmd = f"echo {b64} | base64 -d | ip -force -batch -"
-        device.execute_command(cmd, detach=False)
+        device.execute_command(encode_ip_batch(lines), detach=False)
