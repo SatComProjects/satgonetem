@@ -32,6 +32,7 @@ from satgonetem.models.interface import Interface
 from satgonetem.models.link import Link
 from satgonetem.models.satellite import Satellite
 from satgonetem.routing.base_daemon import RoutingDaemon
+from satgonetem.routing.registry import available_methods, is_known_method
 from satgonetem.services.mixins.controller import ControllerMixin
 from satgonetem.services.mixins.diagnostics import DiagnosticsMixin
 from satgonetem.services.mixins.interface_mgr import InterfaceMgrMixin
@@ -201,7 +202,7 @@ class TopologyManager(
             TypeError: If daemon_class is not a subclass of RoutingDaemon.
         """
         _builtin = {"static", "dynamic-ospf", "dynamic-isis", "sr-mpls"}
-        if name in _builtin:
+        if is_known_method(name):
             raise ValueError(
                 f"'{name}' is a built-in routing method and cannot be overridden"
             )
@@ -686,12 +687,7 @@ class TopologyManager(
             "one-link-per-layer",
         ]
 
-        self.allowed_routing_methods = [
-            "static",
-            "dynamic-ospf",
-            "dynamic-isis",
-            "sr-mpls",
-        ] + list(self._daemon_registry.keys())
+        self.allowed_routing_methods = available_methods(self._daemon_registry)
 
         # Routing initialization flag - only update routes when routing is explicitly enabled
         self.routing_initiated = False

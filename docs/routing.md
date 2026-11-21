@@ -173,6 +173,12 @@ picked up automatically.
 - Registration must happen before `TopologyManager.__init__` is called (or before
   `init_routing()` is called if the topology is already constructed).
 - `register_routing_daemon` is a class method, so it affects all future instances.
+- Built-in factories live in `satgonetem.routing.registry`; the manager uses a
+  registry lookup, so adding a method does not require editing the dispatch
+  code.
+- `P4Daemon` is experimental and is **not** a registered routing method: its
+  constructor requires a P4 controller directory. Instantiate it directly only
+  for experiments.
 
 ---
 

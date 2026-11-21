@@ -1,6 +1,6 @@
 # 0004 — Routing subsystem
 
-- Status: Proposed
+- Status: Implemented
 - Date: 2026-11-21
 - Depends on: 0001, 0002, 0003
 - Supersedes: —
@@ -64,3 +64,30 @@ uv run --frozen --extra dev pytest -q tests/routing
 uv run --frozen --extra dev pytest -q --cov=satgonetem/routing --cov-fail-under=80
 uv run --frozen --extra dev mypy satgonetem/routing
 ```
+
+## Implementation result (2026-11-21)
+
+- Added `routing/registry.py` and a single registration point in
+  `routing/__init__.py`; `RoutingManagerMixin` no longer has a built-in
+  `if/elif` chain. Custom factories take precedence, so tests can inject them.
+- Added the runtime-checkable `RoutingContext` protocol; routing modules no
+  longer import `satgonetem.services`.
+- Added `BirdRoutingDaemon` and moved OSPF/IS-IS lifecycle duplication there.
+- Added `routing/commands.py` for IP batches, MPLS enable, and NET formatting.
+- Extracted `SegmentRoutingManager`/`NodeSID` to
+  `srmpls_label_manager.py` and static route diffing to
+  `static_route_ops.py`, with compatibility re-exports.
+- Added registry/context, Bird lifecycle, command, label-manager, static
+  route-planning, custom-path, and coverage tests.
+- Routing coverage: 81.37%; default suite tests remain green.
+- P4 decision: `P4Daemon` remains experimental and is not a registered built-in
+  or `routing_method` option because its constructor requires a controller
+  path. It is covered by direct lifecycle/edge tests.
+- Remaining cleanup: static/SR-MPLS command-execution adapters can be extracted
+  further without behavior changes; this is tracked for the next cleanup pass.
+
+## P4 support decision
+
+`P4Daemon` is not advertised as a supported routing method. It requires an
+external P4 controller directory and is not registered in the built-in list or
+the custom registry. Users may instantiate it directly for experiments.

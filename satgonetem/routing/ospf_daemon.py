@@ -6,16 +6,13 @@ directly to each container and manages the Bird service lifecycle.
 """
 from __future__ import annotations
 
-import base64
-import logging
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import TYPE_CHECKING, List, Optional
+from typing import TYPE_CHECKING
 
-from satgonetem.routing.base_daemon import RoutingDaemon
-from satgonetem.routing.bird_service import apply_bird_config, stop_bird
+from satgonetem.routing.bird_daemon import BirdRoutingDaemon
+from satgonetem.routing.bird_service import apply_bird_config
+from satgonetem.routing.commands import assign_ips
 
 if TYPE_CHECKING:
-    from satgonetem.models.link import Link
     from satgonetem.models.node import Node
 
 OSPF_AREA = 0
@@ -23,85 +20,13 @@ OSPF_HELLO_INTERVAL = 1
 OSPF_DEAD_COUNT = 3
 
 
-class OSPFDaemon(RoutingDaemon):
+class OSPFDaemon(BirdRoutingDaemon):
     """Bird2-based OSPF routing daemon.
 
     Writes a complete declarative Bird2 OSPF configuration to each container
     and starts the Bird service. When new links are added, rebuilds the config
     only for the directly affected nodes (Bird requires a full reload).
     """
-
-    def init(self, max_workers: int = 4) -> bool:
-        """Start Bird OSPF on every satellite and ground station.
-
-        Args:
-            max_workers: Maximum number of parallel worker threads.
-
-        Returns:
-            True if all nodes initialized successfully, False if any failed.
-        """
-        nodes = list(self.topology.get_satellites()) + list(
-            self.topology.get_ground_stations()
-        )
-        errors = 0
-        with ThreadPoolExecutor(max_workers=max_workers) as pool:
-            futures = {pool.submit(self._init_node, n): n for n in nodes}
-            for fut in as_completed(futures):
-                n = futures[fut]
-                try:
-                    fut.result()
-                except Exception as e:
-                    errors += 1
-                    logging.error(f"OSPF init failed on {n.name}: {e}")
-        return errors == 0
-
-    def update(self, new_links: "List[Link]", max_workers: int = 4) -> None:
-        """Rebuild Bird OSPF config on nodes touched by new links.
-
-        Bird uses a single declarative config file, so adding an interface
-        requires a full config rebuild and reload on the affected node.
-
-        Args:
-            new_links: Links added in the latest topology change.
-            max_workers: Accepted for interface consistency; affected nodes
-                are processed sequentially because they are typically few.
-        """
-        if not self.topology.status:
-            logging.warning("OSPF update skipped: topology not yet active")
-            return
-
-        affected = {link.source for link in new_links} | {
-            link.target for link in new_links
-        }
-        for node in affected:
-            try:
-                self._init_node(node)
-            except Exception as e:
-                logging.error(f"OSPF update failed on {node.name}: {e}")
-
-    def remove(self, node: "Optional[Node]" = None, max_workers: int = 4) -> None:
-        """Stop Bird on all nodes or on a single node.
-
-        Args:
-            node: If provided, only this node is affected. If None, all
-                satellites and ground stations are processed in parallel.
-            max_workers: Maximum number of parallel worker threads.
-        """
-        if node is not None:
-            self._stop_node(node)
-            return
-
-        nodes = list(self.topology.get_satellites()) + list(
-            self.topology.get_ground_stations()
-        )
-        with ThreadPoolExecutor(max_workers=max_workers) as pool:
-            futures = {pool.submit(self._stop_node, n): n for n in nodes}
-            for fut in as_completed(futures):
-                n = futures[fut]
-                try:
-                    fut.result()
-                except Exception as e:
-                    logging.error(f"Failed to stop Bird on {n.name}: {e}")
 
     def _init_node(self, node: "Node") -> None:
         """Assign IPs, build Bird OSPF config, and start Bird on one node.
@@ -112,14 +37,6 @@ class OSPFDaemon(RoutingDaemon):
         _assign_ips(node)
         config = _build_ospf_config(node)
         _apply_config(node, config)
-
-    def _stop_node(self, node: "Node") -> None:
-        """Stop the Bird service inside a node's container.
-
-        Args:
-            node: The node on which Bird should be stopped.
-        """
-        stop_bird(node)
 
 
 def _build_ospf_config(node: "Node") -> str:
@@ -182,24 +99,4 @@ def _apply_config(node: "Node", config: str) -> None:
     apply_bird_config(node, config)
 
 
-def _assign_ips(node: "Node") -> None:
-    """Synchronously assign interface IPv4 addresses before Bird starts.
-
-    Uses ``ip addr replace`` (idempotent) so Bird's device and direct
-    protocols can see the addresses on startup.
-
-    Args:
-        node: The node whose interfaces should have IPs assigned.
-    """
-    lines = []
-    for iface in node.interfaces:
-        ip = getattr(iface, "ipv4", None)
-        if ip:
-            lines.append(f"addr replace {ip}/{iface.prefix_len} dev {iface.get_iname()}")
-    if getattr(node.loopback, "ipv4", None):
-        lines.append(f"addr replace {node.loopback.ipv4}/32 dev lo")
-    if not lines:
-        return
-    payload = "\n".join(lines)
-    b64 = base64.b64encode(payload.encode()).decode()
-    node.execute_command(f"echo {b64} | base64 -d | ip -force -batch -")
+_assign_ips = assign_ips

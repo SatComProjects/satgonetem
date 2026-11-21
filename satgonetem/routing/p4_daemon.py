@@ -7,8 +7,7 @@ from typing import List, Optional
 
 from satgonetem.models import GroundStation, Interface, Link, Node, Satellite
 from satgonetem.ports import ProcessRunner, default_runner
-from satgonetem.routing import RoutingDaemon
-from satgonetem.services.topology_satcom import TopologyManager
+from satgonetem.routing.base_daemon import RoutingContext, RoutingDaemon
 from satgonetem.utils.graph_shared_memory import GraphSharedMemory
 
 
@@ -100,7 +99,7 @@ class P4Daemon(RoutingDaemon):
 
     def __init__(
         self,
-        topology_manager: TopologyManager,
+        topology_manager: RoutingContext,
         p4_controller_path: str,
         shared_memory_name: str = "satgonetem_graph",
         process_runner: ProcessRunner | None = None,
