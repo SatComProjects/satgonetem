@@ -394,11 +394,9 @@ uvx twine@7.0.0 check dist/*
 
 ### Required checks
 
-The `develop` and `main` repository rulesets require pull requests. `develop`
-also requires `Lint`, `Type check`, `Test (Python 3.10)` through
-`Test (Python 3.14)`, `Security audit`, and `Build package`. `main` requires the
-pre-existing checks and adds `Type check`/`Security audit` when the Phase 0
-workflow is promoted from `develop`.
+The `develop` and `main` repository rulesets require pull requests and the
+same checks: `Lint`, `Type check`, `Test (Python 3.10)` through
+`Test (Python 3.14)`, `Security audit`, and `Build package`.
 
 ### Technical debt
 
@@ -414,7 +412,6 @@ Known follow-ups and intentional exceptions are tracked here and in
 | P4 | `P4Daemon` is experimental and not registered as a routing method | Support or remove it explicitly |
 | Compatibility | `satcom_fix` patches third-party internals at import time | Separate removal spec if upstream fixes land |
 | Integration | Docker/root/GoNetEm paths run only via manual scripts, not CI | Add a privileged integration runner when available |
-| Release | `main` lacks the new type/security workflows until the next develop→main promotion | Promote and re-add the required checks |
 
 ### Releasing
 
@@ -422,8 +419,8 @@ Known follow-ups and intentional exceptions are tracked here and in
 2. Tag the release commit and push the tag:
 
    ```bash
-   git tag -a v0.2.2 -m "SatGoNetem 0.2.2"
-   git push origin v0.2.2
+   git tag -a v0.3.0 -m "SatGoNetem 0.3.0"
+   git push origin v0.3.0
    ```
 
 3. `release.yml` verifies that the tag matches `pyproject.toml`, builds `dist/`,
@@ -431,7 +428,7 @@ Known follow-ups and intentional exceptions are tracked here and in
 4. Install a release directly from GitHub:
 
    ```bash
-   pip install "satgonetem @ git+https://github.com/SatComProjects/satgonetem@v0.2.2"
+   pip install "satgonetem @ git+https://github.com/SatComProjects/satgonetem@v0.3.0"
    ```
 
 `release.yml` does not publish to PyPI. `pyproject.toml` depends on
