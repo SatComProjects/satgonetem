@@ -38,3 +38,19 @@ def removed_link_keys(
 ) -> set[frozenset[str]]:
     """Return keys present in *current_keys* but absent from *new_keys*."""
     return set(current_keys) - set(new_keys)
+
+
+def ensure_inter_satellite_directions(links: Iterable[Any]) -> int:
+    """Fill missing inter-satellite directions with ``UNDEFINED``.
+
+    The sat_com networkx adapter assumes the optional enum is present. Custom
+    link creation may leave it as ``None``. Returns the number of links fixed.
+    """
+    from sat_com_model.models import InterSatelliteLinkDirection
+
+    fixed = 0
+    for link in links:
+        if getattr(link, "inter_satellite_direction", None) is None:
+            link.inter_satellite_direction = InterSatelliteLinkDirection.UNDEFINED
+            fixed += 1
+    return fixed
