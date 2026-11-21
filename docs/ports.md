@@ -28,9 +28,10 @@ Adapters stay thin: no topology knowledge, no retries, no business logic.
 
 ## Remaining boundaries
 
-- `models/node.py` still contains Docker exec and Linux namespace/veth
-  operations. These move behind `ContainerRuntime`/`NetworkNamespace` in
-  sub-phase 5b of Spec 0006 because of their process-global behavior.
+- `models/node.py` delegates container exec/PID lookup and namespace/veth
+  operations to `ContainerRuntime`/`NetworkNamespace`. Its GoNetEm `NodeRun`
+  command path remains a narrow in-model adapter because `Node` is the public
+  command surface.
 - `utils/node_terminal_bridge.py` is itself a CLI adapter and owns its gRPC
   stream.
 - Generated protobuf code remains generated and is not edited.

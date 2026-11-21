@@ -575,3 +575,29 @@ class TestLinkBudgetConfigParam:
             default_capacity_kbps=500,
         )
         assert link.link_budget_config is None
+
+
+def test_link_accepts_injected_capacity_strategies(sat_node, gnd_node):
+    sat_node.type = "Satellite"
+    gnd_node.type = "GroundStation"
+    sat_node.antenna = MagicMock()
+    gnd_node.antenna = MagicMock()
+    downlink = MagicMock()
+    uplink = MagicMock()
+
+    with patch("satgonetem.models.link.LinkBudgetService") as service_cls:
+        service_cls.return_value.compute_one_way.side_effect = [120, 60]
+        link = Link(
+            source=sat_node,
+            target=gnd_node,
+            distance=550_000.0,
+            type="GroundStationLink",
+            use_budget=True,
+            downlink_capacity_strategy=downlink,
+            uplink_capacity_strategy=uplink,
+        )
+
+    assert service_cls.call_args_list[0].kwargs["capacity_strategy"] is downlink
+    assert service_cls.call_args_list[1].kwargs["capacity_strategy"] is uplink
+    assert link.peer1_capacity == 120
+    assert link.peer2_capacity == 60
