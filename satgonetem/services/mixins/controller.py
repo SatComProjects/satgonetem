@@ -2,10 +2,16 @@ import logging
 import subprocess
 from typing import Optional
 
+from satgonetem.ports import default_runner
 from satgonetem.utils.ip_utils import IPUtils
 
 
 class ControllerMixin:
+    def _run_command(self, *args, **kwargs):
+        """Run a command through the injected command port."""
+        runner = getattr(self, "command_runner", default_runner)
+        return runner.run(*args, **kwargs)
+
     # ------------------------------------------------------------------
     # Controller connection helpers
     # ------------------------------------------------------------------
@@ -24,7 +30,7 @@ class ControllerMixin:
         the peer).
         """
         if ovs_cid:
-            subprocess.run(
+            self._run_command(
                 [
                     "docker",
                     "exec",
@@ -38,7 +44,7 @@ class ControllerMixin:
                 capture_output=True,
                 text=True,
             )
-        subprocess.run(
+        self._run_command(
             ["sudo", "ip", "link", "delete", veth_host],
             capture_output=True,
             text=True,
@@ -61,7 +67,7 @@ class ControllerMixin:
         host_ip = self.controller_host_ip
         prefix = self.controller_subnet_prefix
 
-        result = subprocess.run(
+        result = self._run_command(
             ["docker", "ps", "--filter", "name=.ovs", "--format", "{{.ID}}"],
             capture_output=True,
             text=True,
@@ -79,7 +85,7 @@ class ControllerMixin:
             )
 
         try:
-            subprocess.run(
+            self._run_command(
                 [
                     "sudo",
                     "ip",
@@ -97,35 +103,35 @@ class ControllerMixin:
                 check=True,
             )
 
-            subprocess.run(
+            self._run_command(
                 ["sudo", "ip", "link", "set", veth_host, "up"],
                 capture_output=True,
                 text=True,
                 check=True,
             )
 
-            pid_result = subprocess.run(
+            pid_result = self._run_command(
                 ["docker", "inspect", "-f", "{{.State.Pid}}", ovs_cid],
                 capture_output=True,
                 text=True,
                 check=True,
             )
             pid = pid_result.stdout.strip()
-            subprocess.run(
+            self._run_command(
                 ["sudo", "ip", "link", "set", veth_peer, "netns", pid],
                 capture_output=True,
                 text=True,
                 check=True,
             )
 
-            subprocess.run(
+            self._run_command(
                 ["docker", "exec", ovs_cid, "ip", "link", "set", veth_peer, "up"],
                 capture_output=True,
                 text=True,
                 check=True,
             )
 
-            subprocess.run(
+            self._run_command(
                 [
                     "docker",
                     "exec",
@@ -141,7 +147,7 @@ class ControllerMixin:
                 check=True,
             )
 
-            subprocess.run(
+            self._run_command(
                 ["sudo", "ip", "addr", "add", f"{host_ip}/{prefix}", "dev", veth_host],
                 capture_output=True,
                 text=True,
@@ -261,7 +267,7 @@ class ControllerMixin:
         veth_peer = self.controller_veth_peer
         bridge = self.controller_bridge_name
 
-        result = subprocess.run(
+        result = self._run_command(
             ["docker", "ps", "--filter", "name=.ovs", "--format", "{{.ID}}"],
             capture_output=True,
             text=True,

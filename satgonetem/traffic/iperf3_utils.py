@@ -3,7 +3,6 @@ import json
 import os
 import platform
 import shlex
-import subprocess
 import threading
 import time
 import uuid
@@ -16,6 +15,8 @@ import pandas as pd
 
 matplotlib.use("Agg")  # non-GUI backend
 import matplotlib.pyplot as plt
+
+from satgonetem.ports import default_runner
 
 if TYPE_CHECKING:
     from satgonetem.models.node import Node
@@ -1675,11 +1676,15 @@ def generate_iperf3_plots(
         try:
             system = platform.system()
             if system == "Darwin":  # macOS
-                subprocess.run(["open", str(out_dir)], check=False)
+                default_runner.run(["open", str(out_dir)], check=False, capture=False)
             elif system == "Windows":
-                subprocess.run(["explorer", str(out_dir)], check=False)
+                default_runner.run(
+                    ["explorer", str(out_dir)], check=False, capture=False
+                )
             else:  # Linux and others
-                subprocess.run(["xdg-open", str(out_dir)], check=False)
+                default_runner.run(
+                    ["xdg-open", str(out_dir)], check=False, capture=False
+                )
         except Exception:
             pass
 

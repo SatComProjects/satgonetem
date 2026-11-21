@@ -10,7 +10,6 @@ since it is the only launcher that needs the GoNetem .gnet format.
 
 import logging
 import os
-import subprocess
 import tarfile
 import time
 from typing import Callable, Optional
@@ -20,6 +19,14 @@ from google.protobuf import empty_pb2
 
 import satgonetem.proto.netem_pb2_grpc as netem_grpc
 from satgonetem.launchers.base_launcher import NetworkLauncher
+from satgonetem.ports import (
+    CommandRunner,
+    ContainerRuntime,
+    DockerContainerRuntime,
+    GoNetEmGrpcClientFactory,
+    GrpcClientFactory,
+    default_runner,
+)
 from satgonetem.proto import netem_pb2
 
 
@@ -61,6 +68,9 @@ class GoNetEmLauncher(NetworkLauncher):
         temp_path: str = "/tmp/",
         netem_limit: int = 1000,
         txqueuelen: int = 1000,
+        client_factory: GrpcClientFactory | None = None,
+        command_runner: CommandRunner | None = None,
+        container_runtime: ContainerRuntime | None = None,
     ) -> None:
         super().__init__(
             project_name,
@@ -77,6 +87,10 @@ class GoNetEmLauncher(NetworkLauncher):
         self._channel: Optional[grpc.Channel] = None
         self._client: Optional[netem_grpc.NetemStub] = None
         self._request: Optional[netem_pb2.ProjectRequest] = None
+        self._client_factory = client_factory or GoNetEmGrpcClientFactory()
+        self._connection = None
+        self._command_runner = command_runner or default_runner
+        self._container_runtime = container_runtime or DockerContainerRuntime()
 
     # Project file generation
 
@@ -253,11 +267,9 @@ class GoNetEmLauncher(NetworkLauncher):
 
     def _get_client(self) -> netem_grpc.NetemStub:
         if self._client is None:
-            # NOTE: insecure_channel is intentional. GoNetem is expected to run
-            # on the same trusted localhost; TLS can be enabled if the server is
-            # exposed to an untrusted network.
-            self._channel = grpc.insecure_channel(self._server_address)
-            self._client = netem_grpc.NetemStub(self._channel)
+            self._connection = self._client_factory.connect(self._server_address)
+            self._channel = self._connection.channel
+            self._client = self._connection.client
         return self._client
 
     def _link_request(self, link) -> netem_pb2.LinkRequest:
@@ -457,13 +469,21 @@ class GoNetEmLauncher(NetworkLauncher):
 
     def _close_transport(self) -> None:
         """Close the gRPC channel and clear client state."""
-        if self._channel is not None:
+        if self._connection is not None:
+            try:
+                self._connection.close()
+            except Exception as exc:
+                logging.warning(
+                    "GoNetEmLauncher: failed to close gRPC connection: %s", exc
+                )
+        elif self._channel is not None:
             try:
                 self._channel.close()
             except Exception as exc:
                 logging.warning(
                     "GoNetEmLauncher: failed to close gRPC channel: %s", exc
                 )
+        self._connection = None
         self._channel = None
         self._client = None
 
@@ -481,22 +501,14 @@ class GoNetEmLauncher(NetworkLauncher):
             self._request = None
 
     def _attach_containers(self, nodes: list, project_id: str) -> None:
-        """Resolve docker-py Container objects and PIDs for each node after TopologyRun."""
-        import docker as docker_sdk
-
-        try:
-            docker_client = docker_sdk.from_env()
-        except Exception as exc:
-            logging.warning("GoNetEmLauncher: could not create docker client: %s", exc)
-            return
-
+        """Resolve container objects and PIDs for each node after TopologyRun."""
         nodes_by_name = {node.name: node for node in nodes}
         attached = 0
 
         for node_name, node in nodes_by_name.items():
             container_name = f"ntm{project_id}.{node_name}"
             try:
-                container = docker_client.containers.get(container_name)
+                container = self._container_runtime.get(container_name)
                 node.container = container
                 pid = container.attrs.get("State", {}).get("Pid")
                 if pid:
@@ -549,10 +561,7 @@ class GoNetEmLauncher(NetworkLauncher):
                 progress_cb("CLOSE_ERROR", 0, 0)
             raise
         finally:
-            if self._channel:
-                self._channel.close()
-                self._channel = None
-                self._client = None
+            self._close_transport()
             if progress_cb:
                 progress_cb("CLOSE_COMPLETED", node_close, node_count)
 
@@ -709,11 +718,10 @@ class GoNetEmLauncher(NetworkLauncher):
                 container_ids.append(container_id)
         return container_ids
 
-    @staticmethod
-    def _run_docker_command(command: list[str]) -> bool:
+    def _run_docker_command(self, command: list[str]) -> bool:
         """Run a Docker cleanup command and report whether it succeeded."""
         try:
-            result = subprocess.run(command, capture_output=True, text=True)
+            result = self._command_runner.run(command, capture_output=True, text=True)
         except OSError as exc:
             logging.error(
                 "GoNetEmLauncher: failed to run %s: %s", " ".join(command), exc
@@ -732,7 +740,7 @@ class GoNetEmLauncher(NetworkLauncher):
     def _list_project_containers(self, project_id: str) -> list[str]:
         """List Docker containers scoped to *project_id*."""
         try:
-            result = subprocess.run(
+            result = self._command_runner.run(
                 ["docker", "ps", "-a", "--format", "{{.ID}}\t{{.Names}}"],
                 capture_output=True,
                 text=True,

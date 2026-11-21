@@ -123,6 +123,9 @@ every change, including refactors. Phased specifications live in
 - `satgonetem/addressing/` and `satgonetem/link_budget/` — self-contained
   domain packages with their own documented APIs.
 - `satgonetem/utils/` — generic helpers. Do not move domain logic here.
+- `satgonetem/ports.py` — narrow protocols and default adapters for external
+  processes, containers, and gRPC. Inject a fake or alternate adapter instead
+  of calling the library directly.
 - `satgonetem/proto/` — generated protobuf/gRPC code. Do not hand-edit; change
   the `.proto` source and regenerate.
 

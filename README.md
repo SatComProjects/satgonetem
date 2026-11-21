@@ -37,6 +37,7 @@ SatGoNetem bridges orbital mechanics and Linux network emulation. It computes sa
 **Support**
 
 - [`docs/utils.md`](docs/utils.md) — Project builder, coverage/IP helpers, connection strategies, compatibility patch
+- [`docs/ports.md`](docs/ports.md) — External-boundary ports, adapters, and injection points
 
 **Development**
 

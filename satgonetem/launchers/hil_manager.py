@@ -43,11 +43,15 @@ import subprocess
 
 from pyroute2 import IPRoute
 
+from satgonetem.ports import CommandRunner, default_runner
+
 CLONE_NEWNET = 0x40000000
 HOST_NS_PATH = "/proc/1/ns/net"
 
 
-def _run_tc_batch(pid: int, commands: list[str]) -> None:
+def _run_tc_batch(
+    pid: int, commands: list[str], runner: CommandRunner = default_runner
+) -> None:
     """Run tc in batch mode inside the network namespace of pid.
 
     Args:
@@ -58,7 +62,7 @@ def _run_tc_batch(pid: int, commands: list[str]) -> None:
         RuntimeError: If tc exits with a non-zero return code.
     """
     batch_input = "\n".join(commands) + "\n"
-    r = subprocess.run(
+    r = runner.run(
         ["nsenter", f"--net=/proc/{pid}/ns/net", "tc", "-batch", "-"],
         input=batch_input,
         text=True,
@@ -69,7 +73,9 @@ def _run_tc_batch(pid: int, commands: list[str]) -> None:
         raise RuntimeError(r.stderr.strip())
 
 
-def _run_ip_batch(pid: int, commands: list[str]) -> None:
+def _run_ip_batch(
+    pid: int, commands: list[str], runner: CommandRunner = default_runner
+) -> None:
     """Run ip in batch mode inside the network namespace of pid.
 
     Args:
@@ -80,7 +86,7 @@ def _run_ip_batch(pid: int, commands: list[str]) -> None:
         RuntimeError: If ip exits with a non-zero return code.
     """
     batch_input = "\n".join(commands) + "\n"
-    r = subprocess.run(
+    r = runner.run(
         ["nsenter", f"--net=/proc/{pid}/ns/net", "ip", "-batch", "-"],
         input=batch_input,
         text=True,
@@ -128,6 +134,7 @@ class HILManager:
         gnd_capacity_kbps: int = 100_000,
         netem_limit: int = 1000,
         txqueuelen: int = 1000,
+        command_runner: CommandRunner | None = None,
     ) -> None:
         """
         Initialise the HIL manager.
@@ -147,6 +154,7 @@ class HILManager:
         self._gnd_capacity_kbps: int = gnd_capacity_kbps
         self._netem_limit: int = netem_limit
         self._txqueuelen: int = txqueuelen
+        self._command_runner: CommandRunner = command_runner or default_runner
         self._hil_bridges: dict[str, str] = {}
         self._hil_veths: dict[str, str] = {}
 
@@ -361,6 +369,7 @@ class HILManager:
                         f"link set dev {sat_iface}"
                         f" txqueuelen {self._txqueuelen}"
                     ],
+                    runner=self._command_runner,
                 )
             except RuntimeError as exc:
                 logging.warning(
@@ -379,6 +388,7 @@ class HILManager:
                     f"qdisc add dev {sat_iface} parent 1:1 handle 10: tbf"
                     f" rate {rate_mbit:.3f}mbit burst {burst_bytes}b limit {burst_bytes}b",
                 ],
+                runner=self._command_runner,
             )
         except RuntimeError as exc:
             logging.warning("HIL: qdisc setup failed on %s in %s: %s", sat_iface, sat_name, exc)
@@ -423,7 +433,7 @@ class HILManager:
             gnd_id: Numeric ID of the ground station node.
         """
         sat_iface = f"eth{gnd_id}"
-        r = subprocess.run(
+        r = self._command_runner.run(
             ["nsenter", f"--net=/proc/{sat_pid}/ns/net", "ip", "link", "delete", sat_iface],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -543,6 +553,7 @@ class HILManager:
                     f"qdisc change dev {sat_iface} parent 1:1 handle 10: tbf"
                     f" rate {rate_mbit:.3f}mbit burst {burst_bytes}b limit {burst_bytes}b",
                 ],
+                runner=self._command_runner,
             )
             logging.debug(
                 "HIL: updated %s in %s: delay=%dms rate=%dkbps",

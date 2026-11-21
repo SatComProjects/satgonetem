@@ -6,6 +6,7 @@ import time
 from typing import List, Optional
 
 from satgonetem.models import GroundStation, Interface, Link, Node, Satellite
+from satgonetem.ports import ProcessRunner, default_runner
 from satgonetem.routing import RoutingDaemon
 from satgonetem.services.topology_satcom import TopologyManager
 from satgonetem.utils.graph_shared_memory import GraphSharedMemory
@@ -102,11 +103,13 @@ class P4Daemon(RoutingDaemon):
         topology_manager: TopologyManager,
         p4_controller_path: str,
         shared_memory_name: str = "satgonetem_graph",
+        process_runner: ProcessRunner | None = None,
     ):
         super().__init__(topology_manager)
         self.graph_shared_memory = None
         self.p4_controller_path = p4_controller_path
         self.shared_memory_name = shared_memory_name
+        self._process_runner = process_runner or default_runner
         # Process handle for the controller
         self.p4_controller_process: Optional[subprocess.Popen] = None
         # Logger for controller output and events
@@ -170,7 +173,7 @@ class P4Daemon(RoutingDaemon):
         try:
             # Start the controller without a shell to avoid shell injection and allow
             # capturing stdout/stderr. Provide no stdin to avoid interactive sudo prompts.
-            proc = subprocess.Popen(
+            proc = self._process_runner.popen(
                 [script_path],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,

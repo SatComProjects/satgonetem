@@ -65,6 +65,7 @@ def launcher():
     instance._client = MagicMock()
     instance._request = SimpleNamespace(id="abc123")
     instance._channel = MagicMock()
+    instance._command_runner = MagicMock()
     return instance
 
 
@@ -100,11 +101,9 @@ def test_force_close_only_stops_and_removes_scoped_containers(launcher):
     client = launcher._client
     channel = launcher._channel
 
-    with patch(
-        "satgonetem.launchers.gonetem_launcher.subprocess.run",
-        side_effect=fake_run,
-    ) as mock_run:
-        launcher.force_close_project()
+    mock_run = launcher._command_runner.run
+    mock_run.side_effect = fake_run
+    launcher.force_close_project()
 
     ps_command = mock_run.call_args_list[0].args[0]
     assert ps_command == ["docker", "ps", "-a", "--format", "{{.ID}}\t{{.Names}}"]
@@ -127,10 +126,8 @@ def test_force_close_skips_docker_when_project_id_is_empty(launcher):
     client = launcher._client
     channel = launcher._channel
 
-    with patch(
-        "satgonetem.launchers.gonetem_launcher.subprocess.run"
-    ) as mock_run:
-        launcher.force_close_project()
+    mock_run = launcher._command_runner.run
+    launcher.force_close_project()
 
     mock_run.assert_not_called()
     client.ProjectClose.assert_not_called()
@@ -142,11 +139,9 @@ def test_force_close_still_closes_project_when_docker_ps_fails(launcher):
     client = launcher._client
     channel = launcher._channel
 
-    with patch(
-        "satgonetem.launchers.gonetem_launcher.subprocess.run",
-        return_value=ps_result,
-    ) as mock_run:
-        launcher.force_close_project()
+    mock_run = launcher._command_runner.run
+    mock_run.return_value = ps_result
+    launcher.force_close_project()
 
     assert mock_run.call_count == 1
     client.ProjectClose.assert_called_once_with(launcher._request)
@@ -229,11 +224,8 @@ def test_force_close_attempts_remove_even_when_stop_fails(launcher):
             return _completed(command, returncode=1, stderr="stop failed")
         return _completed(command)
 
-    with patch(
-        "satgonetem.launchers.gonetem_launcher.subprocess.run",
-        side_effect=fake_run,
-    ):
-        launcher.force_close_project()
+    launcher._command_runner.run.side_effect = fake_run
+    launcher.force_close_project()
 
     assert ["docker", "stop", "-t", "0", "id1"] in docker_calls
     assert ["docker", "rm", "id1"] in docker_calls
@@ -576,3 +568,44 @@ def test_update_links_rejects_missing_results(launcher):
 
     with pytest.raises(RuntimeError, match="1 result"):
         launcher.update_links(links)
+
+
+def test_get_client_uses_injected_grpc_factory():
+    channel = MagicMock()
+    client = MagicMock()
+    connection = SimpleNamespace(channel=channel, client=client)
+    factory = MagicMock()
+    factory.connect.return_value = connection
+
+    launcher = GoNetEmLauncher(
+        topology_manager=MagicMock(),
+        server_address="localhost:10110",
+        project_name="test-project",
+        client_factory=factory,
+    )
+
+    assert launcher._get_client() is client
+    factory.connect.assert_called_once_with("localhost:10110")
+    assert launcher._channel is channel
+    assert launcher._connection is connection
+
+
+def test_attach_containers_uses_injected_container_runtime():
+    runtime = MagicMock()
+    container = SimpleNamespace(attrs={"State": {"Pid": "4321"}})
+    runtime.get.return_value = container
+    node = SimpleNamespace(name="Sat0", container=None, container_pid=None)
+
+    launcher = GoNetEmLauncher(
+        topology_manager=MagicMock(),
+        server_address="localhost:10110",
+        project_name="test-project",
+        container_runtime=runtime,
+    )
+    launcher._attach_containers([node], "project-1")
+
+    runtime.get.assert_called_once_with("ntmproject-1.Sat0")
+    assert node.container is container
+    assert node.container_pid == 4321
+    assert node.grpc_client is launcher._client
+    assert node.project_id == "project-1"

@@ -365,3 +365,18 @@ class TestQueueLength:
         )
         assert netem_cmd.endswith("limit 5000")
 
+
+
+def test_delete_sat_veth_uses_injected_command_runner():
+    import subprocess
+    from unittest.mock import MagicMock
+
+    runner = MagicMock()
+    runner.run.return_value = subprocess.CompletedProcess(
+        args=[], returncode=0, stdout="", stderr=""
+    )
+    manager = HILManager({}, command_runner=runner)
+    manager._delete_sat_veth("Sat0", 1234, 4)
+
+    runner.run.assert_called_once()
+    assert runner.run.call_args.args[0][:2] == ["nsenter", "--net=/proc/1234/ns/net"]
