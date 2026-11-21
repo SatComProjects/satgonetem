@@ -20,6 +20,7 @@ import threading
 import time
 from typing import TYPE_CHECKING, Optional
 
+from satgonetem.services.simulation_timing import tick_delay
 from satgonetem.utils.constants import MAX_WORKERS
 from satgonetem.utils.utils import time_
 
@@ -155,8 +156,7 @@ class SimulationLoopMixin:
                     )
                 toc = time.perf_counter()
                 elapsed = toc - tic
-                delay = max(0.01, self.update_time * self.update_factor)
-                to_wait = max(0.01, delay - elapsed)
+                to_wait = tick_delay(self.update_time, self.update_factor, elapsed)
                 stop_evt.wait(timeout=to_wait)
         finally:
             self.set_running(False)

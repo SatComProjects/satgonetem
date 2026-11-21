@@ -11,6 +11,7 @@ import grpc
 
 from satgonetem.proto import netem_pb2
 from satgonetem.routing.registry import is_known_method
+from satgonetem.services.link_backend import LinkBackend
 from satgonetem.utils.constants import MAX_WORKERS, ROUTE_APPLY_WORKERS
 
 if TYPE_CHECKING:
@@ -53,6 +54,11 @@ def _collect_link_operation_lists(
 
 class LinkOpsMixin:
     """LinkOps functionality."""
+
+    def _link_backend(self) -> LinkBackend | None:
+        """Return the injected backend, falling back to the launcher."""
+        backend = getattr(self, "link_backend", None)
+        return backend if backend is not None else getattr(self, "launcher", None)
 
     def bulk_link_operations(
         self,
@@ -261,7 +267,7 @@ class LinkOpsMixin:
         Returns:
             ``(updated, errors)`` counted from the per-link results.
         """
-        launcher = getattr(self, "launcher", None)
+        launcher = LinkOpsMixin._link_backend(self)
         if launcher is None:
             logging.warning("launcher not set, skipping link update batch")
             return 0, 0
@@ -363,11 +369,12 @@ class LinkOpsMixin:
             self.hil_manager.teardown_link(link)
             link.to_delete = False
             return time.perf_counter() - start
-        if self.launcher is None:
+        launcher = LinkOpsMixin._link_backend(self)
+        if launcher is None:
             logging.warning("launcher not set, skipping link delete")
             return 0.0
         try:
-            self.launcher.delete_link(link)
+            launcher.delete_link(link)
             link.to_delete = False
             logging.debug(
                 "Deleted link %s -- %s", link.source.name, link.target.name
@@ -384,11 +391,12 @@ class LinkOpsMixin:
         if self.hil_manager is not None and self.hil_manager.is_hil_link(link):
             self.hil_manager.update_link(link)
             return time.perf_counter() - start
-        if self.launcher is None:
+        launcher = LinkOpsMixin._link_backend(self)
+        if launcher is None:
             logging.warning("launcher not set, skipping link update")
             return 0.0
         try:
-            self.launcher.update_link(link)
+            launcher.update_link(link)
             delay = max(int(link.delay), 1)
             logging.debug(
                 "Updated link %s -- %s with delay %d ms",
@@ -408,11 +416,12 @@ class LinkOpsMixin:
         if self.hil_manager is not None and self.hil_manager.is_hil_link(link):
             self.hil_manager.setup_link(link)
             return time.perf_counter() - start
-        if self.launcher is None:
+        launcher = LinkOpsMixin._link_backend(self)
+        if launcher is None:
             logging.warning("launcher not set, skipping link add")
             return 0.0
         try:
-            self.launcher.add_link(link)
+            launcher.add_link(link)
             delay = max(int(link.delay), 1)
             logging.debug(
                 "Added link %s -- %s with delay %d ms",

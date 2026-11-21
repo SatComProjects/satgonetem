@@ -16,7 +16,7 @@ import logging
 import os
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from typing import Any, ClassVar, Dict, List, Optional, Type, Union
 
 from sat_com_adapter.adapters import NetworkXAdapter
@@ -400,27 +400,7 @@ class TopologyManager(
                 file cannot be read.
         """
         if network_config is None:
-            network_config = NetworkConfig(
-                project_name=self.project_name,
-                update_time=self.update_time,
-                gnd_link_capacity=self.gnd_link_capacity,
-                isl_link_capacity=self.isl_link_capacity,
-                ground_object_link_capacity=self.ground_object_link_capacity,
-                link_netem_limit=self.link_netem_limit,
-                link_txqueuelen=self.link_txqueuelen,
-                protocol=self.protocol,
-                routing=self.routing,
-                satellite_image=self.satellite_image,
-                network_launcher=self.network_launcher,
-                gonetem_server=self.gonetem_server,
-                use_budget=self.use_budget,
-                ground_station_pool=self.ground_station_pool,
-                satellite_pool=self.satellite_pool,
-                user_terminal_pool=self.user_terminal_pool,
-                ground_station_prefix_len=self.ground_station_prefix_len,
-                satellite_prefix_len=self.satellite_prefix_len,
-                user_terminal_prefix_len=self.user_terminal_prefix_len,
-            )
+            network_config = self._network_config_from_instance()
 
         if self.simulation_property is not None:
             sim_prop_data = self.simulation_property.model_dump()
@@ -722,6 +702,15 @@ class TopologyManager(
             f"\033[92m=== Topology Manager Initialization Complete === [{end_time}] Duration: {end_time - start_time:.2f}s\033[0m"
         )
 
+    def _network_config_from_instance(self) -> NetworkConfig:
+        """Build a NetworkConfig from the current instance fields."""
+        values = {
+            field.name: getattr(self, field.name)
+            for field in fields(NetworkConfig)
+            if hasattr(self, field.name)
+        }
+        return NetworkConfig(**values)
+
     def _apply_network_config(self, config: NetworkConfig) -> None:
         """Apply a NetworkConfig to this instance's network attributes.
 
@@ -737,30 +726,9 @@ class TopologyManager(
         self.project_name += (
             f"_{int(time.time())}"  # Append timestamp to ensure uniqueness
         )
-        self.update_time = config.update_time
-        self.gnd_link_capacity = config.gnd_link_capacity
-        self.isl_link_capacity = config.isl_link_capacity
-        self.ground_object_link_capacity = config.ground_object_link_capacity
-        self.link_netem_limit = config.link_netem_limit
-        self.link_txqueuelen = config.link_txqueuelen
-        self.protocol = config.protocol
-        self.routing = config.routing
-        self.satellite_image = config.satellite_image
-        self.network_launcher = config.network_launcher
-        self.gonetem_server = config.gonetem_server
-        self.use_budget = config.use_budget
-        self.ground_station_pool = config.ground_station_pool
-        self.satellite_pool = config.satellite_pool
-        self.user_terminal_pool = config.user_terminal_pool
-        self.ground_station_prefix_len = config.ground_station_prefix_len
-        self.satellite_prefix_len = config.satellite_prefix_len
-        self.user_terminal_prefix_len = config.user_terminal_prefix_len
-        self.controller_veth_host = config.controller_veth_host
-        self.controller_veth_peer = config.controller_veth_peer
-        self.controller_host_ip = config.controller_host_ip
-        self.controller_subnet_prefix = config.controller_subnet_prefix
-        self.controller_bridge_name = config.controller_bridge_name
-        self.controller_node_iface_pattern = config.controller_node_iface_pattern
+        for field in fields(NetworkConfig):
+            if field.name != "project_name":
+                setattr(self, field.name, getattr(config, field.name))
 
     def load_config(self) -> None:
         """No-op: configuration is supplied at construction time via from_satcom()."""

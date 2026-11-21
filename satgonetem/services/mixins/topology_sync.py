@@ -8,15 +8,14 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import TYPE_CHECKING
 
-from sat_com_model.models import GroundStation as SatComGroundStation
 from sat_com_model.models import InterSatelliteLinkDirection
 from sat_com_model.models import Link as SatComLink
-from sat_com_model.models import Satellite as SatComSatellite
 
 from satgonetem.models.ground_station import GroundStation
 from satgonetem.models.link import Link
 from satgonetem.models.satellite import Satellite
 from satgonetem.services.mixins.simulation_loop import ensure_simulation_lock
+from satgonetem.services.topology_link_plan import build_link_key, removed_link_keys
 from satgonetem.utils.utils import distance_3d_km, distance_3d_km_many
 
 if TYPE_CHECKING:
@@ -217,7 +216,7 @@ class TopologySyncMixin:
         error_count += self._refresh_link_distances(distance_refresh_links)
 
         removed_count = 0
-        for key in self.links.keys() - current_keys:
+        for key in removed_link_keys(self.links.keys(), current_keys):
             self.links[key].to_remove = True
             removed_count += 1
 
@@ -449,98 +448,8 @@ class TopologySyncMixin:
         return link
 
     def _build_link_key(self, source: "Node", target: "Node") -> frozenset:
-        """Build a unique frozenset key identifying a link between two nodes.
-
-        Accepts either SatGoNeTem nodes (Satellite/GroundStation) or
-        sat_com_model topology objects (SatComSatellite/SatComGroundStation),
-        so the same method can be used during both initial sync and runtime
-        update passes.
-
-        Args:
-            source: The link source, either a local node or a satcom object.
-            target: The link target, either a local node or a satcom object.
-
-        Returns:
-            A frozenset of two name strings that uniquely identifies the link
-            regardless of direction.
-
-        Raises:
-            ValueError: If source/target are not a recognised node type pair.
-        """
-        if isinstance(source, SatComSatellite) and isinstance(target, SatComSatellite):
-            return frozenset(
-                (
-                    "Sat" + str(getattr(source, "topology_uniq_id", None)),
-                    "Sat" + str(getattr(target, "topology_uniq_id", None)),
-                )
-            )
-        elif isinstance(source, SatComSatellite) and isinstance(
-            target, SatComGroundStation
-        ):
-            return frozenset(
-                (
-                    "Sat" + str(getattr(source, "topology_uniq_id", None)),
-                    "Gnd" + str(getattr(target, "topology_uniq_id", None)),
-                )
-            )
-        elif isinstance(source, SatComGroundStation) and isinstance(
-            target, SatComSatellite
-        ):
-            return frozenset(
-                (
-                    "Gnd" + str(getattr(source, "topology_uniq_id", None)),
-                    "Sat" + str(getattr(target, "topology_uniq_id", None)),
-                )
-            )
-        elif isinstance(source, SatComGroundStation) and isinstance(
-            target, SatComGroundStation
-        ):
-            return frozenset(
-                (
-                    "Gnd" + str(getattr(source, "topology_uniq_id", None)),
-                    "Gnd" + str(getattr(target, "topology_uniq_id", None)),
-                )
-            )
-        elif isinstance(source, Satellite) and isinstance(target, Satellite):
-            return frozenset(
-                (
-                    "Sat"
-                    + str(getattr(source.satcom_object, "topology_uniq_id", None)),
-                    "Sat"
-                    + str(getattr(target.satcom_object, "topology_uniq_id", None)),
-                )
-            )
-        elif isinstance(source, Satellite) and isinstance(target, GroundStation):
-            return frozenset(
-                (
-                    "Sat"
-                    + str(getattr(source.satcom_object, "topology_uniq_id", None)),
-                    "Gnd"
-                    + str(getattr(target.satcom_object, "topology_uniq_id", None)),
-                )
-            )
-        elif isinstance(source, GroundStation) and isinstance(target, Satellite):
-            return frozenset(
-                (
-                    "Gnd"
-                    + str(getattr(source.satcom_object, "topology_uniq_id", None)),
-                    "Sat"
-                    + str(getattr(target.satcom_object, "topology_uniq_id", None)),
-                )
-            )
-        elif isinstance(source, GroundStation) and isinstance(target, GroundStation):
-            return frozenset(
-                (
-                    "Gnd"
-                    + str(getattr(source.satcom_object, "topology_uniq_id", None)),
-                    "Gnd"
-                    + str(getattr(target.satcom_object, "topology_uniq_id", None)),
-                )
-            )
-        else:
-            raise ValueError(
-                "Source and target must be either Satellite or GroundStation"
-            )
+        """Return a direction-independent link key."""
+        return build_link_key(source, target)
 
     def update_simulation(self, advance_timestep: bool = True) -> None:
         """

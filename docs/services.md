@@ -12,6 +12,10 @@ Use this page when you need to:
 - write a custom routing daemon or connection strategy;
 - decide which mixin method to call for a lifecycle operation.
 
+Link identity/diff planning lives in `services.topology_link_plan`; simulation
+tick timing lives in `services.simulation_timing`; the `LinkBackend` protocol
+in `services.link_backend` lets tests replace the launcher.
+
 ## Composition
 
 ```python

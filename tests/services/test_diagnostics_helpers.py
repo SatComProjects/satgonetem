@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -287,3 +287,146 @@ def test_open_bash_terminal_uses_injected_process_runner(
     command = diagnostics_host.process_runner.popen.call_args.args[0]
     assert command[0] == "xterm"
     assert "satgonetem.utils.node_terminal_bridge" in command
+
+
+def _node_host():
+    host = _DiagnosticsHost()
+    sat = host.add_satellite("Sat0")
+    sat.container = object()
+    sat.execute_command = MagicMock(return_value="")
+    add_interface(sat, "Sat0.0", ipv4="10.0.0.1")
+    host.gonetem_status = True
+    host.get_gonetem_status = lambda: host.gonetem_status
+    return host, sat
+
+
+def test_launch_tcpdump_starts_one_process_per_interface(tmp_path):
+
+    host, sat = _node_host()
+
+    host.launch_tcpdump_on_satellites(
+        dump_dir=str(tmp_path), satellites=[sat]
+    )
+
+    command = sat.execute_command.call_args.args[0]
+    assert "tcpdump -i eth0" in command
+    assert str(tmp_path) in command
+    assert sat.execute_command.call_args.kwargs["detach"] is True
+
+
+def test_launch_tcpdump_skips_nodes_without_containers(caplog):
+    host = _DiagnosticsHost()
+    sat = host.add_satellite("Sat0")
+    sat.container = None
+
+    host.launch_tcpdump_on_satellites(satellites=[sat])
+
+    assert "skipping tcpdump" in caplog.text
+
+
+def test_is_running_tcpdump_handles_success_and_failure():
+
+    host, sat = _node_host()
+    sat.execute_command.return_value = "123"
+    assert host.is_running_tcpdump() is True
+
+    sat.execute_command.side_effect = RuntimeError("not running")
+    assert host.is_running_tcpdump() is False
+
+
+def test_enable_and_disable_tcpdump_respect_status_and_kill():
+    from unittest.mock import patch
+
+    host, sat = _node_host()
+    host.gonetem_status = False
+    host.enable_tcpdump_on_satellites(satellites=[sat])
+    host.disable_tcpdump_on_satellites(satellites=[sat])
+    sat.execute_command.assert_not_called()
+
+    host.gonetem_status = True
+    with patch.object(host, "is_running_tcpdump", return_value=False):
+        with patch.object(host, "launch_tcpdump_on_satellites") as launch:
+            host.enable_tcpdump_on_satellites(satellites=[sat])
+            launch.assert_called_once_with(dump_dir="/tmp/dump", satellites=[sat])
+
+    host.disable_tcpdump_on_satellites(satellites=[sat])
+    assert sat.execute_command.call_args.args[0] == "pkill tcpdump"
+
+
+def test_execute_command_on_resolves_nodes_and_reports_errors():
+
+    host, sat = _node_host()
+    sat.execute_command.return_value = "ok"
+
+    assert host.execute_command_on("Sat0", "uptime") == {
+        "output": "ok",
+        "error": "",
+    }
+
+    sat.execute_command.side_effect = RuntimeError("boom")
+    assert host.execute_command_on("Sat0", "uptime")["error"] == "boom"
+    assert "not found" in host.execute_command_on("Sat99", "uptime")["error"]
+    assert "Invalid node name" in host.execute_command_on("bad", "uptime")["error"]
+
+    sat.container = None
+    assert "no container" in host.execute_command_on("Sat0", "uptime")["error"]
+
+
+def test_monitor_links_maps_interface_usage_to_links(monkeypatch):
+    from types import SimpleNamespace
+
+    from tests.support import make_link
+
+    host = _DiagnosticsHost(project_name="proj")
+    sat0 = host.add_satellite("Sat0")
+    sat1 = host.add_satellite("Sat1")
+    sat0.satcom_object = SimpleNamespace(topology_uniq_id=0)
+    sat1.satcom_object = SimpleNamespace(topology_uniq_id=1)
+    link = make_link(sat0, sat1)
+    host.links = {frozenset(("Sat0", "Sat1")): link}
+    host._build_link_key = lambda source, target: frozenset(("Sat0", "Sat1"))
+
+    monkeypatch.setattr(
+        host,
+        "_process_interface_file",
+        lambda path: {"proj.Sat1": 1234} if path.endswith("Sat0") else {},
+    )
+
+    result = host.monitor_links(debug=True)
+
+    assert result == [
+        {
+            "src": "Sat0",
+            "dst": "Sat1",
+            "value": 1234,
+            "type": link.type,
+        }
+    ]
+    assert link.tx == 1234
+    assert link.rx == 0
+
+
+def test_node_terminal_sends_resizes_reads_and_closes():
+    from types import SimpleNamespace
+
+    from satgonetem.services.node_terminal import NodeTerminal
+
+    class FakeStream:
+        def __iter__(self):
+            yield SimpleNamespace(code=0, data=b"stdout")  # STDOUT
+            yield None  # sentinel? recv loop only iterates responses
+
+    client = MagicMock()
+    client.NodeExec.return_value = iter(
+        [SimpleNamespace(code=0, data=b"hello")]
+    )
+    terminal = NodeTerminal(client, "project", "Sat0")
+
+    with terminal:
+        terminal.send("ls\n")
+        terminal.resize(80, 24)
+        code, data = terminal.read(timeout=0)
+
+    assert code == "stdout"
+    assert data == b"hello"
+    terminal.close()

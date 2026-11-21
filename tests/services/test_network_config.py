@@ -164,3 +164,27 @@ class TestSampleTopologies:
         config = NetworkConfig(**payload)
         assert 0 <= config.link_netem_limit <= MAX_LINK_QUEUE_PACKETS
         assert 0 <= config.link_txqueuelen <= MAX_LINK_QUEUE_PACKETS
+
+
+class TestNetworkConfigSingleSource:
+    def test_custom_controller_fields_survive_roundtrip(self, topology, tmp_path):
+        config = NetworkConfig(
+            project_name="custom",
+            controller_veth_host="mgmt0",
+            controller_veth_peer="mgmt1",
+            controller_host_ip="10.255.0.1",
+            controller_subnet_prefix=24,
+            controller_bridge_name="MgmtBridge",
+            controller_node_iface_pattern="mgmt{node_id}",
+        )
+        path = tmp_path / "custom.json"
+
+        topology.to_file(str(path), config)
+        reloaded = TopologyManager.from_file(str(path))
+
+        assert reloaded.controller_veth_host == "mgmt0"
+        assert reloaded.controller_veth_peer == "mgmt1"
+        assert reloaded.controller_host_ip == "10.255.0.1"
+        assert reloaded.controller_subnet_prefix == 24
+        assert reloaded.controller_bridge_name == "MgmtBridge"
+        assert reloaded.controller_node_iface_pattern == "mgmt{node_id}"

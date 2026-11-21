@@ -1,6 +1,6 @@
 # 0006 — Services and TopologyManager
 
-- Status: Proposed
+- Status: Partially implemented
 - Date: 2026-11-21
 - Depends on: 0001, 0002, 0003
 - Supersedes: —
@@ -73,3 +73,22 @@ These require explicit decisions before changing code:
 uv run --frozen --extra dev pytest -q tests/services tests/models
 uv run --frozen --extra dev pytest -q --cov=satgonetem/services --cov-fail-under=70
 ```
+
+## Implementation result (2026-11-21)
+
+- Extracted link identity/diff helpers to `services/topology_link_plan.py` and
+  wired `TopologySyncMixin` to them; added local-node type-matrix tests.
+- Extracted simulation tick timing to `services/simulation_timing.py`.
+- Added the `LinkBackend` protocol; `LinkOpsMixin` prefers an injected
+  `link_backend` and falls back to the launcher.
+- Made `NetworkConfig` copying single-source through dataclass fields for both
+  persistence and manager application; custom controller fields now round-trip.
+- Moved the NodeExec terminal client to `services/node_terminal.py`, with the
+  diagnostics module re-exporting it.
+- Added diagnostics tcpdump, monitor, command-execution, and terminal tests.
+- Coverage: controller 77%, diagnostics 78%, traffic_testing 100%; services
+  total 75%.
+- Sub-phase 5b (`Node` container/namespace ports and `Link` capacity-strategy
+  injection) is **not implemented** and remains the next services task.
+- Known behavior questions (ignored controller interface pattern in old code,
+  failed-operation stats) remain separate behavior specs.
