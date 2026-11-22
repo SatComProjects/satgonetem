@@ -72,8 +72,13 @@ def teme_to_geodetic(
         p - WGS84_E2 * WGS84_A * math.cos(th) ** 3,
     )
     lon = math.atan2(ye, xe)
-    n = WGS84_A / math.sqrt(1 - WGS84_E2 * math.sin(lat) ** 2)
-    alt_km = p / math.cos(lat) - n
+    # Stable Bowring altitude: algebraically equal to p / cos(lat) - N, but it
+    # has no 1 / cos(lat) singularity, so exact-polar input stays finite.
+    alt_km = (
+        p * math.cos(lat)
+        + ze * math.sin(lat)
+        - WGS84_A * math.sqrt(1 - WGS84_E2 * math.sin(lat) ** 2)
+    )
 
     return math.degrees(lat), math.degrees(lon), alt_km * 1000.0
 
