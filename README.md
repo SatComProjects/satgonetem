@@ -419,8 +419,8 @@ Known follow-ups and intentional exceptions are tracked here and in
 2. Tag the release commit and push the tag:
 
    ```bash
-   git tag -a v0.3.0 -m "SatGoNetem 0.3.0"
-   git push origin v0.3.0
+   git tag -a v0.3.1 -m "SatGoNetem 0.3.1"
+   git push origin v0.3.1
    ```
 
 3. `release.yml` verifies that the tag matches `pyproject.toml`, builds `dist/`,
@@ -428,7 +428,7 @@ Known follow-ups and intentional exceptions are tracked here and in
 4. Install a release directly from GitHub:
 
    ```bash
-   pip install "satgonetem @ git+https://github.com/SatComProjects/satgonetem@v0.3.0"
+   pip install "satgonetem @ git+https://github.com/SatComProjects/satgonetem@v0.3.1"
    ```
 
 `release.yml` does not publish to PyPI. `pyproject.toml` depends on
