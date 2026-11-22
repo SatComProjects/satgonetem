@@ -32,7 +32,12 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
 def _link_values(samples: list[dict[str, Any]], key: str) -> list[float]:
     values: list[float] = []
     for sample in samples:
-        for link in sample.get("links", []):
+        links = sample.get("links")
+        if not isinstance(links, list):
+            continue
+        for link in links:
+            if not isinstance(link, dict):
+                continue
             try:
                 values.append(float(link.get(key, 0) or 0))
             except (TypeError, ValueError):
@@ -83,7 +88,10 @@ def build_report(run_dir: str | Path) -> dict[str, Any]:
     if not manifest_path.is_file():
         raise FileNotFoundError(f"Run manifest not found: {manifest_path}")
 
-    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    try:
+        manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    except (yaml.YAMLError, UnicodeDecodeError) as exc:
+        raise ValueError(f"Run manifest is not valid YAML: {manifest_path}") from exc
     if not isinstance(manifest, dict):
         raise ValueError(f"Run manifest must be a mapping: {manifest_path}")
 
