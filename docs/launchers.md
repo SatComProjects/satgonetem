@@ -55,7 +55,7 @@ class NetworkLauncher(ABC):
 | `start_containers(nodes, workers=64, progress_cb=None, controller=False, links=None)` | Provision containers/processes; returns `(container_time, link_time)` |
 | `wire_links(links, workers=64, progress_cb=None)` | Create veths/bridges and apply initial qdiscs |
 | `close_project(progress_cb=None)` | Tear down all containers and links |
-| `force_close_project()` | Best-effort teardown after a failed startup |
+| `force_close_project()` | Best-effort teardown after a failed startup; returns whether cleanup completed |
 
 ### Per-tick link methods
 
@@ -232,14 +232,17 @@ channel, and clears the client. It is a no-op if no project is open.
 3. `docker stop -t 0` and `docker rm` those containers.
 4. Call `ProjectClose`, drain the server-streaming response with a 10-second
    deadline (`FORCE_CLOSE_TIMEOUT_SECONDS`), and close the channel. Draining
-   lets the server finish the close before the transport disappears; success
-   is reported only after the stream drains without error.
+   lets the server finish the close before the transport disappears. The RPC
+   is skipped when the client was already cleared by a failed
+   `close_project()`; container cleanup still runs from the retained project
+   id.
 
 It is used by `start_gonetem()` after a failed launch and by
 `TopologyManager.force_stop_gonetem()`. When the project ID is empty,
 container cleanup is skipped rather than risking a host-wide match. The method
-is best-effort: Docker and RPC failures are logged rather than raised, so
-callers must not assume the project closed cleanly.
+is best-effort and returns `bool`: Docker and RPC failures are logged rather
+than raised, and `False` means at least one cleanup step failed (or there was
+nothing it could clean), so callers must not assume the project closed cleanly.
 
 ## Using the launcher directly
 
