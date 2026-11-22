@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from satgonetem.launchers.gonetem_cleanup import FORCE_CLOSE_TIMEOUT_SECONDS
 from satgonetem.launchers.gonetem_launcher import (
     LINK_UPDATE_CHUNK_SIZE,
     GoNetEmLauncher,
@@ -117,7 +118,9 @@ def test_force_close_only_stops_and_removes_scoped_containers(launcher):
         "id3" not in command and "id4" not in command for command in docker_calls
     )
 
-    client.ProjectClose.assert_called_once_with(launcher._request)
+    client.ProjectClose.assert_called_once_with(
+        launcher._request, timeout=FORCE_CLOSE_TIMEOUT_SECONDS
+    )
     channel.close.assert_called_once()
     assert launcher._client is None
     assert launcher._channel is None
@@ -146,7 +149,9 @@ def test_force_close_still_closes_project_when_docker_ps_fails(launcher):
     launcher.force_close_project()
 
     assert mock_run.call_count == 1
-    client.ProjectClose.assert_called_once_with(launcher._request)
+    client.ProjectClose.assert_called_once_with(
+        launcher._request, timeout=FORCE_CLOSE_TIMEOUT_SECONDS
+    )
     channel.close.assert_called_once()
 
 

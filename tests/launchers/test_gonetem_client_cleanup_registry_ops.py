@@ -9,6 +9,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from satgonetem.launchers.gonetem_cleanup import FORCE_CLOSE_TIMEOUT_SECONDS
 from satgonetem.launchers.gonetem_launcher import GoNetEmLauncher
 from satgonetem.launchers.registry import (
     available_launchers,
@@ -186,6 +187,61 @@ def test_force_close_logs_project_close_failure_and_closes_transport(caplog):
     assert launcher._connection is None
     assert launcher._channel is None
     assert launcher._client is None
+
+
+def test_force_close_drains_stream_before_closing_transport():
+    launcher = _launcher()
+    launcher._client = MagicMock()
+    launcher._command_runner = MagicMock()
+    launcher._command_runner.run.return_value = _completed()
+    launcher._request = netem_pb2.ProjectRequest(id="prj")
+    channel = launcher._channel = MagicMock()
+    events = []
+
+    def stream():
+        events.append("first")
+        yield netem_pb2.ProjectCloseMsg(
+            code=netem_pb2.ProjectCloseMsg.NODE_COUNT, total=1
+        )
+        events.append("second")
+        yield netem_pb2.ProjectCloseMsg(code=netem_pb2.ProjectCloseMsg.NODE_CLOSE)
+        events.append("exhausted")
+
+    launcher._client.ProjectClose.return_value = stream()
+    channel.close.side_effect = lambda: events.append("transport-closed")
+    client = launcher._client
+
+    launcher.force_close_project()
+
+    assert events == ["first", "second", "exhausted", "transport-closed"]
+    client.ProjectClose.assert_called_once_with(
+        launcher._request, timeout=FORCE_CLOSE_TIMEOUT_SECONDS
+    )
+    assert launcher._client is None
+    assert launcher._channel is None
+
+
+def test_force_close_still_closes_transport_when_stream_raises(caplog):
+    launcher = _launcher()
+    launcher._client = MagicMock()
+    launcher._command_runner = MagicMock()
+    launcher._command_runner.run.return_value = _completed()
+    launcher._request = netem_pb2.ProjectRequest(id="prj")
+    channel = launcher._channel = MagicMock()
+
+    def stream():
+        yield None
+        raise RuntimeError("stream exploded")
+
+    launcher._client.ProjectClose.return_value = stream()
+
+    with caplog.at_level(logging.ERROR):
+        launcher.force_close_project()
+
+    assert "force_close_project failed: stream exploded" in caplog.text
+    channel.close.assert_called_once()
+    assert launcher._client is None
+    assert launcher._channel is None
 
 
 # Registry
