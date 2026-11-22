@@ -49,6 +49,10 @@ CLONE_NEWNET = 0x40000000
 HOST_NS_PATH = "/proc/1/ns/net"
 
 
+class _NamespaceRestoreError(RuntimeError):
+    """Raised when a thread cannot return to the host network namespace."""
+
+
 def _run_tc_batch(
     pid: int, commands: list[str], runner: CommandRunner = default_runner
 ) -> None:
@@ -237,6 +241,10 @@ class HILManager:
 
         Returns:
             True on success. False if the veth could not be created.
+
+        Raises:
+            _NamespaceRestoreError: If the host network namespace cannot be
+                restored. The veth pair is deleted before the error propagates.
         """
         sat_iface = f"eth{gnd_id}"
         host_iface = f"hil{gnd_id}"
@@ -245,6 +253,8 @@ class HILManager:
         saved_ns = open("/proc/self/ns/net", "rb")  # noqa: SIM115 - fd must stay open across namespaces
         entered_satellite_ns = False
         restored_host_ns = False
+        veth_created = False
+        succeeded = False
         try:
             with open(f"/proc/{sat_pid}/ns/net", "rb") as ns_fd:
                 if libc.setns(ns_fd.fileno(), CLONE_NEWNET) != 0:
@@ -263,6 +273,7 @@ class HILManager:
                     kind="veth",
                     peer={"ifname": host_iface, "net_ns_fd": HOST_NS_PATH},
                 )
+                veth_created = True
                 lnks = ipr.link("get", ifname=sat_iface)
                 if lnks:
                     ipr.link("set", index=lnks[0]["index"], state="up")
@@ -273,7 +284,10 @@ class HILManager:
                     sat_name,
                     sat_pid,
                 )
-                return False
+                raise _NamespaceRestoreError(
+                    "HIL: failed to restore host network namespace for "
+                    f"{sat_name} (pid {sat_pid})"
+                )
             restored_host_ns = True
 
             with IPRoute() as ipr:
@@ -288,8 +302,13 @@ class HILManager:
                 sat_name,
                 gnd_id,
             )
+            succeeded = True
             return True
 
+        except _NamespaceRestoreError:
+            # Fatal: this thread may still be inside the container namespace,
+            # so the caller must not continue as if the operation succeeded.
+            raise
         except Exception as exc:
             logging.error(
                 "HIL: failed to create veth for %s<->Gnd%d: %s",
@@ -299,20 +318,24 @@ class HILManager:
             )
             return False
         finally:
-            # Restore only if the namespace switch succeeded and was not already
-            # undone on the success path. A failed restore is dangerous to
-            # ignore: this process would keep operating in the container ns.
-            if (
-                entered_satellite_ns
-                and not restored_host_ns
-                and libc.setns(saved_ns.fileno(), CLONE_NEWNET) != 0
-            ):
-                logging.error(
-                    "HIL: failed to restore host network namespace for %s (pid %d)",
-                    sat_name,
-                    sat_pid,
-                )
-            saved_ns.close()
+            try:
+                # Retry the restore once; a second failure is logged here but
+                # the restore error still propagates from the code above.
+                if (
+                    entered_satellite_ns
+                    and not restored_host_ns
+                    and libc.setns(saved_ns.fileno(), CLONE_NEWNET) != 0
+                ):
+                    logging.error(
+                        "HIL: failed to restore host network namespace for %s (pid %d)",
+                        sat_name,
+                        sat_pid,
+                    )
+                # Any failure after the pair was added must not leak it.
+                if veth_created and not succeeded:
+                    self._delete_sat_veth(sat_name, sat_pid, gnd_id)
+            finally:
+                saved_ns.close()
 
     def _create_bridge(self, gnd_name: str, gnd_id: int) -> bool:
         """
