@@ -681,6 +681,8 @@ class SRMPLSDaemon(RoutingDaemon):
 
         all_sats = list(self.topology.satellites.values())
         all_gs = list(self.topology.ground_stations.values())
+        if not all_sats:
+            return 0
         workers = min(32, (os.cpu_count() or 4) * 4, len(all_sats))
 
         def install_sr_forwarding(sat: Satellite) -> bool:
@@ -805,6 +807,9 @@ class SRMPLSDaemon(RoutingDaemon):
         if self._label_manager is None:
             return 0
 
+        if not self.topology.ground_stations:
+            return 0
+
         workers = min(
             32,
             (os.cpu_count() or 4) * 4,
@@ -876,6 +881,9 @@ class SRMPLSDaemon(RoutingDaemon):
             Number of satellites whose routes could not be installed.
         """
         if self._label_manager is None:
+            return 0
+
+        if not self.topology.satellites:
             return 0
 
         workers = min(
