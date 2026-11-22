@@ -106,7 +106,7 @@ class Iperf3Flow(ThreadedFlow):
         """Reserve this flow's exclusive server port on first use."""
         with self._port_lock:
             if self._port is None:
-                self._port = iperf3_ports._IPERF3_PORT_ALLOCATOR.allocate()
+                self._port = iperf3_ports._allocate_port()
             return self._port
 
     def _stop_process(self) -> None:
@@ -317,4 +317,4 @@ class Iperf3Flow(ThreadedFlow):
                 port = self._port
                 self._port = None
             if port is not None:
-                iperf3_ports._IPERF3_PORT_ALLOCATOR.release(port)
+                iperf3_ports._release_port(port)
