@@ -9,6 +9,7 @@ from satgonetem.services.mixins.network_lifecycle import (
     _FLOW_STOP_TIMEOUT_SEC,
     NetworkLifecycleMixin,
 )
+from satgonetem.utils.constants import MAX_WORKERS
 
 
 class DummyTopology(NetworkLifecycleMixin):
@@ -145,6 +146,38 @@ def test_force_stop_resets_state_when_force_close_raises():
 
     launcher.force_close_project.assert_called_once_with()
     assert_state_reset(topology)
+
+
+def test_force_stop_removes_routing_daemon_and_clears_project_handles():
+    topology = DummyTopology()
+    topology.routing_initiated = True
+    topology.routing_daemon = daemon = MagicMock()
+    topology.project_id = "project-1"
+    topology.client = MagicMock()
+    topology.request = MagicMock()
+    topology.launcher = MagicMock()
+
+    force_stop(topology)
+
+    daemon.remove.assert_called_once_with(max_workers=MAX_WORKERS)
+    assert topology.routing_daemon is None
+    assert topology.project_id is None
+    assert topology.client is None
+    assert topology.request is None
+    assert_state_reset(topology)
+
+
+def test_force_stop_clears_routing_state_when_daemon_removal_fails(caplog):
+    topology = DummyTopology()
+    topology.routing_initiated = True
+    topology.routing_daemon = daemon = MagicMock()
+    daemon.remove.side_effect = RuntimeError("route removal failed")
+
+    force_stop(topology)
+
+    assert "route removal failed" in caplog.text
+    assert topology.routing_daemon is None
+    assert topology.routing_initiated is False
 
 
 def test_force_stop_resets_state_when_hil_teardown_raises():

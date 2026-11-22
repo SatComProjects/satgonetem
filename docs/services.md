@@ -302,10 +302,11 @@ It may raise a HIL teardown error after the rest of the teardown has completed,
 even when the project close also failed. If both `close_project()` and the
 force-close fallback fail, `launcher` and the project handles are retained and
 the close error is raised after cleanup so the caller can retry
-`stop_gonetem()`. `force_stop_gonetem()` performs the loop/flow/HIL teardown
-with `force_close_project()`, emits a `ResourceWarning`, and always clears the
-launcher and status flags without the close-retry retention. It is meant for
-recovery.
+`stop_gonetem()`. `force_stop_gonetem()` performs the loop/flow teardown,
+removes the routing daemon best-effort, then runs HIL teardown and
+`force_close_project()`. It emits a `ResourceWarning` and always clears the
+launcher, project handles (`project_id`, `client`, `request`), routing daemon,
+and status flags without the close-retry retention. It is meant for recovery.
 
 `set_ip_addresses(satellites=True, ground_stations=True)` requires
 `address_plan` to exist. It calls `set_ipv4s_for_all_nodes()` and returns the

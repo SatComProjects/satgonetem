@@ -300,6 +300,8 @@ class NetworkLifecycleMixin:
             except Exception as exc:
                 logging.error("Failed to stop traffic flows during force stop: %s", exc)
 
+            self._stop_routing_daemon()
+
             if self.hil_manager is not None:
                 try:
                     self.hil_manager.teardown_all()
@@ -319,6 +321,10 @@ class NetworkLifecycleMixin:
         finally:
             # A failed force stop must not leave stale state behind.
             self.launcher = None
+            self.routing_daemon = None
+            self.project_id = None
+            self.client = None
+            self.request = None
             self.set_status(False)
             self.set_gonetem_status(False)
             self.set_routing_initiated(False)
