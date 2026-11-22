@@ -402,6 +402,23 @@ def test_remove_stops_controller_and_releases_shared_memory(daemon):
     assert daemon.p4_controller_process is None
 
 
+def test_remove_with_node_does_not_tear_down_shared_controller(daemon, caplog):
+    graph = MagicMock()
+    process = FakeProcess()
+    daemon.graph_shared_memory = graph
+    daemon.p4_controller_process = process
+
+    with caplog.at_level(logging.WARNING):
+        daemon.remove(make_satellite("Sat0"))
+
+    assert "does not support per-node route removal" in caplog.text
+    assert process.terminate_calls == 0
+    assert graph.close.call_count == 0
+    assert graph.unlink.call_count == 0
+    assert daemon.graph_shared_memory is graph
+    assert daemon.p4_controller_process is process
+
+
 def test_start_p4_controller_uses_injected_process_runner(
     topology, tmp_path, monkeypatch
 ):

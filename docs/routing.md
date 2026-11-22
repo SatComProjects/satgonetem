@@ -185,6 +185,9 @@ picked up automatically.
   `readiness_probe` callable for a different health check. On startup failure
   the daemon stops the controller, drains the background output readers, and
   logs the collected stderr so early-exit diagnostics are preserved.
+  `remove()` without a node stops the controller and releases the shared graph
+  segment. Per-node removal is unsupported because P4 uses one controller and
+  one global segment; `remove(node)` logs a warning and is a no-op.
 
 ---
 

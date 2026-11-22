@@ -341,8 +341,9 @@ header. There is no cross-process locking; consumers should poll `version`.
 
 `P4Daemon` owns a segment named `satgonetem_graph` by default; the name can be
 overridden with the `shared_memory_name` constructor argument. Re-initializing
-the daemon, failing to start the controller, or calling `remove()` closes and
-unlinks the owned segment.
+the daemon, failing to start the controller, or calling `remove()` without a
+node closes and unlinks the owned segment. `remove(node)` is a documented
+no-op because the controller and graph segment are global to the topology.
 
 `P4Daemon.update()` exports only links that are active and not pending removal.
 It is a logged no-op before initialization (or after a failed initialization

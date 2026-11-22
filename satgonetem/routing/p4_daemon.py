@@ -354,5 +354,23 @@ class P4Daemon(RoutingDaemon):
         self.graph_shared_memory.write_edges(edges)
 
     def remove(self, node: "Node | None" = None, max_workers: int = 4) -> None:
+        """Tear down the controller and graph segment, or ignore a node scope.
+
+        P4Daemon uses one controller and one global graph segment for the whole
+        topology, so it cannot remove routes for a single node in isolation.
+        When ``node`` is provided, the request is a documented no-op with a
+        warning. When ``node`` is None, the controller is stopped and the owned
+        graph segment is released.
+
+        Args:
+            node: Unsupported per-node scope; only None is acted on.
+            max_workers: Maximum number of worker threads (unused).
+        """
+        if node is not None:
+            self.logger.warning(
+                "P4Daemon does not support per-node route removal; "
+                "call remove() without a node for full teardown"
+            )
+            return
         self.stop_p4_controller()
         self._release_graph_shared_memory()
