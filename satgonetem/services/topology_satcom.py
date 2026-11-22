@@ -57,6 +57,10 @@ from satgonetem.utils.project_builder import (
 # accepted here is never rejected by the server.
 MAX_LINK_QUEUE_PACKETS = 1_000_000
 
+# Serialised simulation dates must use the format accepted by
+# satgonetem.utils.project_fixtures.create_empty_project() on restore.
+_RUNTIME_DATE_FORMAT = "%d/%m/%Y %H:%M:%S"
+
 
 @dataclass
 class NetworkConfig:
@@ -278,8 +282,12 @@ class TopologyManager(
             "simulation_name": getattr(
                 self.simulation_manager, "project_name", "Constellation"
             ),
-            "start_date": self.simulation_manager.time_manager.start_date.isoformat(),
-            "end_date": self.simulation_manager.time_manager.end_date.isoformat(),
+            "start_date": self.simulation_manager.time_manager.start_date.strftime(
+                _RUNTIME_DATE_FORMAT
+            ),
+            "end_date": self.simulation_manager.time_manager.end_date.strftime(
+                _RUNTIME_DATE_FORMAT
+            ),
             "satellites": [],
             "ground_stations": [],
             "user_terminals": [],
