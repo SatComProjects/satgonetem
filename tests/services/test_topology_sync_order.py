@@ -50,6 +50,25 @@ def _topology_with_real_tick(current_time_step: int = 3):
     return topology, time_manager
 
 
+def test_update_simulation_records_last_link_operation_stats():
+    topology = MagicMock()
+    topology.simulation_manager = object()
+    topology.current_time_step = 1
+    topology.links = {}
+    topology._sync_links.return_value = {
+        "links_to_add": [],
+        "links_to_update": [],
+        "links_to_remove": [],
+    }
+    topology.bulk_link_operations.return_value = dict(_EMPTY_LINK_STATS)
+
+    TopologySyncMixin.update_simulation(topology, advance_timestep=False)
+
+    assert topology.last_link_operation_stats["added_count"] == 0
+    assert topology.last_link_operation_stats["updated_count"] == 0
+    assert topology.last_link_operation_stats["deleted_count"] == 0
+
+
 def test_update_simulation_deletes_before_adding_links():
     stale = SimpleNamespace(to_remove=True)
     topology = MagicMock()
