@@ -1,6 +1,8 @@
 # SatGoNetem
 
 [![CI](https://github.com/SatComProjects/satgonetem/actions/workflows/ci.yml/badge.svg)](https://github.com/SatComProjects/satgonetem/actions/workflows/ci.yml)
+[![Release](https://github.com/SatComProjects/satgonetem/actions/workflows/release.yml/badge.svg)](https://github.com/SatComProjects/satgonetem/actions/workflows/release.yml)
+[![Python 3.10 | 3.11 | 3.12 | 3.13 | 3.14](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13%20%7C%203.14-blue)](https://github.com/SatComProjects/satgonetem/actions/workflows/ci.yml)
 
 **Satellite Network Emulation Tool** - A Python framework for emulating dynamic satellite constellations (LEO, MEO, GEO) as live virtual networks with real-time topology updates, pluggable routing, and traffic measurement.
 
@@ -13,6 +15,7 @@ SatGoNetem bridges orbital mechanics and Linux network emulation. It computes sa
 - [`docs/project_creation.md`](docs/project_creation.md) — End-to-end constellation design guide
 - [`docs/custom_project.md`](docs/custom_project.md) — TLE-only and mixed custom projects outside Walker shell generation
 - [`docs/topology_manager_api.md`](docs/topology_manager_api.md) — `TopologyManager` public API reference
+- [`docs/experiment.md`](docs/experiment.md) — CLI, YAML scenarios, run artifacts, telemetry, and connectivity matrix
 
 **Core internals**
 
@@ -53,6 +56,11 @@ SatGoNetem bridges orbital mechanics and Linux network emulation. It computes sa
 - Pluggable routing backends: static (Dijkstra), OSPF (Bird2), IS-IS SR (patched Bird2), SR-MPLS
 - Built-in traffic tools: ping, iperf3, hping3 with structured result parsing
 - Batch traffic scheduling via `FlowScheduler`
+- Interactive scenario shell (`satgonetem create` / `edit`) for Walker shells,
+  ground stations, traffic, and events
+- Declarative YAML experiments with run artifacts, telemetry, and reports
+- Optional dual-stack IPv6 addressing alongside the deterministic IPv4 plan
+- Per-link loss and jitter fields
 - Python API for constellation design and programmatic control
 - Supports Python 3.10 through 3.14
 
@@ -214,6 +222,24 @@ topology.stop()          # stop simulation loop
 topology.stop_gonetem()  # remove containers, veth pairs, and qdiscs
 ```
 
+### Using the CLI
+
+```bash
+satgonetem doctor
+satgonetem summary topology_files/test_topology.json
+satgonetem create my-scenario
+satgonetem edit my-scenario.yaml
+satgonetem run scenario.yaml --out runs/001
+satgonetem report runs/001
+```
+
+`create` starts an interactive scenario shell (Walker shells, ground stations,
+traffic, events, network overrides) and writes a scenario file; `edit` opens an
+existing scenario in the same shell. `run` accepts the resulting YAML scenario.
+Use `--dry-run` to validate without loading the topology and `--offline` to
+sample without starting containers. See
+[`docs/experiment.md`](docs/experiment.md) for the schema and limitations.
+
 ## Architecture
 
 ```
@@ -223,24 +249,29 @@ satgonetem/
   launchers/     NetworkLauncher (abstract) + GoNetEmLauncher (gRPC)
                  HILManager (hardware-in-the-loop)
   routing/       RoutingDaemon (abstract) + static, OSPF, ISIS-SR, SR-MPLS
+                 static planner/route-installer/peer-index collaborators;
+                 SR-MPLS planner/installer/teardown collaborators
   traffic/       Ping, iperf2, iperf3, hping3 traffic tools and FlowScheduler
+                 iperf3 results facade + end-summary/intervals/report/plotting
   link_budget/   Antenna, transmitter, receiver, propagation, MODCOD, geometry
-  addressing/    Deterministic IPv4 pools, node blocks, loopbacks, and /31 links
-  services/      TopologyManager (central orchestrator)
+  addressing/    Deterministic IPv4 pools and optional IPv6/ULA pools,
+                 node blocks, loopbacks, and point-to-point links
+  services/      TopologyManager (central orchestrator) + NetworkConfig,
+                 persistence, SatCom project adapter, link factory, graph view
                  mixins: topology sync, link ops, routing mgr, interface mgr,
                          network lifecycle, traffic testing, simulation loop,
-                         diagnostics, controller
+                         diagnostics, controller, backend control
   utils/         project_builder, IP helpers, custom connection strategies
   proto/         gRPC definitions for the GoNetEm backend
 ```
 
-**TopologyManager** (`satgonetem/services/topology_satcom.py`) is the main entry point. It is composed of mixins under `services/mixins/` that each handle a specific concern: syncing topology data from the orbital simulator, managing Docker containers and virtual interfaces, applying `tc` qdiscs, configuring routing daemons, running traffic tests, and driving the simulation tick loop.
+**TopologyManager** (`satgonetem/services/topology_satcom.py`) is the main entry point. It is composed of mixins under `services/mixins/` that each handle a specific concern: syncing topology data from the orbital simulator, managing Docker containers and virtual interfaces, applying `tc` qdiscs, configuring routing daemons, running traffic tests, and driving the simulation tick loop. Config/validation, persistence, SatCom project loading, link construction, and graph/change views live in leaf modules under `services/`; the module path and private compatibility delegates are unchanged.
 
 **Delay model:** `delay_ms = distance_km / 299792.458 * 1000` (propagation at speed of light).
 
 **QoS stack per link:** `netem` (propagation delay) + `TBF` (rate limiting), configured by GoNetEm. The Python client batches per-tick changes through `LinkUpdateMany` (512 links per call) and falls back to per-link updates on older servers.
 
-## IPv4 Addressing
+## IPv4 and IPv6 Addressing
 
 Addresses come from a deterministic, private `10.0.0.0/8` plan by default:
 
@@ -251,6 +282,13 @@ Addresses come from a deterministic, private `10.0.0.0/8` plan by default:
 | Satellites | `10.128.0.0/9` | `/27` | 262,144 |
 
 Each node has a stable `/32` loopback at `<block>.0.1`; traffic and static routes target that loopback, not an interface. Every point-to-point link gets a `/31` starting at `<block>.0.4`. Ground stations and user terminals own their links; satellite links are owned by the lower satellite ID. See [`docs/addressing.md`](docs/addressing.md) for the link-ownership rules and configuration.
+
+Optional dual-stack IPv6 addressing is available with
+`NetworkConfig(ipv6_enabled=True)`. It uses private ULA pools
+(`fd00:1::/40` ground stations, `fd00:2::/40` satellites, `fd00:3::/40` user
+terminals), `/64` node blocks, `/128` loopbacks, and `/127` point-to-point
+links. IPv6 addressing is independent of the IPv4 plan; IPv6 routing and
+traffic are not implemented yet.
 
 The pools are configurable via `NetworkConfig`:
 
@@ -321,6 +359,8 @@ Key parameters on `TopologyManager`:
 | `ground_object_link_capacity` | 100000 | Ground-object link capacity in kbps |
 | `link_netem_limit` | 1000 | netem queue limit of emulated links, in packets (`0` = server default) |
 | `link_txqueuelen` | 1000 | Transmit queue length of emulated link interfaces, in packets (`0` = server default) |
+| `link_loss_percent` | 0.0 | Default packet loss percentage for new links |
+| `link_jitter_ms` | 0 | Default netem jitter for new links, in milliseconds |
 | `satellite_image` | `"jariassuarez/sgnt:satellite"` | Docker image used for satellite containers |
 | `network_launcher` | `"GONETEM"` | Recorded launcher backend identifier; GoNetEm is the implemented backend |
 | `gonetem_server` | `"localhost:10110"` | GoNetEm gRPC server address |
@@ -331,6 +371,10 @@ Key parameters on `TopologyManager`:
 | `ground_station_prefix_len` | 20 | Prefix length of each ground-station block |
 | `satellite_prefix_len` | 27 | Prefix length of each satellite block |
 | `user_terminal_prefix_len` | 20 | Prefix length of each user-terminal block |
+| `ipv6_enabled` | `False` | Enable optional dual-stack IPv6 addressing |
+| `ipv6_ground_station_pool` | `fd00:1::/40` | IPv6 ULA pool for ground-station `/64` blocks |
+| `ipv6_satellite_pool` | `fd00:2::/40` | IPv6 ULA pool for satellite `/64` blocks |
+| `ipv6_user_terminal_pool` | `fd00:3::/40` | IPv6 ULA pool for user-terminal `/64` blocks |
 
 See [`docs/services.md`](docs/services.md#networkconfig) for every `NetworkConfig` field.
 
@@ -340,8 +384,8 @@ See [`docs/services.md`](docs/services.md#networkconfig) for every `NetworkConfi
 pytest tests/ -v
 ```
 
-The default suite excludes `slow` and `benchmark` tests. Run the extended set
-explicitly:
+The default suite excludes `slow`, `benchmark`, and `integration` tests. Run
+the extended set explicitly:
 
 ```bash
 pytest tests/ -q -m "slow or benchmark"
@@ -349,8 +393,14 @@ pytest tests/ -q -m "slow or benchmark"
 
 Tests cover models, routing daemons, traffic result parsing, launchers, and
 project builder utilities. Unit tests use shared fixtures and fakes from
-`tests/support/` and do not require Docker, root, or live networking; the
-manual checks below exercise real emulation.
+`tests/support/` and do not require Docker, root, or live networking.
+
+Live Docker/GoNetEm tests live in `tests/integration/` and are documented in
+[`docs/integration_testing.md`](docs/integration_testing.md). The non-root
+smoke/QoS tier runs in the non-required
+[`integration.yml`](.github/workflows/integration.yml) workflow; root and slow
+scale tests remain separate opt-in selections. The manual checks below remain
+useful for ad hoc runs.
 
 Scale and live connectivity checks:
 
@@ -361,22 +411,30 @@ python scripts/verify_900_satellites.py
 # Live three-node topology: GSL + ISL, static routing, bidirectional pings
 python scripts/verify_connectivity.py
 
+# 10x10 Walker constellation: 5-minute steps, per-step link churn, 220 pings
+python scripts/verify_10x10_connectivity.py
+
 # Same, when GoNetEm NodeRun cannot exec into containers in the environment
 python scripts/verify_connectivity.py --transport docker
 ```
 
 ## Continuous integration and releases
 
-Two GitHub Actions workflows live in [`.github/workflows/`](.github/workflows/):
+Three GitHub Actions workflows live in [`.github/workflows/`](.github/workflows/):
 
 | Workflow | Trigger | What it runs |
 | --- | --- | --- |
 | [`ci.yml`](.github/workflows/ci.yml) | Push to `main` or `develop`, every pull request, manual dispatch | Ruff lint/format, full mypy, lockfile check, unit tests on Python 3.10–3.14 with a 75% coverage floor, dependency audit, sdist/wheel build, metadata validation, wheel install smoke test |
 | [`release.yml`](.github/workflows/release.yml) | Push of a `v*` tag, manual dispatch | Lint/format, full mypy, tests and coverage, checks the tag matches `pyproject.toml`, builds the distributions, and publishes a GitHub Release with the sdist and wheel attached |
+| [`integration.yml`](.github/workflows/integration.yml) | Nightly schedule, manual dispatch | Non-root live smoke/QoS tests against real Docker and GoNetEm on a self-hosted runner; not a required check |
 
-All jobs run on `ubuntu-latest` with [`uv`](https://docs.astral.sh/uv/) and the
-committed `uv.lock`. No repository secrets are required: the test suite mocks
-Docker and network operations, and `sat_com_topology` is public.
+CI and release jobs run on `ubuntu-latest` with
+[`uv`](https://docs.astral.sh/uv/) and the committed `uv.lock`. The live
+integration job targets the self-hosted
+`[self-hosted, linux, x64, gonetem, docker]` runner described in
+[`docs/integration_testing.md`](docs/integration_testing.md). No repository
+secrets are required: the unit suite mocks Docker and network operations,
+`sat_com_topology` is public, and the self-hosted runner is pre-provisioned.
 
 Run the same checks locally:
 
@@ -406,12 +464,12 @@ Known follow-ups and intentional exceptions are tracked here and in
 | Area | Debt | Next step |
 |---|---|---|
 | Type checking | `attr-defined` is disabled globally because generated protobuf and mixin-injected state are not statically visible | Add protocols/annotations and re-enable the category |
-| Coverage | `utils/project_mesh.py` (~30%) and `launchers/gonetem_lifecycle.py` (~58%) are below the global floor's spirit | Add mesh-construction and lifecycle branch tests |
+| Coverage | The remaining low-coverage paths are UI glue: `cli/node_terminal_bridge.py` (~28%) and `experiment/interactive.py` (~57%); core packages are at or above the global average | Add terminal/shell interaction tests |
 | Behavior | Link-operation counts mean “attempted”, not “succeeded”; `FlowScheduler` defaults to no timeout | Separate behavior specs and tests |
 | Controller | Custom interface patterns must format to `eth<digits>` | Decide whether arbitrary prefixes are needed |
 | P4 | `P4Daemon` is experimental and not registered as a routing method | Support or remove it explicitly |
 | Compatibility | `satcom_fix` patches third-party internals at import time | Separate removal spec if upstream fixes land |
-| Integration | Docker/root/GoNetEm paths run only via manual scripts, not CI | Add a privileged integration runner when available |
+| Integration | An automated non-root smoke/QoS tier now runs in a non-required nightly workflow; root namespace and 3x3 scale coverage remain separate opt-in selections, and the full 10x10 check stays manual | Stabilize the self-hosted runner and keep root/scale lanes out of required checks |
 
 ### Releasing
 
@@ -419,8 +477,8 @@ Known follow-ups and intentional exceptions are tracked here and in
 2. Tag the release commit and push the tag:
 
    ```bash
-   git tag -a v0.3.1 -m "SatGoNetem 0.3.1"
-   git push origin v0.3.1
+   git tag -a v0.3.2 -m "SatGoNetem 0.3.2"
+   git push origin v0.3.2
    ```
 
 3. `release.yml` verifies that the tag matches `pyproject.toml`, builds `dist/`,
@@ -428,7 +486,7 @@ Known follow-ups and intentional exceptions are tracked here and in
 4. Install a release directly from GitHub:
 
    ```bash
-   pip install "satgonetem @ git+https://github.com/SatComProjects/satgonetem@v0.3.1"
+   pip install "satgonetem @ git+https://github.com/SatComProjects/satgonetem@v0.3.2"
    ```
 
 `release.yml` does not publish to PyPI. `pyproject.toml` depends on

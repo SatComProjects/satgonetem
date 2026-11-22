@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import grpc
 
@@ -72,6 +72,34 @@ class LinkOpsMixin:
             self._failed_link_adds = failures
         return failures
 
+    def _link_update_failures(self) -> set[frozenset[str]]:
+        """Return link keys whose last backend update failed.
+
+        ``to_update`` stays set for these links so the next sync retries them;
+        successful retries drop the entry. ``_update_link_flags`` also consults
+        this set, because the local phase runs after the backend batch.
+        """
+        failures = getattr(self, "_failed_link_updates", None)
+        if failures is None:
+            failures = set()
+            self._failed_link_updates = failures
+        return failures
+
+    def _link_backend_adds(self) -> set[frozenset[str]]:
+        """Return link keys whose add already succeeded on the backend.
+
+        A link can be present in the emulator while its local interfaces or
+        addresses are still being retried. Those retries must not send a second
+        ``LinkAdd``: the server rejects a duplicate and the local build would be
+        blocked by the failure marker forever. Entries are dropped when the
+        backend confirms deletion or the link is cleaned up.
+        """
+        applied = getattr(self, "_backend_link_adds", None)
+        if applied is None:
+            applied = set()
+            self._backend_link_adds = applied
+        return applied
+
     def bulk_link_operations(
         self,
         to_add: bool = True,
@@ -126,7 +154,7 @@ class LinkOpsMixin:
         # per-operation durations; their *_time_wall is the first-submit-to-
         # last-completion span. Updates are one batch call, so all three update
         # figures derive from that call's wall time.
-        operation_stats = {
+        operation_stats: dict[str, Any] = {
             "added_count": len(processed_add),
             "updated_count": len(processed_update),
             "deleted_count": len(processed_remove),
@@ -228,8 +256,13 @@ class LinkOpsMixin:
 
         # Clear update flags once the batch and any HIL updates are done.
         # _perform_local_link_operations clears them again as a safety net.
+        # Failed links keep the flag so the next sync retries them.
+        update_failures = LinkOpsMixin._link_update_failures(self)
         for link in processed_update:
             try:
+                key = self._build_link_key(link.source, link.target)
+                if key in update_failures:
+                    continue
                 link.to_update = False
             except (AttributeError, TypeError):
                 logging.error(
@@ -253,6 +286,16 @@ class LinkOpsMixin:
                 operation_stats[f"{prefix}_time_wall"] = (
                     finished[category] - started[category]
                 )
+
+        if hil_updates:
+            update_failures = LinkOpsMixin._link_update_failures(self)
+            hil_errors = 0
+            for link in hil_updates:
+                if self._build_link_key(link.source, link.target) in update_failures:
+                    hil_errors += 1
+            operation_stats["update_error_count"] = (
+                int(operation_stats["update_error_count"]) + hil_errors
+            )
 
         if batch_updates:
             # One batch call is the unit of work: wall, total and per-link
@@ -280,11 +323,19 @@ class LinkOpsMixin:
             logging.warning("launcher not set, skipping link update batch")
             return 0, 0
 
+        failures = LinkOpsMixin._link_update_failures(self)
         update_many = getattr(launcher, "update_links", None)
         if update_many is None or getattr(self, "_link_update_many_unavailable", False):
             for link in links:
                 self._execute_link_update(link)
-            return len(links), 0
+            error_count = len(
+                [
+                    link
+                    for link in links
+                    if self._build_link_key(link.source, link.target) in failures
+                ]
+            )
+            return len(links), error_count
 
         try:
             response = update_many(links)
@@ -298,7 +349,14 @@ class LinkOpsMixin:
             )
             for link in links:
                 self._execute_link_update(link)
-            return len(links), 0
+            error_count = len(
+                [
+                    link
+                    for link in links
+                    if self._build_link_key(link.source, link.target) in failures
+                ]
+            )
+            return len(links), error_count
 
         response_status = getattr(response, "status", None)
         if response_status is not None and response_status.code != netem_pb2.OK:
@@ -318,10 +376,13 @@ class LinkOpsMixin:
         errors = 0
         for link, result in zip(links, results, strict=False):
             status = getattr(result, "status", None)
+            key = self._build_link_key(link.source, link.target)
             if status is not None and status.code == netem_pb2.OK:
                 updated += 1
+                failures.discard(key)
                 continue
 
+            failures.add(key)
             errors += 1
             source = getattr(getattr(link, "source", None), "name", "?")
             target = getattr(getattr(link, "target", None), "name", "?")
@@ -374,9 +435,13 @@ class LinkOpsMixin:
         emulator still holds the veth pair.
         """
         start = time.perf_counter()
+        key = self._build_link_key(link.source, link.target)
+        applied = LinkOpsMixin._link_backend_adds(self)
         if self.hil_manager is not None and self.hil_manager.is_hil_link(link):
-            self.hil_manager.teardown_link(link)
-            link.to_delete = False
+            link.to_delete = True
+            if self.hil_manager.teardown_link(link):
+                link.to_delete = False
+                applied.discard(key)
             return time.perf_counter() - start
         launcher = LinkOpsMixin._link_backend(self)
         if launcher is None:
@@ -391,14 +456,35 @@ class LinkOpsMixin:
             )
             return time.perf_counter() - start
         link.to_delete = False
+        applied.discard(key)
         logging.debug("Deleted link %s -- %s", link.source.name, link.target.name)
         return time.perf_counter() - start
 
     def _execute_link_update(self, link) -> float:
         """Update a link's netem delay and TBF rate directly via nsenter+tc."""
         start = time.perf_counter()
+        failures = LinkOpsMixin._link_update_failures(self)
+        build_key = getattr(self, "_build_link_key", None)
+        if build_key is not None:
+            key = build_key(link.source, link.target)
+        else:
+            key = frozenset((link.source.name, link.target.name))
         if self.hil_manager is not None and self.hil_manager.is_hil_link(link):
-            self.hil_manager.update_link(link)
+            try:
+                update_ok = self.hil_manager.update_link(link)
+            except Exception as err:
+                failures.add(key)
+                logging.error(
+                    "Unable to update HIL link %s--%s: %s",
+                    link.source.name,
+                    link.target.name,
+                    err,
+                )
+                return time.perf_counter() - start
+            if update_ok:
+                failures.discard(key)
+            else:
+                failures.add(key)
             return time.perf_counter() - start
         launcher = LinkOpsMixin._link_backend(self)
         if launcher is None:
@@ -406,16 +492,19 @@ class LinkOpsMixin:
             return 0.0
         try:
             launcher.update_link(link)
+        except (RuntimeError, OSError) as err:
+            failures.add(key)
+            logging.error(
+                f"Unable to update link {link.source.name}--{link.target.name}: {err}"
+            )
+        else:
+            failures.discard(key)
             delay = max(int(link.delay), 1)
             logging.debug(
                 "Updated link %s -- %s with delay %d ms",
                 link.source.name,
                 link.target.name,
                 delay,
-            )
-        except (RuntimeError, OSError) as err:
-            logging.error(
-                f"Unable to update link {link.source.name}--{link.target.name}: {err}"
             )
         return time.perf_counter() - start
 
@@ -428,15 +517,30 @@ class LinkOpsMixin:
         ``to_add`` remains set so the next sync retries.
         """
         start = time.perf_counter()
+        failures = self._link_add_failures()
+        key = self._build_link_key(link.source, link.target)
+        applied = LinkOpsMixin._link_backend_adds(self)
+        if key in applied:
+            # The emulator already accepted this link; only the local build is
+            # still pending. Re-sending LinkAdd is rejected as a duplicate.
+            failures.discard(key)
+            return time.perf_counter() - start
         if self.hil_manager is not None and self.hil_manager.is_hil_link(link):
-            self.hil_manager.setup_link(link)
+            try:
+                setup_ok = self.hil_manager.setup_link(link)
+            except Exception:
+                failures.add(key)
+                raise
+            if setup_ok:
+                failures.discard(key)
+                applied.add(key)
+            else:
+                failures.add(key)
             return time.perf_counter() - start
         launcher = LinkOpsMixin._link_backend(self)
         if launcher is None:
             logging.warning("launcher not set, skipping link add")
             return 0.0
-        failures = self._link_add_failures()
-        key = self._build_link_key(link.source, link.target)
         failures.add(key)
         try:
             launcher.add_link(link)
@@ -446,6 +550,7 @@ class LinkOpsMixin:
             )
             return time.perf_counter() - start
         failures.discard(key)
+        applied.add(key)
         delay = max(int(link.delay), 1)
         logging.debug(
             "Added link %s -- %s with delay %d ms",
@@ -584,17 +689,21 @@ class LinkOpsMixin:
                 self.interfaces = [
                     intf for intf in self.interfaces if intf not in link.peer_interfaces
                 ]
-                # Return the link's /31 slot to the address plan so later
-                # dynamic links can reuse it.
+                # Return the link's slots to both address plans so later
+                # dynamic links can reuse them.
+                link_key = frozenset((link.source.name, link.target.name))
                 address_plan = getattr(self, "address_plan", None)
                 if address_plan is not None:
-                    address_plan.release_link(
-                        frozenset((link.source.name, link.target.name))
-                    )
+                    address_plan.release_link(link_key)
+                address_plan_v6 = getattr(self, "address_plan_v6", None)
+                if address_plan_v6 is not None:
+                    address_plan_v6.release_link(link_key)
                 # Remove link from dictionary, dropping any stale pending-add
                 # marker so a failed add cannot retain the removed link.
                 key = self._build_link_key(link.source, link.target)
                 self._link_add_failures().discard(key)
+                self._link_update_failures().discard(key)
+                self._link_backend_adds().discard(key)
                 del self.links[key]
             except (AttributeError, KeyError, TypeError) as e:
                 logging.error(
@@ -602,8 +711,11 @@ class LinkOpsMixin:
                 )
 
     def _update_link_flags(self, link: Link) -> None:
-        """Update flags for a single link."""
+        """Clear ``to_update`` unless the last backend update failed."""
         try:
+            key = self._build_link_key(link.source, link.target)
+            if key in LinkOpsMixin._link_update_failures(self):
+                return
             link.to_update = False
         except (AttributeError, TypeError) as e:
             logging.error(
@@ -623,7 +735,7 @@ class LinkOpsMixin:
         try:
             self._build_interfaces_from_link(link, set_ip=True, sync_to_node=True)
             link.to_add = False
-        except (AttributeError, KeyError, TypeError) as e:
+        except Exception as e:  # noqa: BLE001 - keep to_add set for a retry
             logging.error(
                 f"Failed to add interfaces for link {link.source.name}--{link.target.name}: {e}"
             )

@@ -20,11 +20,89 @@ pytestmark = pytest.mark.unit
 _MIB = 1024 * 1024
 _MBIT = 1_000_000
 
+# Real iperf2 -P 2 output repeats each stream's full-test total immediately
+# before the final [SUM] row; only the interval rows belong to the series.
+_MULTISTREAM_TCP_LOG = """\
+------------------------------------------------------------
+Client connecting to 10.0.0.2, TCP port 5001
+TCP window size: 85.3 KByte (default)
+------------------------------------------------------------
+[  3] local 10.0.0.1 port 54123 connected with 10.0.0.2 port 5001
+[  4] local 10.0.0.1 port 54124 connected with 10.0.0.2 port 5001
+[ ID] Interval       Transfer     Bandwidth       Retr  Cwnd
+[  3]  0.00-1.00  sec  1.25 MBytes  10.50 Mbits/sec    0    100 KBytes
+[  4]  0.00-1.00  sec  1.25 MBytes  10.50 Mbits/sec    0    100 KBytes
+[SUM]  0.00-1.00  sec  2.50 MBytes  21.00 Mbits/sec    0
+[  3]  1.00-2.00  sec  1.25 MBytes  10.50 Mbits/sec    1    100 KBytes
+[  4]  1.00-2.00  sec  1.25 MBytes  10.50 Mbits/sec    0    100 KBytes
+[SUM]  1.00-2.00  sec  2.50 MBytes  21.00 Mbits/sec    1
+[  3]  0.00-2.00  sec  2.50 MBytes  10.50 Mbits/sec    1    100 KBytes
+[  4]  0.00-2.00  sec  2.50 MBytes  10.50 Mbits/sec    0    100 KBytes
+[SUM]  0.00-2.00  sec  5.00 MBytes  21.00 Mbits/sec    1
+"""
+
+# A one-second multi-stream run spans the same window for intervals and
+# totals, so the duplicate rows are only distinguishable by their stream.
+_MULTISTREAM_TCP_ONE_SECOND_LOG = """\
+[  3] local 10.0.0.1 port 54123 connected with 10.0.0.2 port 5001
+[  4] local 10.0.0.1 port 54124 connected with 10.0.0.2 port 5001
+[ ID] Interval       Transfer     Bandwidth       Retr  Cwnd
+[  3]  0.00-1.00  sec  1.25 MBytes  10.50 Mbits/sec    1    100 KBytes
+[  4]  0.00-1.00  sec  1.25 MBytes  10.50 Mbits/sec    0    100 KBytes
+[  3]  0.00-1.00  sec  1.25 MBytes  10.50 Mbits/sec    1    100 KBytes
+[  4]  0.00-1.00  sec  1.25 MBytes  10.50 Mbits/sec    0    100 KBytes
+[SUM]  0.00-1.00  sec  2.50 MBytes  21.00 Mbits/sec    1
+"""
+
 
 def _parse(lines: list[str]):
     from satgonetem.traffic.iperf2_utils import _parse_iperf2_log
 
     return _parse_iperf2_log(lines)
+
+
+_TRUNCATED_INTERVAL_SUM_LOG = """\
+[ ID] Interval       Transfer     Bandwidth
+[  3]  0.00-1.00  sec  1.25 MBytes  10.50 Mbits/sec
+[  4]  0.00-1.00  sec  1.25 MBytes  10.50 Mbits/sec
+[SUM]  0.00-1.00  sec  2.50 MBytes  21.00 Mbits/sec
+[  3]  1.00-2.00  sec  1.25 MBytes  10.50 Mbits/sec
+[  4]  1.00-2.00  sec  1.25 MBytes  10.50 Mbits/sec
+[SUM]  1.00-2.00  sec  2.50 MBytes  21.00 Mbits/sec
+"""
+
+
+def test_truncated_interval_sum_is_not_an_overall_summary() -> None:
+    _protocol, rows, summary = _parse(_TRUNCATED_INTERVAL_SUM_LOG.splitlines())
+
+    assert summary is None
+    assert sum(row["bytes"] for row in rows) == pytest.approx(5.0 * _MIB)
+
+
+def test_unlabelled_final_total_with_non_zero_earliest_interval() -> None:
+    log = """\
+[ ID] Interval       Transfer     Bandwidth
+[  3]  2.00-3.00  sec  1.25 MBytes  10.50 Mbits/sec
+[  3]  3.00-4.00  sec  1.25 MBytes  10.50 Mbits/sec
+[  3]  0.00-4.00  sec  2.50 MBytes  5.25 Mbits/sec
+"""
+
+    _protocol, rows, summary = _parse(log.splitlines())
+
+    assert summary is not None
+    assert summary["bytes"] == pytest.approx(2.5 * _MIB)
+    assert len(rows) == 2
+
+
+def test_enhanced_output_uses_retry_column_for_retransmits() -> None:
+    log = """\
+[ ID] Interval       Transfer     Bandwidth       Write/Err  Rtry
+[  3]  0.00-1.00  sec  1.25 MBytes  10.50 Mbits/sec  1605/0      73
+"""
+
+    _protocol, rows, _summary = _parse(log.splitlines())
+
+    assert rows[0]["retransmits"] == 73
 
 
 def _write_log(tmp_path: Path, content: str) -> Path:
@@ -324,3 +402,77 @@ def test_bare_retr_column_is_parsed(tmp_path, capsys) -> None:
 
     assert [row["retransmits"] for row in rows] == [0, 5]
     assert _printed_retransmits(capsys) == 5
+
+
+def test_multistream_per_stream_totals_are_not_intervals(tmp_path, capsys) -> None:
+    """Per-stream full-test totals before ``[SUM]`` must not enter the series.
+
+    iperf2 repeats every stream's cumulative transfer and retransmit count in
+    the rows immediately before ``[SUM]``. Keeping them doubles the plotted
+    per-socket bytes and the summed retransmits, even though the summary-based
+    total is right.
+    """
+    log = _write_log(tmp_path, _MULTISTREAM_TCP_LOG)
+
+    protocol, rows, summary = _parse(log.read_text().splitlines())
+    saved = generate_iperf2_plots(str(log), use_tmp_dir=False)
+
+    assert protocol == "TCP"
+    assert len(rows) == 4
+    assert {row["_label"] for row in rows} == {"Socket 3", "Socket 4"}
+    assert not any(row["start"] == 0.0 and row["end"] == 2.0 for row in rows), (
+        f"full-test total rows leaked into the interval series: {rows!r}"
+    )
+    assert sum(row["bytes"] for row in rows) == pytest.approx(5.00 * _MIB)
+    for socket in ("Socket 3", "Socket 4"):
+        interval_bytes = sum(row["bytes"] for row in rows if row["_label"] == socket)
+        assert interval_bytes == pytest.approx(2.50 * _MIB)
+    assert _printed_retransmits(capsys) == 1
+    assert summary is not None
+    assert summary["bytes"] == pytest.approx(5.00 * _MIB)
+    assert any("_tcp_cumulative.png" in path for path in saved)
+
+
+def test_multistream_one_second_log_drops_duplicate_totals(tmp_path, capsys) -> None:
+    """Interval and total rows share a span in a one-second multi-stream run.
+
+    The duplicate rows are still totals: each repeats that stream's only
+    interval row, so only one row per socket may remain.
+    """
+    log = _write_log(tmp_path, _MULTISTREAM_TCP_ONE_SECOND_LOG)
+
+    _protocol, rows, summary = _parse(log.read_text().splitlines())
+    generate_iperf2_plots(str(log), use_tmp_dir=False)
+
+    assert len(rows) == 2
+    assert {row["_label"] for row in rows} == {"Socket 3", "Socket 4"}
+    for socket in ("Socket 3", "Socket 4"):
+        interval_bytes = sum(row["bytes"] for row in rows if row["_label"] == socket)
+        assert interval_bytes == pytest.approx(1.25 * _MIB)
+    assert _printed_retransmits(capsys) == 1
+    assert summary is not None
+    assert summary["bytes"] == pytest.approx(2.50 * _MIB)
+
+
+def test_truncated_multistream_log_keeps_its_interval_rows(tmp_path) -> None:
+    """A log cut before the final [SUM] ends on an interval [SUM] row.
+
+    That row does not cover the test, so the same-span stream rows before it
+    are intervals and must not be dropped as per-stream totals.
+    """
+    log = _write_log(
+        tmp_path,
+        """\
+[  3]  0.00-1.00  sec  1.25 MBytes  10.50 Mbits/sec    0    100 KBytes
+[  4]  0.00-1.00  sec  1.25 MBytes  10.50 Mbits/sec    0    100 KBytes
+[SUM]  0.00-1.00  sec  2.50 MBytes  21.00 Mbits/sec    0
+[  3]  1.00-2.00  sec  1.25 MBytes  10.50 Mbits/sec    0    100 KBytes
+[  4]  1.00-2.00  sec  1.25 MBytes  10.50 Mbits/sec    0    100 KBytes
+[SUM]  1.00-2.00  sec  2.50 MBytes  21.00 Mbits/sec    0
+""",
+    )
+
+    _protocol, rows, _summary = _parse(log.read_text().splitlines())
+
+    assert len(rows) == 4
+    assert sum(row["bytes"] for row in rows) == pytest.approx(5.00 * _MIB)

@@ -83,8 +83,11 @@ uv run --frozen --extra dev mypy satgonetem/routing
 - P4 decision: `P4Daemon` remains experimental and is not a registered built-in
   or `routing_method` option because its constructor requires a controller
   path. It is covered by direct lifecycle/edge tests.
-- Remaining cleanup: static/SR-MPLS command-execution adapters can be extracted
-  further without behavior changes; this is tracked for the next cleanup pass.
+- Remaining cleanup (resolved by Spec 0013, 2026-11-22): static and SR-MPLS
+  command execution/planning were extracted into `static_route_planner.py`,
+  `peer_interface_index.py`, `route_batch_installer.py`,
+  `srmpls_planner.py`, `srmpls_installer.py`, `srmpls_teardown.py`, and
+  `srmpls_route_ops.py`, behind unchanged daemon facades.
 
 ## P4 support decision
 

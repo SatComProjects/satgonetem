@@ -6,4 +6,4 @@ Core functionality for satellite constellation network emulation.
 Provides models, services, utilities, and protobuf definitions.
 """
 
-__version__ = "0.3.1"
+__version__ = "0.3.2"

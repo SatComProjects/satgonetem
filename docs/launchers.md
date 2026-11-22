@@ -19,6 +19,7 @@ Hardware-in-the-loop links are **not** a launcher: they are handled by
 | `gonetem_launcher.py` | Thin composition of the GoNetEm mixins |
 | `gonetem_client.py` | gRPC connection, link requests, capacities |
 | `gonetem_lifecycle.py` | Start/wire/link/close orchestration |
+| `gonetem_control.py` | Optional node/interface/snapshot control RPCs |
 | `gonetem_cleanup.py` | Docker cleanup and force-close |
 | `gonetem_project.py` | `network.yml` and `.gnet` generation |
 | `hil_manager.py` | `HILManager` (standalone, not a `NetworkLauncher`) |
@@ -199,15 +200,17 @@ The helper `_tbf_qos(rate_kbps, delay_ms)` computes a burst of
 GoNetEm's `limit = buffer × rate × delay / 8` equals `burst + BDP`. Zero rate
 returns `(0, 0.0)`.
 
-The generated YAML uses `jitter: 0` and no loss. `_link_request()`, used for
-dynamic updates, forwards `link.loss` (default 0) and `link.jitter` (default 0)
-when present.
+The generated YAML uses `jitter: <link.jitter>` (default `0`) and emits a
+`loss:` token only when `link.loss` is non-zero, so projects generated with
+default links are byte-identical to earlier releases. `_link_request()`, used
+for dynamic updates, forwards `link.loss` (default 0.0) and `link.jitter`
+(default 0) to both peer QoS mappings.
 
 ### Dynamic link operations
 
 | Method | RPC | Notes |
 |---|---|---|
-| `update_link(link)` | `LinkUpdate` | Logs and swallows errors; does not raise |
+| `update_link(link)` | `LinkUpdate` | Raises `RuntimeError` on transport or non-OK application status |
 | `update_links(links)` | `LinkUpdateMany` | Chunks of `LINK_UPDATE_CHUNK_SIZE = 512`; returns a merged response; preserves `grpc.RpcError` for `UNIMPLEMENTED` fallback |
 | `add_link(link)` | `LinkAdd` | Raises `RuntimeError` on backend failure |
 | `delete_link(link)` | `LinkDel` | Raises `RuntimeError` on backend failure |
@@ -217,6 +220,59 @@ when present.
 response count does not match the request. `bulk_link_operations()` in
 `LinkOpsMixin` uses `update_links()` when available and falls back to
 per-link `update_link()` on servers that report `UNIMPLEMENTED`.
+
+### Backend controls
+
+`GoNetEmControlMixin` (composed into `GoNetEmLauncher`) exposes optional
+control RPCs for an open project. Every method requires a live `_client` and
+`_request`; otherwise it raises `RuntimeError` with an actionable message.
+Unary responses are checked for `Status.code == ERROR` and raise
+`RuntimeError(status.error)`. Transport `grpc.RpcError`s are wrapped in
+`RuntimeError` with the original exception as `__cause__`.
+
+| Method | RPC | Notes |
+|---|---|---|
+| `restart_node(node_name)` | `NodeRestart` | Container restarts without addresses, routes, or qdiscs |
+| `set_interface_state(node_name, if_index, up)` | `NodeSetIfState` | `if_index` is the `ethN` suffix |
+| `stop_all_nodes()` | `TopologyStopAll` | Stops every node container |
+| `start_all_nodes()` | `TopologyStartAll` | Containers start unconfigured |
+| `capture_interface(node_name, if_index, timeout_s=30.0)` | `NodeCapture` | Returns pcap bytes; deadline always applied |
+| `get_backend_status()` | `ProjectGetStatus` | Returns a JSON-serializable dictionary |
+| `save_project(timeout_s=60.0)` | `ProjectSave` | Returns archive bytes; rejects an empty stream |
+
+`CaptureSrvMsg` has no `DATA` code. The launcher treats `STDOUT` as capture
+payload, ignores `STDERR` (diagnostics), requires `OK` as the completion marker
+or a valid pcap/pcapng header, and raises on `ERROR`, an empty capture, or a
+truncated clean EOF. Because `NodeCapture` is a live stream, the deadline bounds
+it; if the deadline expires after non-empty payload arrived, the launcher returns
+the partial pcap prefix instead of discarding it. This framing matches the
+observed server behavior. `ProjectSave` only accepts `DATA` messages and ignores
+`NODE_COUNT`/`NODE_SAVE` progress messages.
+
+`BackendControlMixin` wraps these methods for `TopologyManager` (the
+integrator composes it into the manager). It is deliberately optional:
+`NetworkLauncher` does not declare new abstract methods, and each operation is
+feature-detected on `self.launcher`, raising `RuntimeError` when the active
+backend lacks it.
+
+| Manager method | Behaviour |
+|---|---|
+| `restart_node(node_name)` | Calls the backend, then clears `node.container` / `node.container_pid`; the next reconfigure must reapply addressing, routing, and qdiscs |
+| `set_interface_state(node_name, interface, up)` | Accepts an `Interface`, emulator name, or `ethN`; maps it to the integer `ifIndex` by requiring `eth<digits>` (loopbacks and malformed names are rejected) |
+| `set_link_state(link, up)` | Sets `link.admin_up`, calls `NodeSetIfState` on both endpoints, and updates both peer interface flags; a later topology tick cannot overwrite the admin state because `update_interfaces_state()` uses `is_active and admin_up` |
+| `stop_all_nodes()` | Stops a running simulation loop first (without holding the simulation lock across `stop()`), then calls `TopologyStopAll` |
+| `start_all_nodes()` | Calls `TopologyStartAll`; callers must reapply addresses, routes, and qdiscs |
+| `capture_interface(node_name, interface, output=None, timeout_s=30.0)` | Returns bytes and atomically writes `output` when provided |
+| `get_backend_status()` | Validates that the backend result is a JSON-serializable dict |
+| `save_snapshot(path)` | Calls `ProjectSave` and atomically replaces `path` via a temporary file |
+| `set_link_impairment(link, loss_percent=None, jitter_ms=None)` | Updates `link.loss` / `link.jitter`, marks `to_update`, calls `update_links([link])`, and inspects both the batch status and the per-link result; on any failure it raises and leaves `to_update=True` for retry |
+
+`set_link_impairment()` intentionally uses the verified `update_links()` batch
+rather than the singular path. If the backend has no `update_links` capability,
+the method raises rather than silently accepting an unverified impairment.
+`add_link`/`delete_link`/`update_link` now raise on a non-OK
+`AckResponse.status` and on a closed project; HIL setup/teardown return failure
+so LinkOps keeps the operation pending for retry.
 
 ### Teardown
 
@@ -231,19 +287,23 @@ channel, and clears the client. It is a no-op if no project is open.
    match every project on the host).
 3. `docker stop -t 0` and `docker rm` those containers.
 4. Call `ProjectClose`, drain the server-streaming response with a 10-second
-   deadline (`FORCE_CLOSE_TIMEOUT_SECONDS`), and close the channel. Draining
-   lets the server finish the close before the transport disappears. The RPC
-   is skipped when the client was already cleared by a failed
-   `close_project()`; container cleanup still runs from the retained project
-   id.
+   deadline (`FORCE_CLOSE_TIMEOUT_SECONDS`). Draining lets the server finish the
+   close before the transport disappears. The RPC is skipped when the client was
+   already cleared by a failed `close_project()`; container cleanup still runs
+   from the retained project id. On success the channel is closed; a failed
+   `ProjectClose` retains the transport so the RPC can be retried, while a
+   Docker-only failure closes it because only container cleanup remains.
 
 It is used by `start_gonetem()` after a failed launch and by
 `TopologyManager.force_stop_gonetem()`. When the project ID is empty,
-container cleanup is skipped rather than risking a host-wide match. The method
-is best-effort and returns `bool`: Docker and RPC failures are logged rather
-than raised, and `False` means at least one cleanup step failed, so callers
-must not assume the project closed cleanly. It returns `True` when cleanup is
-confirmed, including when there was nothing to clean (no retained request or
+container cleanup is skipped rather than risking a host-wide match, and the
+transport is closed because no retry can target a project. The method is
+best-effort and returns `bool`: Docker and RPC failures are logged rather than
+raised, and `False` means at least one cleanup step failed, so callers must not
+assume the project closed cleanly. A failed `ProjectClose` retains the request
+and transport for a retry; a Docker-only failure keeps the request (container
+cleanup can be retried) but closes the transport. It returns `True` when cleanup
+is confirmed, including when there was nothing to clean (no retained request or
 no matching containers).
 
 ## Using the launcher directly

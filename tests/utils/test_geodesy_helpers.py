@@ -101,13 +101,34 @@ def test_ecef_to_eci_is_identity_at_zero_gmst() -> None:
 
 
 def test_ecef_to_eci_applies_quarter_turn_at_ninety_degrees() -> None:
+    # ECEF -> ECI is a rotation by +GMST about z (Rz(+gmst)).
     eci_x = ecef_to_eci(np.array([1.0, 0.0, 0.0]), math.pi / 2.0)
     eci_y = ecef_to_eci(np.array([0.0, 1.0, 0.0]), math.pi / 2.0)
     eci_z = ecef_to_eci(np.array([0.0, 0.0, 4.0]), math.pi / 2.0)
 
-    assert eci_x == pytest.approx([0.0, -1.0, 0.0], abs=1e-12)
-    assert eci_y == pytest.approx([1.0, 0.0, 0.0], abs=1e-12)
+    assert eci_x == pytest.approx([0.0, 1.0, 0.0], abs=1e-12)
+    assert eci_y == pytest.approx([-1.0, 0.0, 0.0], abs=1e-12)
     assert eci_z == pytest.approx([0.0, 0.0, 4.0], abs=1e-12)
+
+
+def test_ecef_to_eci_known_vector_at_prime_meridian() -> None:
+    # A point on the equator at 0 deg longitude (ECEF +x) is at ECI +y after
+    # a quarter turn of the Earth; before the fix it landed at ECI -y.
+    ecef = np.array([_WGS84_A_KM, 0.0, 0.0])
+
+    eci = ecef_to_eci(ecef, math.pi / 2.0)
+
+    assert eci == pytest.approx([0.0, _WGS84_A_KM, 0.0], abs=1e-9)
+
+
+@pytest.mark.parametrize("gmst", [0.0, 0.7, math.pi / 2.0, math.pi, 2.0 * math.pi])
+def test_ecef_to_eci_round_trips_with_the_inverse_rotation(gmst: float) -> None:
+    ecef = np.array([1234.0, -5678.0, 910.0])
+
+    eci = ecef_to_eci(ecef, gmst)
+    back = ecef_to_eci(eci, -gmst)
+
+    assert back == pytest.approx(ecef, abs=1e-9)
 
 
 @pytest.mark.parametrize("gmst", [0.0, 0.7, math.pi / 2.0, math.pi, 2.0 * math.pi])
@@ -206,3 +227,12 @@ def test_geodetic_to_orbital_sgp4_uses_zero_raan_over_the_pole() -> None:
 
     assert float(result["raan_rad"]) == pytest.approx(0.0)
     assert float(result["mean_anomaly_rad"]) == pytest.approx(math.pi / 2.0)
+
+
+def test_geodetic_to_orbital_sgp4_rejects_zero_inclination() -> None:
+    # sin(0) in the RAAN solution divides by zero and yields NaN; reject the
+    # degenerate orbit instead of silently returning a non-finite state.
+    epoch = datetime(2025, 6, 10, 12, 0, 0, tzinfo=timezone.utc)
+
+    with pytest.raises(ValueError, match="inc_deg"):
+        geodetic_to_orbital_sgp4(0.0, 0.0, 500.0, 0.0, epoch)

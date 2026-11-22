@@ -59,6 +59,10 @@ def _link():
     )
 
 
+def _ack(code=netem_pb2.StatusCode.OK, error=""):
+    return netem_pb2.AckResponse(status=netem_pb2.Status(code=code, error=error))
+
+
 @pytest.fixture
 def grpc_client():
     client = MagicMock()
@@ -83,7 +87,7 @@ def test_start_containers_reports_progress_for_every_topology_event(
     grpc_client.TopologyRun.return_value = [
         _run_msg(netem_pb2.TopologyRunMsg.NODE_COUNT, 2),
         _run_msg(netem_pb2.TopologyRunMsg.BRIDGE_COUNT, 1),
-        _run_msg(netem_pb2.TopologyRunMsg.LINK_COUNT, 1),
+        _run_msg(netem_pb2.TopologyRunMsg.LINK_COUNT, 2),
         _run_msg(netem_pb2.TopologyRunMsg.NODE_START),
         _run_msg(netem_pb2.TopologyRunMsg.NODE_START),
         _run_msg(netem_pb2.TopologyRunMsg.LINK_SETUP),
@@ -100,11 +104,11 @@ def test_start_containers_reports_progress_for_every_topology_event(
 
     assert events == [
         ("NODE_COUNT", 0, 2),
-        ("LINK_COUNT", 0, 1),
+        ("LINK_COUNT", 0, 2),
         ("NODE_START", 1, 2),
         ("NODE_START", 2, 2),
-        ("LINK_SETUP", 1, 1),
-        ("LINK_SETUP", 2, 1),
+        ("LINK_SETUP", 1, 2),
+        ("LINK_SETUP", 2, 2),
         ("NODE_LOADCONFIG", 1, 2),
         ("COMPLETED", 0, 0),
     ]
@@ -120,6 +124,38 @@ def test_start_containers_reports_progress_for_every_topology_event(
     # A running project keeps its transport open and removes the archive.
     connection.close.assert_not_called()
     assert not list(tmp_path.glob("*.gnet"))
+
+
+def test_start_containers_counts_batched_progress_totals(grpc_client, tmp_path):
+    grpc_client.TopologyRun.return_value = [
+        _run_msg(netem_pb2.TopologyRunMsg.NODE_COUNT, 3),
+        _run_msg(netem_pb2.TopologyRunMsg.LINK_COUNT, 2),
+        _run_msg(netem_pb2.TopologyRunMsg.NODE_START, 2),
+        _run_msg(netem_pb2.TopologyRunMsg.NODE_START, 1),
+        _run_msg(netem_pb2.TopologyRunMsg.LINK_SETUP, 2),
+        _run_msg(netem_pb2.TopologyRunMsg.NODE_LOADCONFIG, 3),
+    ]
+    launcher, _connection, _factory = _start_launcher(tmp_path, grpc_client)
+    events = []
+
+    launcher.start_containers([], progress_cb=lambda *event: events.append(event))
+
+    assert ("NODE_START", 3, 3) in events
+    assert ("LINK_SETUP", 2, 2) in events
+
+
+def test_start_containers_accepts_terminal_marker_with_short_progress(
+    grpc_client, tmp_path
+):
+    grpc_client.TopologyRun.return_value = [
+        _run_msg(netem_pb2.TopologyRunMsg.NODE_COUNT, 3),
+        _run_msg(netem_pb2.TopologyRunMsg.LINK_COUNT, 2),
+        _run_msg(netem_pb2.TopologyRunMsg.NODE_START, 1),
+        _run_msg(netem_pb2.TopologyRunMsg.NODE_MESSAGES),
+    ]
+    launcher, _connection, _factory = _start_launcher(tmp_path, grpc_client)
+
+    launcher.start_containers([])
 
 
 def test_start_containers_allows_omitting_progress_callback(grpc_client, tmp_path):
@@ -178,7 +214,7 @@ def test_start_containers_logs_unlink_oserror_and_keeps_running(
     assert project_file.exists()
 
 
-def test_cleanup_failed_start_logs_force_close_failure_and_clears_state(caplog):
+def test_cleanup_failed_start_retains_state_when_force_close_fails(caplog):
     launcher = _new_launcher()
     launcher._client = MagicMock()
     launcher._request = netem_pb2.ProjectRequest(id="prj-1")
@@ -190,9 +226,30 @@ def test_cleanup_failed_start_logs_force_close_failure_and_clears_state(caplog):
     )
 
     with caplog.at_level(logging.ERROR):
-        launcher._cleanup_failed_start()
+        assert launcher._cleanup_failed_start() is False
 
     assert "cleanup after failed start failed: forced close failed" in caplog.text
+    connection.close.assert_not_called()
+    assert launcher._request is not None
+    assert launcher._client is not None
+
+
+def test_cleanup_failed_start_clears_state_after_successful_retry():
+    launcher = _new_launcher()
+    launcher._client = MagicMock()
+    launcher._request = netem_pb2.ProjectRequest(id="prj-1")
+    connection = SimpleNamespace(close=MagicMock())
+    launcher._connection = connection
+    launcher._channel = MagicMock()
+    launcher.force_close_project = MagicMock(return_value=False)
+
+    assert launcher._cleanup_failed_start() is False
+    assert launcher._request is not None
+    connection.close.assert_not_called()
+
+    launcher.force_close_project.return_value = True
+    assert launcher._cleanup_failed_start() is True
+
     connection.close.assert_called_once()
     assert launcher._request is None
     assert launcher._client is None
@@ -266,6 +323,34 @@ def test_close_project_reports_progress_and_closes_channel():
     assert launcher._channel is None
 
 
+def test_close_project_counts_batched_node_close_totals():
+    launcher = _new_launcher()
+    launcher._client = MagicMock()
+    launcher._request = netem_pb2.ProjectRequest(id="prj-1")
+    launcher._client.ProjectClose.return_value = [
+        netem_pb2.ProjectCloseMsg(code=netem_pb2.ProjectCloseMsg.NODE_COUNT, total=5),
+        netem_pb2.ProjectCloseMsg(code=netem_pb2.ProjectCloseMsg.NODE_CLOSE, total=3),
+        netem_pb2.ProjectCloseMsg(code=netem_pb2.ProjectCloseMsg.NODE_CLOSE, total=2),
+    ]
+    launcher._channel = MagicMock()
+
+    launcher.close_project()
+
+
+def test_close_project_rejects_partial_node_close():
+    launcher = _new_launcher()
+    launcher._client = MagicMock()
+    launcher._request = netem_pb2.ProjectRequest(id="prj-1")
+    launcher._client.ProjectClose.return_value = [
+        netem_pb2.ProjectCloseMsg(code=netem_pb2.ProjectCloseMsg.NODE_COUNT, total=2),
+        netem_pb2.ProjectCloseMsg(code=netem_pb2.ProjectCloseMsg.NODE_CLOSE),
+    ]
+    launcher._channel = MagicMock()
+
+    with pytest.raises(RuntimeError, match="incomplete"):
+        launcher.close_project()
+
+
 def test_close_project_reports_error_and_completion_then_reraises(caplog):
     launcher = _new_launcher()
     launcher._client = MagicMock()
@@ -305,22 +390,22 @@ def test_close_project_returns_without_side_effects_before_project_open():
 # Per-link operations
 
 
-def test_update_link_warns_and_skips_before_project_open(caplog):
+def test_update_link_raises_before_project_open():
     launcher = _new_launcher()
     launcher._client = MagicMock()
     launcher._request = None
 
-    with caplog.at_level(logging.WARNING):
+    with pytest.raises(RuntimeError, match="update_link called before project is open"):
         launcher.update_link(_link())
 
     launcher._client.LinkUpdate.assert_not_called()
-    assert "update_link called before project is open" in caplog.text
 
 
 def test_update_link_sends_link_request_for_open_project():
     launcher = _new_launcher()
     launcher._client = MagicMock()
     launcher._request = netem_pb2.ProjectRequest(id="prj-1")
+    launcher._client.LinkUpdate.return_value = _ack()
 
     launcher.update_link(_link())
 
@@ -330,33 +415,76 @@ def test_update_link_sends_link_request_for_open_project():
     assert request.link.peer2 == "Sat1.0"
 
 
-def test_update_link_logs_rpc_failure_without_raising(caplog):
+def test_update_link_raises_runtime_error_on_rpc_failure():
+    cause = RuntimeError("rpc failed")
     launcher = _new_launcher()
     launcher._client = MagicMock()
     launcher._request = netem_pb2.ProjectRequest(id="prj-1")
-    launcher._client.LinkUpdate.side_effect = RuntimeError("rpc failed")
+    launcher._client.LinkUpdate.side_effect = cause
 
-    with caplog.at_level(logging.ERROR):
+    with pytest.raises(RuntimeError) as excinfo:
         launcher.update_link(_link())
 
-    assert "LinkUpdate failed for Sat0<->Sat1: rpc failed" in caplog.text
+    assert str(excinfo.value) == (
+        "GoNetEmLauncher: LinkUpdate failed for Sat0<->Sat1: rpc failed"
+    )
+    assert excinfo.value.__cause__ is cause
+
+
+@pytest.mark.parametrize(
+    ("method_name", "rpc_name", "action"),
+    [
+        ("add_link", "LinkAdd", "LinkAdd"),
+        ("delete_link", "LinkDel", "LinkDel"),
+        ("update_link", "LinkUpdate", "LinkUpdate"),
+    ],
+)
+def test_link_mutation_raises_on_error_ack(method_name, rpc_name, action):
+    launcher = _new_launcher()
+    launcher._client = MagicMock()
+    launcher._request = netem_pb2.ProjectRequest(id="prj-1")
+    getattr(launcher._client, rpc_name).return_value = _ack(
+        netem_pb2.StatusCode.ERROR, "backend refused"
+    )
+
+    with pytest.raises(RuntimeError, match=f"{action} failed"):
+        getattr(launcher, method_name)(_link())
+
+
+@pytest.mark.parametrize(
+    ("method_name", "rpc_name", "action"),
+    [
+        ("add_link", "LinkAdd", "LinkAdd"),
+        ("delete_link", "LinkDel", "LinkDel"),
+        ("update_link", "LinkUpdate", "LinkUpdate"),
+    ],
+)
+def test_link_mutation_raises_when_ack_has_no_status(method_name, rpc_name, action):
+    launcher = _new_launcher()
+    launcher._client = MagicMock()
+    launcher._request = netem_pb2.ProjectRequest(id="prj-1")
+    getattr(launcher._client, rpc_name).return_value = SimpleNamespace()
+
+    with pytest.raises(RuntimeError, match=f"{action} failed"):
+        getattr(launcher, method_name)(_link())
 
 
 _LINK_MUTATIONS = [("add_link", "LinkAdd"), ("delete_link", "LinkDel")]
 
 
 @pytest.mark.parametrize("method_name", ["add_link", "delete_link"])
-def test_link_mutation_warns_before_project_open(method_name, caplog):
+def test_link_mutation_raises_before_project_open(method_name):
     launcher = _new_launcher()
     launcher._client = MagicMock()
     launcher._request = None
 
-    with caplog.at_level(logging.WARNING):
+    with pytest.raises(
+        RuntimeError, match=f"{method_name} called before project is open"
+    ):
         getattr(launcher, method_name)(_link())
 
     rpc_name = dict(_LINK_MUTATIONS)[method_name]
     getattr(launcher._client, rpc_name).assert_not_called()
-    assert f"{method_name} called before project is open" in caplog.text
 
 
 @pytest.mark.parametrize(("method_name", "rpc_name"), _LINK_MUTATIONS)
@@ -364,6 +492,7 @@ def test_link_mutation_forwards_link_request(method_name, rpc_name):
     launcher = _new_launcher()
     launcher._client = MagicMock()
     launcher._request = netem_pb2.ProjectRequest(id="prj-1")
+    getattr(launcher._client, rpc_name).return_value = _ack()
 
     getattr(launcher, method_name)(_link())
 
@@ -451,3 +580,58 @@ def test_start_containers_deletes_project_file_on_failure(grpc_client, tmp_path)
     connection.close.assert_called_once()
     assert launcher._client is None
     assert launcher._request is None
+
+
+# TopologyRun completion / count validation
+
+
+@pytest.mark.parametrize(
+    ("stream", "message"),
+    [
+        (
+            [
+                _run_msg(netem_pb2.TopologyRunMsg.NODE_COUNT, 2),
+                _run_msg(netem_pb2.TopologyRunMsg.NODE_START),
+            ],
+            r"started 1 of 2 node",
+        ),
+        (
+            [
+                _run_msg(netem_pb2.TopologyRunMsg.LINK_COUNT, 2),
+                _run_msg(netem_pb2.TopologyRunMsg.LINK_SETUP),
+            ],
+            r"set up 1 of 2 link",
+        ),
+        (
+            [
+                _run_msg(netem_pb2.TopologyRunMsg.NODE_COUNT, 1),
+                _run_msg(netem_pb2.TopologyRunMsg.NODE_START),
+                _run_msg(netem_pb2.TopologyRunMsg.NODE_START),
+            ],
+            r"started 2 of 1 node",
+        ),
+    ],
+)
+def test_start_containers_rejects_partial_topology_run(
+    grpc_client, tmp_path, stream, message
+):
+    grpc_client.TopologyRun.return_value = stream
+    launcher, connection, _factory = _start_launcher(tmp_path, grpc_client)
+    launcher.force_close_project = MagicMock(return_value=True)
+
+    with pytest.raises(RuntimeError, match=message):
+        launcher.start_containers([])
+
+    launcher.force_close_project.assert_called_once_with()
+    connection.close.assert_called_once()
+    assert launcher._request is None
+    assert launcher._client is None
+
+
+def test_start_containers_accepts_a_complete_stream_with_no_counts(
+    grpc_client, tmp_path
+):
+    grpc_client.TopologyRun.return_value = []
+    launcher, _connection, _factory = _start_launcher(tmp_path, grpc_client)
+
+    assert launcher.start_containers([]) == (0.0, 0.0)

@@ -1,4 +1,5 @@
 import logging
+import math
 
 from sat_com_model.models import Link as SatComLink
 
@@ -22,6 +23,47 @@ DEFAULT_DOWNLINK_FREQ_GHZ = 19.0
 DEFAULT_UPLINK_FREQ_GHZ = 14.25
 
 
+def validate_loss(loss: float) -> float:
+    """Return *loss* as a finite percentage in ``[0, 100]``.
+
+    Raises:
+        TypeError: If *loss* is not a real number (booleans are rejected).
+        ValueError: If *loss* is non-finite or outside the accepted range.
+    """
+    if isinstance(loss, bool) or not isinstance(loss, (int, float)):
+        raise TypeError(f"Link.loss must be a number, got {loss!r}")
+    try:
+        value = float(loss)
+    except OverflowError as exc:
+        raise ValueError(f"Link.loss must be finite, got {loss!r}") from exc
+    if not math.isfinite(value):
+        raise ValueError(f"Link.loss must be finite, got {loss!r}")
+    if not 0.0 <= value <= 100.0:
+        raise ValueError(f"Link.loss must be between 0 and 100 percent, got {loss!r}")
+    return value
+
+
+def validate_jitter(jitter: int) -> int:
+    """Return *jitter* in milliseconds.
+
+    Raises:
+        TypeError: If *jitter* is not an integer (booleans are rejected).
+        ValueError: If *jitter* is negative.
+    """
+    if isinstance(jitter, bool) or not isinstance(jitter, int):
+        raise TypeError(f"Link.jitter must be an int, got {jitter!r}")
+    if jitter < 0:
+        raise ValueError(f"Link.jitter must be non-negative, got {jitter}")
+    return jitter
+
+
+def validate_admin_up(admin_up: bool) -> bool:
+    """Return *admin_up*, rejecting non-boolean values."""
+    if not isinstance(admin_up, bool):
+        raise TypeError(f"Link.admin_up must be a bool, got {admin_up!r}")
+    return admin_up
+
+
 class Link:
     def __init__(
         self,
@@ -36,12 +78,18 @@ class Link:
         link_budget_config: LinkBudgetConfig | None = None,
         downlink_capacity_strategy: CapacityStrategy | None = None,
         uplink_capacity_strategy: CapacityStrategy | None = None,
+        loss: float = 0.0,
+        jitter: int = 0,
+        admin_up: bool = True,
     ):
         self.source: Node = source
         self.target: Node = target
         self.distance: float = distance
         self.type: str = type
         self.is_active: bool = is_active
+        self.admin_up: bool = validate_admin_up(admin_up)
+        self.loss: float = validate_loss(loss)
+        self.jitter: int = validate_jitter(jitter)
         self.direction: str = direction
         self.use_budget: bool = use_budget
         self.link_budget_config: LinkBudgetConfig | None = link_budget_config
@@ -327,9 +375,14 @@ class Link:
     def update_interfaces_state(self) -> None:
         """
         A method that updates the state of the interfaces.
+
+        A link is usable only when it is both topology-active and not
+        administratively down, so a later topology tick cannot overwrite an
+        explicit ``set_link_state(..., up=False)``.
         """
+        active = bool(self.is_active and self.admin_up)
         for interface in self.peer_interfaces:
-            interface.is_active = self.is_active
+            interface.is_active = active
 
         return None
 

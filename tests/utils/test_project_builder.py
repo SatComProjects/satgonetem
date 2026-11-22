@@ -105,6 +105,16 @@ class TestGroundObjectFile:
         path = gof.write(str(tmp_path))
         assert pathlib.Path(path).is_absolute()
 
+    @pytest.mark.parametrize("name", ["Rome, IT", "Line\nBreak", "Carriage\rReturn"])
+    def test_write_rejects_csv_metacharacters_in_names(self, tmp_path, name):
+        gof = GroundObjectFile(
+            "Ground Stations",
+            [GroundStationEntry(0, name, 41.9, 12.5, 0.0)],
+        )
+
+        with pytest.raises(ValueError, match="commas or line breaks"):
+            gof.write(str(tmp_path))
+
     def test_write_empty_entries(self, tmp_path):
         gof = GroundObjectFile("Empty Group", [])
         path = gof.write(str(tmp_path))

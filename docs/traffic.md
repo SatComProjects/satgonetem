@@ -14,6 +14,13 @@ Flows implement the `traffic.flow.Flow` protocol and share a `ThreadedFlow`
 lifecycle. Importing `satgonetem.traffic` is lazy: pandas/matplotlib load only
 when iperf3 result/plot APIs are used.
 
+`Iperf3Results` is a facade over `iperf3_end_summary.py` (sender/receiver/bidir
+end-section semantics), `iperf3_intervals.py` (interval DataFrames and rate
+math), `iperf3_report.py` (summary/JSON/repr formatting),
+`iperf3_plotting.py` (metric plots), and `iperf3_units.py` (unit constants).
+The public properties, `to_json()` shape, and mutable `json_side`/`client_notes`
+attributes are unchanged.
+
 All three are also exposed on `TopologyManager` as convenience methods. Each method accepts a single node or a list of nodes for both `source` and `destination`, starts a flow for every (source, destination) pair, and always returns a list of flow objects.
 
 ```python
@@ -200,8 +207,11 @@ timeout fails the flow before the client starts.
 For `bidir=True`, throughput and totals aggregate both directions:
 `avg_throughput_mbps` is the sum of the forward and reverse interval rates,
 `max_throughput_mbps`/`min_throughput_mbps` are per-interval sums, and byte,
-packet, retransmit, loss and jitter figures cover both endpoints. iperf3 3.11
-or newer is required for the `*_bidir_reverse` summaries.
+packet, retransmit, loss and jitter figures cover both endpoints;
+`total_packets` is the transmitted count (`received + lost`) and
+`avg_loss_percent` is `100 * lost / (received + lost)`, matching iperf3's
+`lost_percent`. iperf3 3.11 or newer is required for the
+`*_bidir_reverse` summaries.
 
 ### DataFrames and plotting
 

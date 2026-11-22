@@ -108,15 +108,43 @@ class _FakeSimulationManager:
 
     def __init__(self) -> None:
         self.removed: list = []
+        self.active: list = []
 
     def remove_inter_satellite_link(self, link) -> None:
         self.removed.append(link)
+        if link in self.active:
+            self.active.remove(link)
 
     def remove_ground_station_link(self, link) -> None:
         self.removed.append(link)
+        if link in self.active:
+            self.active.remove(link)
 
     def remove_user_terminal_link(self, link) -> None:
         self.removed.append(link)
+        if link in self.active:
+            self.active.remove(link)
+
+    def get_inter_satellites_links(self):
+        return [
+            link
+            for link in self.active
+            if getattr(link, "type", "") == "InterSatelliteLink"
+        ]
+
+    def get_ground_stations_links(self):
+        return [
+            link
+            for link in self.active
+            if getattr(link, "type", "") == "GroundStationLink"
+        ]
+
+    def get_user_terminal_links(self):
+        return [
+            link
+            for link in self.active
+            if getattr(link, "type", "") == "UserTerminalLink"
+        ]
 
 
 class LinkFailureHarness(SimulationLoopMixin):
@@ -133,11 +161,123 @@ class LinkFailureHarness(SimulationLoopMixin):
 
 
 def _batch_link(link_type: str) -> SimpleNamespace:
+    source = SimpleNamespace(name="Sat0")
+    target = SimpleNamespace(name="Sat1")
     return SimpleNamespace(
-        satcom_object=SimpleNamespace(type=link_type),
-        source=SimpleNamespace(name="Sat0"),
-        target=SimpleNamespace(name="Sat1"),
+        satcom_object=SimpleNamespace(
+            type=link_type,
+            source=source,
+            destination=target,
+        ),
+        source=source,
+        target=target,
     )
+
+
+class _FailingRemovalSimulationManager(_FakeSimulationManager):
+    """Fail a batch removal partway and record compensating restores."""
+
+    def __init__(self, *, fail_ground_station_removal: bool = True) -> None:
+        super().__init__()
+        self.fail_ground_station_removal = fail_ground_station_removal
+        self.restored: list[tuple] = []
+
+    def remove_ground_station_link(self, link) -> None:
+        if self.fail_ground_station_removal:
+            raise RuntimeError("removal failed")
+        super().remove_ground_station_link(link)
+
+    def create_and_add_inter_satellite_link_connection(
+        self, source, destination, inter_satellite_link_direction=None
+    ):
+        self.restored.append((source, destination, inter_satellite_link_direction))
+        return SimpleNamespace(type="InterSatelliteLink")
+
+    def create_and_add_ground_station_link_connection(self, source, destination):
+        self.restored.append((source, destination, None))
+        return SimpleNamespace(type="GroundStationLink")
+
+
+class _FailingUpdateHarness(LinkFailureHarness):
+    """Raise on the first topology update, then allow the compensating one."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.simulation_manager = _FailingRemovalSimulationManager(
+            fail_ground_station_removal=False
+        )
+
+    def update_simulation(self, advance_timestep: bool = True) -> None:
+        self.updates += 1
+        if self.updates == 1:
+            raise RuntimeError("update failed")
+
+
+class _PartialRemovalSimulationManager(_FailingRemovalSimulationManager):
+    """Remove a link, then raise, simulating a partially applied removal."""
+
+    def remove_ground_station_link(self, link) -> None:
+        super().remove_ground_station_link(link)
+        raise RuntimeError("removal failed after mutation")
+
+
+def test_partial_removal_is_rolled_back():
+    harness = LinkFailureHarness()
+    harness.simulation_manager = _PartialRemovalSimulationManager(
+        fail_ground_station_removal=False
+    )
+    first = _batch_link("InterSatelliteLink")
+    second = _batch_link("GroundStationLink")
+    harness.simulation_manager.active = [first.satcom_object, second.satcom_object]
+
+    with pytest.raises(RuntimeError, match="removal failed after mutation"):
+        harness.simulate_link_failure([first, second])
+
+    assert harness.simulation_manager.removed == [
+        first.satcom_object,
+        second.satcom_object,
+    ]
+    assert harness.simulation_manager.restored == [
+        (second.satcom_object.source, second.satcom_object.destination, None),
+        (first.satcom_object.source, first.satcom_object.destination, None),
+    ]
+
+
+def test_mid_batch_removal_failure_rolls_back_removed_links_and_updates():
+    """A failed removal must compensate earlier removals and still sync."""
+    harness = LinkFailureHarness()
+    harness.simulation_manager = _FailingRemovalSimulationManager()
+    first = _batch_link("InterSatelliteLink")
+    second = _batch_link("GroundStationLink")
+    harness.simulation_manager.active = [first.satcom_object, second.satcom_object]
+
+    with pytest.raises(RuntimeError, match="removal failed"):
+        harness.simulate_link_failure([first, second])
+
+    satcom = first.satcom_object
+    assert harness.simulation_manager.removed == [satcom]
+    assert harness.simulation_manager.restored == [
+        (satcom.source, satcom.destination, None)
+    ]
+    # The compensating update ran even though the batch failed.
+    assert harness.updates == 1
+
+
+def test_update_failure_rolls_back_the_whole_batch_and_syncs_again():
+    harness = _FailingUpdateHarness()
+    first = _batch_link("InterSatelliteLink")
+    second = _batch_link("GroundStationLink")
+
+    with pytest.raises(RuntimeError, match="update failed"):
+        harness.simulate_link_failure([first, second])
+
+    assert len(harness.simulation_manager.removed) == 2
+    assert harness.simulation_manager.restored == [
+        (second.satcom_object.source, second.satcom_object.destination, None),
+        (first.satcom_object.source, first.satcom_object.destination, None),
+    ]
+    # One failing update plus the post-rollback update.
+    assert harness.updates == 2
 
 
 def test_invalid_link_in_batch_leaves_earlier_links_untouched():

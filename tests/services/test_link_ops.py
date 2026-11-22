@@ -304,7 +304,8 @@ def test_bulk_link_operations_logs_per_link_errors_and_continues(caplog):
     assert stats["updated_count"] == 2
     assert stats["update_error_count"] == 1
     assert ok.to_update is False
-    assert failed.to_update is False
+    # A per-link application failure keeps the retry flag set.
+    assert failed.to_update is True
     errors = [
         record.getMessage()
         for record in caplog.records
@@ -635,6 +636,53 @@ def test_add_retry_builds_interfaces_once_backend_recovers():
     build_interfaces.assert_called_once_with(link, set_ip=True, sync_to_node=True)
 
 
+def test_local_build_failure_retry_does_not_resend_backend_add(caplog):
+    """The backend add must run once even while the local build is retried."""
+    link = make_link(make_satellite("Sat10"), make_satellite("Sat11"))
+    link.to_add = True
+    key = frozenset((link.source.name, link.target.name))
+    launcher = MagicMock()
+    build_interfaces = MagicMock(
+        side_effect=[RuntimeError("address push failed"), None]
+    )
+    fake = _FakeTopology(
+        {key: link},
+        launcher=launcher,
+        _build_interfaces_from_link=build_interfaces,
+    )
+
+    def run_round():
+        LinkOpsMixin.bulk_link_operations(
+            fake,
+            to_del=False,
+            to_update=False,
+            links_to_add=[link],
+            links_to_update=[],
+            links_to_remove=[],
+        )
+        LinkOpsMixin._perform_local_link_operations(
+            fake,
+            to_del=False,
+            to_update=False,
+            links_to_add=[link],
+            links_to_update=[],
+            links_to_remove=[],
+        )
+
+    with caplog.at_level(logging.ERROR):
+        run_round()
+
+    assert launcher.add_link.call_count == 1
+    assert link.to_add is True
+    assert "address push failed" in caplog.text
+
+    run_round()
+
+    assert launcher.add_link.call_count == 1
+    assert build_interfaces.call_count == 2
+    assert link.to_add is False
+
+
 def test_successful_backend_add_builds_interfaces_and_clears_flag():
     link = make_link(make_satellite("Sat6"), make_satellite("Sat7"))
     link.to_add = True
@@ -646,3 +694,235 @@ def test_successful_backend_add_builds_interfaces_and_clears_flag():
     launcher.add_link.assert_called_once_with(link)
     build_interfaces.assert_called_once_with(link, set_ip=True, sync_to_node=True)
     assert link.to_add is False
+
+
+def test_failed_link_update_is_retried_and_cleared_after_success():
+    link = SimpleNamespace(
+        to_add=False,
+        to_update=True,
+        to_remove=False,
+        source=SimpleNamespace(name="Sat0"),
+        target=SimpleNamespace(name="Sat1"),
+    )
+    launcher = MagicMock()
+    launcher.update_links.return_value = _update_response(
+        [netem_pb2.ERROR], error="tc exploded"
+    )
+    fake = _FakeTopology({0: link}, launcher=launcher)
+
+    LinkOpsMixin.bulk_link_operations(
+        fake, to_add=False, to_del=False, links_to_update=[link]
+    )
+    assert link.to_update is True
+
+    # The local phase must not clear the flag either.
+    LinkOpsMixin._perform_local_link_operations(
+        fake,
+        to_add=False,
+        to_del=False,
+        links_to_add=[],
+        links_to_update=[link],
+        links_to_remove=[],
+    )
+    assert link.to_update is True
+
+    link.to_update = True
+    launcher.update_links.return_value = _update_response([netem_pb2.OK])
+    LinkOpsMixin.bulk_link_operations(
+        fake, to_add=False, to_del=False, links_to_update=[link]
+    )
+    LinkOpsMixin._perform_local_link_operations(
+        fake,
+        to_add=False,
+        to_del=False,
+        links_to_add=[],
+        links_to_update=[link],
+        links_to_remove=[],
+    )
+    assert link.to_update is False
+
+
+def test_failed_per_link_update_fallback_keeps_retry_flag():
+    link = SimpleNamespace(
+        to_add=False,
+        to_update=True,
+        to_remove=False,
+        source=SimpleNamespace(name="Sat0"),
+        target=SimpleNamespace(name="Sat1"),
+        delay=10,
+    )
+    launcher = SimpleNamespace(
+        update_link=MagicMock(side_effect=RuntimeError("LinkUpdate failed"))
+    )
+    fake = _FakeTopology({0: link}, launcher=launcher)
+
+    LinkOpsMixin.bulk_link_operations(
+        fake, to_add=False, to_del=False, links_to_update=[link]
+    )
+
+    launcher.update_link.assert_called_once_with(link)
+    assert link.to_update is True
+
+
+def test_failed_hil_update_keeps_retry_flag():
+    link = SimpleNamespace(
+        to_add=False,
+        to_update=True,
+        to_remove=False,
+        source=SimpleNamespace(name="Sat0"),
+        target=SimpleNamespace(name="Gnd0"),
+    )
+    hil_manager = MagicMock()
+    hil_manager.is_hil_link.return_value = True
+    hil_manager.update_link.return_value = False
+    launcher = MagicMock()
+    fake = _FakeTopology({0: link}, launcher=launcher, hil_manager=hil_manager)
+
+    LinkOpsMixin.bulk_link_operations(
+        fake, to_add=False, to_del=False, links_to_update=[link]
+    )
+
+    hil_manager.update_link.assert_called_once_with(link)
+    launcher.update_links.assert_not_called()
+    assert link.to_update is True
+
+
+def test_hil_update_success_clears_retry_flag():
+    link = SimpleNamespace(
+        to_add=False,
+        to_update=True,
+        to_remove=False,
+        source=SimpleNamespace(name="Sat0"),
+        target=SimpleNamespace(name="Gnd0"),
+    )
+    hil_manager = MagicMock()
+    hil_manager.is_hil_link.return_value = True
+    hil_manager.update_link.return_value = True
+    fake = _FakeTopology({0: link}, launcher=MagicMock(), hil_manager=hil_manager)
+
+    LinkOpsMixin.bulk_link_operations(
+        fake, to_add=False, to_del=False, links_to_update=[link]
+    )
+
+    assert link.to_update is False
+
+
+def test_hil_add_failure_keeps_link_pending_and_skips_local_interfaces():
+    link = make_link(make_satellite("Sat8"), make_satellite("Sat9"))
+    link.to_add = True
+    key = frozenset((link.source.name, link.target.name))
+    hil_manager = MagicMock()
+    hil_manager.is_hil_link.return_value = True
+    hil_manager.setup_link.return_value = False
+    build_interfaces = MagicMock()
+    fake = _FakeTopology(
+        {key: link},
+        launcher=MagicMock(),
+        hil_manager=hil_manager,
+        _build_interfaces_from_link=build_interfaces,
+    )
+
+    LinkOpsMixin.bulk_link_operations(
+        fake, to_del=False, to_update=False, links_to_add=[link]
+    )
+    LinkOpsMixin._perform_local_link_operations(
+        fake, to_del=False, to_update=False, links_to_add=[link]
+    )
+
+    assert link.to_add is True
+    build_interfaces.assert_not_called()
+    assert key in fake._link_add_failures()
+
+    hil_manager.setup_link.return_value = True
+    LinkOpsMixin.bulk_link_operations(
+        fake, to_del=False, to_update=False, links_to_add=[link]
+    )
+    LinkOpsMixin._perform_local_link_operations(
+        fake, to_del=False, to_update=False, links_to_add=[link]
+    )
+
+    hil_manager.setup_link.assert_called_with(link)
+    build_interfaces.assert_called_once_with(link, set_ip=True, sync_to_node=True)
+    assert link.to_add is False
+
+
+def test_hil_add_exception_marks_failure_and_skips_local_interfaces(caplog):
+    link = make_link(make_satellite("Sat12"), make_satellite("Gnd12"))
+    link.to_add = True
+    key = frozenset((link.source.name, link.target.name))
+    hil_manager = MagicMock()
+    hil_manager.is_hil_link.return_value = True
+    hil_manager.setup_link.side_effect = RuntimeError("namespace restore failed")
+    build_interfaces = MagicMock()
+    fake = _FakeTopology(
+        {key: link},
+        launcher=MagicMock(),
+        hil_manager=hil_manager,
+        _build_interfaces_from_link=build_interfaces,
+    )
+
+    with caplog.at_level(logging.ERROR):
+        LinkOpsMixin.bulk_link_operations(
+            fake, to_del=False, to_update=False, links_to_add=[link]
+        )
+        LinkOpsMixin._perform_local_link_operations(
+            fake, to_del=False, to_update=False, links_to_add=[link]
+        )
+
+    assert key in fake._link_add_failures()
+    assert link.to_add is True
+    build_interfaces.assert_not_called()
+    assert "namespace restore failed" in caplog.text
+
+
+def test_hil_update_exception_keeps_retry_flag_and_counts_error(caplog):
+    link = SimpleNamespace(
+        to_add=False,
+        to_update=True,
+        to_remove=False,
+        source=SimpleNamespace(name="Sat13"),
+        target=SimpleNamespace(name="Gnd13"),
+    )
+    hil_manager = MagicMock()
+    hil_manager.is_hil_link.return_value = True
+    hil_manager.update_link.side_effect = RuntimeError("qdisc update failed")
+    fake = _FakeTopology({0: link}, launcher=MagicMock(), hil_manager=hil_manager)
+
+    with caplog.at_level(logging.ERROR):
+        stats = LinkOpsMixin.bulk_link_operations(
+            fake, to_add=False, to_del=False, links_to_update=[link]
+        )
+
+    assert link.to_update is True
+    assert frozenset(("Sat13", "Gnd13")) in fake._link_update_failures()
+    assert stats["update_error_count"] == 1
+    assert "qdisc update failed" in caplog.text
+
+
+def test_hil_teardown_failure_keeps_link_and_local_state():
+    link = _link_pending_removal()
+    key = frozenset((link.source.name, link.target.name))
+    hil_manager = MagicMock()
+    hil_manager.is_hil_link.return_value = True
+    hil_manager.teardown_link.return_value = False
+    fake = _FakeTopology(
+        {key: link},
+        launcher=MagicMock(),
+        hil_manager=hil_manager,
+        address_plan=MagicMock(),
+        interfaces=list(link.peer_interfaces),
+        interface_version=0,
+    )
+
+    LinkOpsMixin.bulk_link_operations(
+        fake, to_add=False, to_update=False, links_to_remove=[link]
+    )
+    LinkOpsMixin._perform_local_link_operations(
+        fake, to_add=False, to_update=False, links_to_remove=[link]
+    )
+
+    hil_manager.teardown_link.assert_called_once_with(link)
+    assert link.to_delete is True
+    assert fake.links == {key: link}
+    fake.address_plan.release_link.assert_not_called()
+    assert fake.interfaces == link.peer_interfaces

@@ -83,8 +83,9 @@ _TCP_BIDIR_JSON = json.dumps(
 # Forward sender: 1.25 MB per 1 s interval = 10 Mbps (no loss/jitter).
 # Reverse receiver: 2.5 MB per 1 s interval = 20 Mbps.
 # Aggregate throughput: (2.5 MB + 5 MB) * 8 / 2 s = 30 Mbps.
-# Receiver summaries across both directions: 1700 + 3400 packets,
-# 20 + 10 lost packets, 0.5 ms and 0.2 ms jitter.
+# Receiver summaries across both directions: 1720 + 3410 transmitted packets,
+# 20 + 10 lost packets, 0.5 ms and 0.2 ms jitter. iperf3 reports the sender's
+# transmitted count in ``packets``; ``lost_packets`` is a subset.
 _UDP_BIDIR_JSON = json.dumps(
     {
         "start": {
@@ -162,7 +163,7 @@ _UDP_BIDIR_JSON = json.dumps(
             },
             "sum_received": {
                 "bytes": 2_400_000,
-                "packets": 1700,
+                "packets": 1720,
                 "jitter_ms": 0.5,
                 "lost_packets": 20,
                 "lost_percent": 1.16,
@@ -183,7 +184,7 @@ _UDP_BIDIR_JSON = json.dumps(
             },
             "sum_received_bidir_reverse": {
                 "bytes": 4_800_000,
-                "packets": 3400,
+                "packets": 3410,
                 "jitter_ms": 0.2,
                 "lost_packets": 10,
                 "lost_percent": 0.29,
@@ -251,10 +252,12 @@ class TestUdpBidirAggregation:
 
         assert res.total_bytes == 7_200_000
 
-    def test_total_packets_aggregates_both_receivers(self):
+    def test_total_packets_counts_transmitted_packets_across_both_receivers(self):
         res = _udp_bidir_results()
 
-        assert res.total_packets == 5100
+        # iperf3's receiver summary reports transmitted packets (1720 + 3410);
+        # lost packets are a subset and are not added again.
+        assert res.total_packets == 5130
 
     def test_total_lost_packets_aggregates_both_receivers(self):
         res = _udp_bidir_results()
@@ -264,13 +267,17 @@ class TestUdpBidirAggregation:
     def test_avg_loss_percent_is_recombined_from_both_directions(self):
         res = _udp_bidir_results()
 
-        # 30 lost out of 5100 received, not 1.16 % + 0.29 %.
-        assert res.avg_loss_percent == pytest.approx(30 / 5100 * 100)
+        # iperf3 defines loss over transmitted packets: 30 lost out of 5130
+        # transmitted, not 1.16 % + 0.29 % and not 30 / 5100.
+        assert res.avg_loss_percent == pytest.approx(30 / 5130 * 100)
+        assert res.avg_loss_percent == pytest.approx(
+            100 * res.total_lost_packets / res.total_packets
+        )
 
     def test_avg_jitter_is_packet_weighted_across_directions(self):
         res = _udp_bidir_results()
 
-        # (0.5 ms * 1700 + 0.2 ms * 3400) / 5100 = 0.3 ms.
+        # (0.5 ms * 1700 received + 0.2 ms * 3400 received) / 5100 = 0.3 ms.
         assert res.avg_jitter_ms == pytest.approx(0.3)
 
 

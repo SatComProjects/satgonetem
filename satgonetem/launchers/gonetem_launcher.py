@@ -13,6 +13,7 @@ import grpc
 import satgonetem.proto.netem_pb2_grpc as netem_grpc
 from satgonetem.launchers.base_launcher import NetworkLauncher
 from satgonetem.launchers.gonetem_cleanup import GoNetEmCleanupMixin
+from satgonetem.launchers.gonetem_control import GoNetEmControlMixin
 from satgonetem.launchers.gonetem_lifecycle import (
     LINK_UPDATE_CHUNK_SIZE as LINK_UPDATE_CHUNK_SIZE,
 )
@@ -36,7 +37,12 @@ from satgonetem.ports import (
 from satgonetem.proto import netem_pb2
 
 
-class GoNetEmLauncher(GoNetEmLifecycleMixin, GoNetEmCleanupMixin, NetworkLauncher):
+class GoNetEmLauncher(
+    GoNetEmLifecycleMixin,
+    GoNetEmCleanupMixin,
+    GoNetEmControlMixin,
+    NetworkLauncher,
+):
     """Launch and manage a network topology through a GoNetem gRPC server."""
 
     def __init__(

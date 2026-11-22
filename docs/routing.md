@@ -21,6 +21,19 @@ TopologyManager
 The topology manager knows nothing about the internal routing logic. All state
 (label tables, routing tables, graph snapshots) lives inside the daemon itself.
 
+The two largest built-ins are facades over leaf collaborators:
+
+- `StaticRoutingDaemon` (`static_daemon.py`) delegates graph/table planning to
+  `static_route_planner.py`, interface resolution to `peer_interface_index.py`,
+  RouteInstall/legacy batching to `route_batch_installer.py`, and pure diff
+  helpers to `static_route_ops.py`.
+- `SRMPLSDaemon` (`srmpls_daemon.py`) delegates path/label-stack planning to
+  `srmpls_planner.py`, command installation to `srmpls_installer.py`, teardown
+  to `srmpls_teardown.py`, and command identity/diff helpers to
+  `srmpls_route_ops.py`; `srmpls_label_manager.py` remains the SID owner.
+
+Daemon lifecycle methods and the documented public APIs are unchanged.
+
 ---
 
 ## Built-in routing methods

@@ -149,6 +149,9 @@ class P4Daemon(RoutingDaemon):
             self.graph_shared_memory = None
 
     def init(self, max_workers: int = 4) -> bool:
+        # A re-init must replace the previous controller rather than leak it;
+        # stop it before the shared segment it maps is released.
+        self.stop_p4_controller()
         self._release_graph_shared_memory()
         self.graph_shared_memory = GraphSharedMemory(
             name=self.shared_memory_name,
@@ -202,7 +205,8 @@ class P4Daemon(RoutingDaemon):
         Returns False when the script is missing or not executable, the process
         exits, the endpoint does not become ready before the deadline, or the
         readiness probe raises. Any started process is stopped and its output
-        readers are joined on failure.
+        readers are joined on failure. An already-running controller is stopped
+        first so a reload cannot leave two processes behind.
         """
         script_path = os.path.join(self.p4_controller_path, "run_controller.sh")
 
@@ -223,6 +227,11 @@ class P4Daemon(RoutingDaemon):
                 return False
 
         try:
+            # A second controller must never coexist with the first: stop the
+            # existing process only once a replacement can actually be spawned.
+            if self.p4_controller_process is not None:
+                self.stop_p4_controller()
+
             # Start the controller without a shell to avoid shell injection and allow
             # capturing stdout/stderr. Provide no stdin to avoid interactive sudo prompts.
             proc = self._process_runner.popen(

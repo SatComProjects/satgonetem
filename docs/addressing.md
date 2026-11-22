@@ -1,9 +1,13 @@
-# IPv4 Addressing
+# IPv4 and IPv6 Addressing
 
 SatGoNetEm allocates IPv4 addresses with a deterministic topology-wide plan.
 Addresses are generated from node blocks, not from a hash of node and peer IDs.
 The default plan lives entirely inside the private `10.0.0.0/8` aggregate and
 uses point-to-point `/31` links and `/32` loopbacks.
+
+An optional IPv6 plan can run alongside IPv4. IPv4 is always enabled and keeps
+its allocation order; IPv6 is opt-in through `NetworkConfig.ipv6_enabled` and
+only covers addressing (routing and traffic remain IPv4-only).
 
 ## Default pools
 
@@ -71,11 +75,80 @@ address pair independent of the incidental `Link.source` / `Link.target`
 orientation. A ground-station link therefore has both addresses inside the
 ground station's `/20`, including the satellite-side interface.
 
+## Optional IPv6 addressing
+
+IPv6 uses the same node kinds, block layout, and link-ownership rules as IPv4,
+with its own private ULA pools:
+
+| Purpose | Pool | Block per node | Capacity |
+|---|---|---|---|
+| Ground stations | `fd00:1::/40` | `/64` | 16,777,216 ground stations |
+| Satellites | `fd00:2::/40` | `/64` | 16,777,216 satellites |
+| User terminals | `fd00:3::/40` | `/64` | 16,777,216 user terminals |
+
+Enable it before the topology is built, either directly or with a `from_file`
+override:
+
+```python
+from satgonetem.services.topology_satcom import NetworkConfig, TopologyManager
+
+config = NetworkConfig(
+    ipv6_enabled=True,
+    ipv6_ground_station_pool="fd00:1::/40",
+    ipv6_satellite_pool="fd00:2::/40",
+    ipv6_user_terminal_pool="fd00:3::/40",
+    ipv6_ground_station_prefix_len=64,
+    ipv6_satellite_prefix_len=64,
+    ipv6_user_terminal_prefix_len=64,
+)
+topology = TopologyManager.from_file("topology_files/test_topology.json", config)
+```
+
+Every node block has the same layout as IPv4, using IPv6 prefix sizes:
+
+```
+<block base + 0>          network address (never assigned)
+<block base + 1>/128      loopback
+<block base + 2..3>       reserved
+<block base + 4>/127      first point-to-point link
+<block base + 6>/127      second point-to-point link
+...
+```
+
+`Interface.ipv6` and `Interface.ipv6_prefix_len` are independent of
+`Interface.ipv4` and `Interface.prefix_len`; `Interface.network6` returns the
+IPv6 network. Link ownership is identical to IPv4: ground station first, then
+user terminal, then the lower satellite ID, and the owner receives the lower
+address of the `/127`.
+
+The IPv6 pools must be IPv6 networks with no host bits set, must be private or
+unique-local (not global, multicast, loopback, link-local, or unspecified), must
+not overlap each other, and must be larger than their block prefix. A block must
+also be large enough for a `/128` loopback plus at least one `/127` link.
+`NetworkConfig.__post_init__` constructs the planner when IPv6 is enabled, so a
+bad pool fails before any topology node is created. With IPv6 disabled,
+existing IPv4 allocations and generated project output are unchanged.
+
+### Applying IPv6 at runtime
+
+```python
+topology.start_gonetem()
+topology.set_ip_addresses()          # pushes IPv4 and IPv6 when enabled
+topology.set_ipv6s_for_all_nodes()   # IPv6 only
+```
+
+`set_ipv6s_for_all_nodes()` issues one batched
+`ip -6 -force -batch` command per node in parallel using `ip addr replace`, so
+repeated calls are idempotent. Link interface prefixes must be `/127` or `/128`;
+anything else raises `ValueError`. `set_ip_addresses()` attempts both families
+even when one fails and raises after both attempts.
+
 ## Routing
 
 Static routing installs `/32` routes to destination loopbacks. OSPF and IS-IS
 use the prefix stored on each `Interface` (`/31` for links, `/32` for
-loopbacks). No routing code assumes a global `/15` summary.
+loopbacks). No routing code assumes a global `/15` summary. IPv6 routing
+protocols and IPv6 traffic tools are not implemented.
 
 ## Runtime sequence
 

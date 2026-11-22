@@ -23,10 +23,10 @@ The checked-in stubs were generated with:
 
 `netem_pb2_grpc.py` refuses to import if the installed `grpcio` is older than
 the plugin version, and `netem_pb2.py` validates the protobuf runtime version.
-The project declares `grpcio>=1.62.0` and `protobuf>=6.31.0`, so an environment
-that satisfies the lower bounds but not the generated bounds will fail at
-import time. Upgrade `grpcio` (and `grpcio-tools` if you regenerate) when
-working on the protocol.
+The project declares `grpcio>=1.80.0` and `protobuf>=6.31.1`, matching the
+generated stubs' runtime checks. Upgrade `grpcio` (and `grpcio-tools` if you
+regenerate) when working on the protocol, and raise the declared bounds with
+any regenerated stubs.
 
 ## Import layout
 
@@ -80,9 +80,9 @@ SatGoNetEm today; the rest are available to tools that need them.
 | `ProjectOpen` | unary | Open a `project.gnet` archive (**used**) |
 | `ProjectClose` | server stream | Stop and remove the project (**used**) |
 | `ProjectGetMany` | unary | List open projects |
-| `ProjectSave` | server stream | Save a project archive |
+| `ProjectSave` | server stream | Save a project archive (**used** by `save_project`) |
 | `ProjectGetNodeConfigs` | unary | Read per-node config files |
-| `ProjectGetStatus` | unary | Project and node status |
+| `ProjectGetStatus` | unary | Project and node status (**used** by `get_backend_status`) |
 
 `OpenRequest` carries `name` (display name) and `data` (the archive bytes).
 `PrjOpenResponse` returns the opaque `id` used by every later
@@ -95,7 +95,7 @@ SatGoNetEm today; the rest are available to tools that need them.
 | `TopologyRun` | server stream | Start nodes and wire links (**used**) |
 | `TopologyReload` | server stream | Reload an existing topology |
 | `TopologyCheck` | unary | Validate a topology |
-| `TopologyStartAll` / `TopologyStopAll` | unary | Bulk node start/stop |
+| `TopologyStartAll` / `TopologyStopAll` | unary | Bulk node start/stop (**used** by backend controls) |
 | `ReadNetworkFile` / `WriteNetworkFile` | unary | Read or replace `network.yml` |
 
 `TopologyRunMsg` is the progress protocol:
@@ -118,9 +118,9 @@ The launcher maps these to its own progress events
 |---|---|---|
 | `NodeRun` | unary | Run one command, return stdout/stderr/exit code (**used**) |
 | `NodeExec` | bidirectional stream | Interactive TTY shell (**used**) |
-| `NodeStart`, `NodeStop`, `NodeRestart` | unary | Container lifecycle |
-| `NodeSetIfState` | unary | Bring an interface up/down |
-| `NodeCapture` | server stream | Packet capture |
+| `NodeStart`, `NodeStop`, `NodeRestart` | unary | Container lifecycle (`NodeRestart` **used**) |
+| `NodeSetIfState` | unary | Bring an interface up/down (**used**) |
+| `NodeCapture` | server stream | Packet capture (**used**) |
 | `NodeCopyFrom`, `NodeCopyTo` | stream | File transfer |
 | `NodeGetConsoleCmd` | unary | Console command for a node |
 | `NodeReadConfigFiles` | unary | Read config files |
@@ -162,6 +162,33 @@ netem_pb2.ExecCltMsg(
 
 and then forwards `DATA` and `RESIZE` messages. See
 [Utilities](utils.md#interactive-terminal-bridge).
+
+#### `NodeSetIfState` / `NodeCapture`
+
+`NodeSetIfState` takes `NodeIfStateRequest(prjId, node, ifIndex, state)` where
+`state` is `IfState.UP` or `IfState.DOWN`. `ifIndex` is the integer suffix of
+the container interface name (`eth3` → `3`); loopback and non-`eth<digits>`
+names cannot be addressed through this RPC.
+
+`NodeCapture` takes `NodeInterfaceRequest(prjId, node, ifIndex)` and streams
+`CaptureSrvMsg`:
+
+| Code | Meaning | Launcher handling |
+|---|---|---|
+| `STDOUT` | Capture payload chunk | Concatenated into the returned bytes |
+| `STDERR` | Diagnostic text | Ignored |
+| `OK` | Completion marker | Ignored |
+| `ERROR` | Capture failure; `data` carries the message | Raises `RuntimeError` |
+
+There is no `DATA` code for this RPC, so do not concatenate arbitrary fields.
+The launcher passes a deadline (`timeout_s`, default 30 s).
+
+#### `ProjectSave`
+
+`ProjectSave` is a server stream. Only `ProjectSaveMsg.DATA` carries archive
+bytes; `NODE_COUNT` and `NODE_SAVE` are progress messages. The launcher
+concatenates `DATA` chunks, rejects an empty archive, and the manager layer
+writes the bytes to disk with a temporary file plus `os.replace`.
 
 #### `RouteInstall`
 
@@ -208,7 +235,7 @@ one `QoSConfig` per direction:
 
 | Field | Type | Unit / note |
 |---|---|---|
-| `loss` | float | Packet loss fraction/percent as understood by GoNetEm |
+| `loss` | float | Packet loss percentage (0–100), forwarded for both peers |
 | `delay` | int | Milliseconds |
 | `jitter` | int | Milliseconds |
 | `rate` | int | kbps |

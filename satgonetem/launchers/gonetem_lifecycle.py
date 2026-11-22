@@ -91,41 +91,66 @@ class GoNetEmLifecycleMixin(GoNetEmClientMixin):
             logging.info("GoNetEmLauncher: project opened with id=%s", project_id)
 
             node_count = link_count = node_start = link_setup = node_config = 0
+            node_count_seen = link_count_seen = False
+            saw_node_messages = False
             container_start_t = link_start_t = None
             container_time = link_time = 0.0
             try:
                 for msg in client.TopologyRun(self._request):
                     code = msg.code
-                    if code == netem_pb2.TopologyRunMsg.NODE_COUNT:
+                    if code == netem_pb2.TopologyRunMsg.NODE_MESSAGES:
+                        # The server sends this terminal message only after
+                        # Topology.Run completed successfully. Progress events
+                        # are batched best-effort and can be dropped when the
+                        # stream closes, so the terminal marker is authoritative.
+                        saw_node_messages = True
+                    elif code == netem_pb2.TopologyRunMsg.NODE_COUNT:
                         node_count = msg.total
+                        node_count_seen = True
                         if progress_cb:
                             progress_cb("NODE_COUNT", 0, node_count)
                     elif code == netem_pb2.TopologyRunMsg.LINK_COUNT:
                         link_count = msg.total
+                        link_count_seen = True
                         if progress_cb:
                             progress_cb("LINK_COUNT", 0, link_count)
                     elif code == netem_pb2.TopologyRunMsg.NODE_START:
                         if container_start_t is None:
                             container_start_t = time.monotonic()
-                        node_start += 1
+                        node_start += max(int(msg.total or 0), 1)
                         container_time = time.monotonic() - container_start_t
                         if progress_cb:
                             progress_cb("NODE_START", node_start, node_count)
                     elif code == netem_pb2.TopologyRunMsg.LINK_SETUP:
                         if link_start_t is None:
                             link_start_t = time.monotonic()
-                        link_setup += 1
+                        link_setup += max(int(msg.total or 0), 1)
                         link_time = time.monotonic() - link_start_t
                         if progress_cb:
                             progress_cb("LINK_SETUP", link_setup, link_count)
                     elif code == netem_pb2.TopologyRunMsg.NODE_LOADCONFIG:
-                        node_config += 1
+                        node_config += max(int(msg.total or 0), 1)
                         if progress_cb:
                             progress_cb("NODE_LOADCONFIG", node_config, node_count)
             except Exception as exc:
                 raise RuntimeError(
                     f"GoNetEmLauncher: TopologyRun failed: {exc}"
                 ) from exc
+
+            # A clean EOF without the terminal NODE_MESSAGES marker is a
+            # partial (crash/timeout) run. With the marker, batched or dropped
+            # progress counters are informational only.
+            if not saw_node_messages:
+                if node_count_seen and node_start != node_count:
+                    raise RuntimeError(
+                        "GoNetEmLauncher: TopologyRun incomplete: "
+                        f"started {node_start} of {node_count} node(s)"
+                    )
+                if link_count_seen and link_setup != link_count:
+                    raise RuntimeError(
+                        "GoNetEmLauncher: TopologyRun incomplete: "
+                        f"set up {link_setup} of {link_count} link(s)"
+                    )
 
             logging.info(
                 "GoNetEmLauncher: topology running (%d nodes, %d links)",
@@ -161,16 +186,37 @@ class GoNetEmLifecycleMixin(GoNetEmClientMixin):
                         exc,
                     )
 
-    def _cleanup_failed_start(self) -> None:
-        """Best-effort cleanup after a failed start_containers() call."""
-        try:
-            if self._request is not None:
-                self.force_close_project()
-        except Exception as exc:
-            logging.error("GoNetEmLauncher: cleanup after failed start failed: %s", exc)
-        finally:
+    def _cleanup_failed_start(self) -> bool:
+        """Best-effort cleanup after a failed start_containers() call.
+
+        Returns:
+            True when cleanup completed or there was nothing retryable;
+            False when the project handles must be retained for a retry.
+        """
+        request = self._request
+        if request is None:
+            self._close_transport()
+            return True
+        if not str(getattr(request, "id", "") or ""):
+            # An empty project id cannot target a server-side project, so
+            # retaining the transport would only leak it.
             self._close_transport()
             self._request = None
+            return True
+        try:
+            cleaned = self.force_close_project()
+        except Exception as exc:
+            logging.error("GoNetEmLauncher: cleanup after failed start failed: %s", exc)
+            return False
+        if cleaned:
+            self._close_transport()
+            self._request = None
+            return True
+        logging.error(
+            "GoNetEmLauncher: force-close after failed start did not complete; "
+            "retaining the project handle for retry"
+        )
+        return False
 
     def _attach_containers(self, nodes: list, project_id: str) -> None:
         """Resolve container objects and PIDs for each node after TopologyRun."""
@@ -224,9 +270,14 @@ class GoNetEmLifecycleMixin(GoNetEmClientMixin):
                     if progress_cb:
                         progress_cb("CLOSE_NODE_COUNT", 0, node_count)
                 elif msg.code == netem_pb2.ProjectCloseMsg.NODE_CLOSE:
-                    node_close += 1
+                    node_close += max(int(msg.total or 0), 1)
                     if progress_cb:
                         progress_cb("CLOSE_NODE_CLOSE", node_close, node_count)
+            if node_count and node_close != node_count:
+                raise RuntimeError(
+                    "GoNetEmLauncher: ProjectClose incomplete: "
+                    f"closed {node_close} of {node_count} node(s)"
+                )
         except Exception as exc:
             logging.error("GoNetEmLauncher: ProjectClose failed: %s", exc)
             if progress_cb:
@@ -239,21 +290,41 @@ class GoNetEmLifecycleMixin(GoNetEmClientMixin):
 
     # Per-step link management
 
+    @staticmethod
+    def _check_link_ack(response, action: str, link) -> None:
+        """Raise when a link RPC returns a non-OK ``AckResponse``.
+
+        gRPC itself reports transport failures as exceptions; an application
+        failure is carried in ``AckResponse.status`` and must surface too, or
+        LinkOps records the operation as applied and drops its retry flag.
+        """
+        status = getattr(response, "status", None)
+        if status is None:
+            raise RuntimeError(
+                f"GoNetEmLauncher: {action} failed for "
+                f"{link.source.name}<->{link.target.name}: missing status"
+            )
+        if status.code != netem_pb2.StatusCode.OK:
+            detail = getattr(status, "error", "") or "server returned a non-OK status"
+            raise RuntimeError(
+                f"GoNetEmLauncher: {action} failed for "
+                f"{link.source.name}<->{link.target.name}: {detail}"
+            )
+
     def update_link(self, link) -> None:
+        """Update *link* on the emulator, raising when the backend fails."""
         if self._client is None or self._request is None:
-            logging.warning(
+            raise RuntimeError(
                 "GoNetEmLauncher: update_link called before project is open"
             )
-            return
         try:
-            self._client.LinkUpdate(self._link_request(link))
+            response = self._client.LinkUpdate(self._link_request(link))
         except Exception as exc:
-            logging.error(
-                "GoNetEmLauncher: LinkUpdate failed for %s<->%s: %s",
-                link.source.name,
-                link.target.name,
-                exc,
-            )
+            raise RuntimeError(
+                "GoNetEmLauncher: LinkUpdate failed for "
+                f"{link.source.name}<->{link.target.name}: {exc}"
+            ) from exc
+        self._check_link_ack(response, "LinkUpdate", link)
 
     def update_links(self, links) -> netem_pb2.LinkUpdateManyResponse:  # type: ignore[name-defined]
         """Update a burst of links with chunked LinkUpdateMany calls.
@@ -317,30 +388,32 @@ class GoNetEmLifecycleMixin(GoNetEmClientMixin):
     def add_link(self, link) -> None:
         """Create *link* on the emulator, raising when the backend fails."""
         if self._client is None or self._request is None:
-            logging.warning("GoNetEmLauncher: add_link called before project is open")
-            return
+            raise RuntimeError(
+                "GoNetEmLauncher: add_link called before project is open"
+            )
         try:
-            self._client.LinkAdd(self._link_request(link))
+            response = self._client.LinkAdd(self._link_request(link))
         except Exception as exc:
             raise RuntimeError(
                 "GoNetEmLauncher: LinkAdd failed for "
                 f"{link.source.name}<->{link.target.name}: {exc}"
             ) from exc
+        self._check_link_ack(response, "LinkAdd", link)
 
     def delete_link(self, link) -> None:
         """Delete *link* on the emulator, raising when the backend fails."""
         if self._client is None or self._request is None:
-            logging.warning(
+            raise RuntimeError(
                 "GoNetEmLauncher: delete_link called before project is open"
             )
-            return
         try:
-            self._client.LinkDel(self._link_request(link))
+            response = self._client.LinkDel(self._link_request(link))
         except Exception as exc:
             raise RuntimeError(
                 "GoNetEmLauncher: LinkDel failed for "
                 f"{link.source.name}<->{link.target.name}: {exc}"
             ) from exc
+        self._check_link_ack(response, "LinkDel", link)
 
     def set_link_capacities(self, isl_kbps: int, gnd_kbps: int, links: list) -> None:
         self.isl_capacity_kbps = isl_kbps

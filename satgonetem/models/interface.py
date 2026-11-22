@@ -4,16 +4,18 @@ import ipaddress
 
 
 class Interface:
-    """A network interface with an optional IPv4 address and prefix.
+    """A network interface with optional IPv4 and IPv6 addresses and prefixes.
 
-    Point-to-point emulated links use ``/31`` and node loopbacks use ``/32`` by
-    default.  The prefix is stored with the address instead of being repeated
-    in every routing/daemon module.
+    Point-to-point emulated links use IPv4 ``/31`` and IPv6 ``/127``; node
+    loopbacks use IPv4 ``/32`` and IPv6 ``/128`` by default.  Each family keeps
+    its own prefix so setting one never changes the other.
     """
 
     def __init__(self, name: str = "Default", iface_type: str = ""):
         self.ipv4: str = ""
         self.prefix_len: int = 32 if iface_type == "lo" else 31
+        self.ipv6: str = ""
+        self.ipv6_prefix_len: int = 128 if iface_type == "lo" else 127
         self.name: str = name
         self.peer: Interface | None = None
         self.is_monitored: bool = False
@@ -49,6 +51,34 @@ class Interface:
         self.ipv4 = str(address)
         self.prefix_len = effective_prefix
 
+    def set_ipv6(self, ip_address: str, prefix_len: int | None = None) -> None:
+        """Set the interface IPv6 address and prefix length.
+
+        The IPv4 address and prefix are left untouched; the two families are
+        stored independently.
+
+        Args:
+            ip_address: Canonical IPv6 address string.
+            prefix_len: Prefix length. Defaults to the interface's current
+                IPv6 prefix (127 for links, 128 for loopbacks).
+
+        Raises:
+            ValueError: If the address or prefix is invalid.
+        """
+        try:
+            address = ipaddress.IPv6Address(ip_address)
+        except ipaddress.AddressValueError as exc:
+            raise ValueError(f"Invalid IPv6 address: {ip_address!r}") from exc
+
+        effective_prefix = self.ipv6_prefix_len if prefix_len is None else prefix_len
+        if not isinstance(effective_prefix, int) or not 0 <= effective_prefix <= 128:
+            raise ValueError(
+                f"Invalid IPv6 prefix length: {effective_prefix!r}; expected 0..128"
+            )
+
+        self.ipv6 = str(address)
+        self.ipv6_prefix_len = effective_prefix
+
     def set_ip(self, ip_address: str) -> None:
         """Backward-compatible alias for :meth:`set_ipv4`."""
         self.set_ipv4(ip_address)
@@ -59,6 +89,13 @@ class Interface:
         if not self.ipv4:
             return None
         return ipaddress.IPv4Interface(f"{self.ipv4}/{self.prefix_len}").network
+
+    @property
+    def network6(self) -> ipaddress.IPv6Network | None:
+        """Return the IPv6 interface network, or ``None`` without an address."""
+        if not self.ipv6:
+            return None
+        return ipaddress.IPv6Interface(f"{self.ipv6}/{self.ipv6_prefix_len}").network
 
     def get_iname(self) -> str:
         """Return the name of the interface inside the container.

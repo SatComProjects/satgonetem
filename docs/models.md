@@ -275,6 +275,9 @@ assert link.delay == 4            # int(distance / c * 1000)
 | `link_budget_config` | `None` | Frequencies/bandwidth used by the budget |
 | `downlink_capacity_strategy` | ModCod | Optional `CapacityStrategy` for downlink |
 | `uplink_capacity_strategy` | Shannon | Optional `CapacityStrategy` for uplink |
+| `loss` | `0.0` | Packet loss percentage in `[0, 100]` |
+| `jitter` | `0` | Delay jitter in milliseconds, non-negative |
+| `admin_up` | `True` | Administrative link state ANDed with `is_active` |
 
 ### Delay and distance
 
@@ -323,15 +326,40 @@ The topology sync layer uses four flags consumed by `bulk_link_operations()`:
 | Flag | Meaning |
 |---|---|
 | `to_add` | Create this link in the backend |
-| `to_update` | Push new delay/rate to the backend |
+| `to_update` | Push new delay/rate/loss/jitter to the backend |
 | `to_remove` | Delete the link from the backend |
 | `to_delete` | Set while a backend link deletion is unconfirmed; cleared on success so failed deletes stay retryable |
+
+### Impairments and administrative state
+
+`loss` and `jitter` are part of the link's runtime QoS state:
+
+- `loss` is a packet-loss percentage accepted by GoNetEm in `[0, 100]`. It is
+  validated as finite and stored as a `float`. Booleans, strings, NaN, and
+  infinities are rejected.
+- `jitter` is an integer number of milliseconds and must be non-negative.
+  Booleans and floats are rejected so the protobuf `int32 jitter` field is
+  never silently truncated.
+
+`TopologySyncMixin` seeds new links from the manager's optional
+`link_loss_percent` / `link_jitter_ms` attributes (defaulting to `0.0` / `0`),
+so a `NetworkConfig` extension can introduce defaults without changing the
+link factory. The project builder emits `jitter` on every generated QoS
+mapping and emits `loss` only when it is non-zero, keeping the historical
+default YAML unchanged.
+
+`admin_up` is independent of the satcom-derived `is_active` flag.
+`update_interfaces_state()` sets each peer interface active only when
+`is_active and admin_up`. This lets an explicit administrative shutdown
+(`set_link_state(link, up=False)`) survive later topology ticks, while
+`Link.is_active` remains owned by the topology sync layer.
 
 ### Helpers
 
 `get_names()` returns the two emulator interface names
 (`"<source>.<target_id>"`, `"<target>.<source_id>"`).
-`update_interfaces_state()` copies `is_active` onto both peer interfaces.
+`update_interfaces_state()` copies `is_active and admin_up` onto both peer
+interfaces.
 `get_mac_addresses()` reads and caches the MAC of both endpoints, raising
 `ValueError` if the peer interfaces are missing or do not match.
 

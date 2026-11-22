@@ -5,7 +5,6 @@ Satellites will include a satcom_object, which will correspond to their satcomto
 
 """
 
-from satgonetem.traffic.ping_utils import PingResults
 from satgonetem.utils.satcom_fix import apply_satcom_fix
 
 apply_satcom_fix()
@@ -13,11 +12,8 @@ apply_satcom_fix()
 
 import json
 import logging
-import os
-import tempfile
 import threading
 import time
-from dataclasses import dataclass, fields
 from typing import Any, ClassVar
 
 from sat_com_adapter.adapters import NetworkXAdapter
@@ -25,7 +21,6 @@ from sat_com_application.simulation_manager import (
     SimulationManager,
 )
 from sat_com_builder.models import SimulationProperty
-from sat_com_model.models import PointOfPresence, UserTerminal
 
 from satgonetem.launchers.base_launcher import NetworkLauncher
 from satgonetem.link_budget.config import AntennaConfig, LinkBudgetConfig
@@ -35,6 +30,7 @@ from satgonetem.models.link import Link
 from satgonetem.models.satellite import Satellite
 from satgonetem.routing.base_daemon import RoutingDaemon
 from satgonetem.routing.registry import available_methods, is_known_method
+from satgonetem.services.mixins.backend_control import BackendControlMixin
 from satgonetem.services.mixins.controller import ControllerMixin
 from satgonetem.services.mixins.diagnostics import DiagnosticsMixin
 from satgonetem.services.mixins.interface_mgr import InterfaceMgrMixin
@@ -44,173 +40,40 @@ from satgonetem.services.mixins.routing_mgr import RoutingManagerMixin
 from satgonetem.services.mixins.simulation_loop import SimulationLoopMixin
 from satgonetem.services.mixins.topology_sync import TopologySyncMixin
 from satgonetem.services.mixins.traffic_testing import TrafficTestingMixin
-from satgonetem.services.topology_link_plan import ensure_inter_satellite_directions
-from satgonetem.traffic import PingConfig, PingFlow
-from satgonetem.utils.project_builder import (
-    _attach_ground_object_domain,
-    add_custom_ground_station,
-    create_and_load_simulation,
-    create_custom_ground_station,
-    create_custom_satellite,
-    create_empty_project,
+from satgonetem.services.network_config import (
+    MAX_LINK_QUEUE_PACKETS as MAX_LINK_QUEUE_PACKETS,
+)
+from satgonetem.services.network_config import (
+    NetworkConfig as NetworkConfig,
+)
+from satgonetem.services.network_config import apply_config, config_from_instance
+from satgonetem.services.satcom_project import load_simulation, require_tick_action
+from satgonetem.services.topology_graph import (
+    build_current_graph,
+    compute_ground_stations_hash,
+    compute_links_hash,
+    compute_satellites_hash,
+)
+from satgonetem.services.topology_graph import (
+    check_for_updates as check_topology_updates,
+)
+from satgonetem.services.topology_persistence import (
+    RUNTIME_DATE_FORMAT,
+    apply_runtime_state,
+    ground_file_restore_path,
+    restore_runtime_state,
+    restore_simulation_property,
+    save_to_file,
+    serialize_runtime_state,
 )
 
-# Upper bound for the netem queue limit and the interface txqueuelen, in
-# packets. It mirrors the GoNetEm server's maxQueuePackets so a configuration
-# accepted here is never rejected by the server.
-MAX_LINK_QUEUE_PACKETS = 1_000_000
-
-# Serialised simulation dates must use the format accepted by
-# satgonetem.utils.project_fixtures.create_empty_project() on restore.
-_RUNTIME_DATE_FORMAT = "%d/%m/%Y %H:%M:%S"
+# Backward-compatible private alias; persistence owns the canonical format.
+_RUNTIME_DATE_FORMAT = RUNTIME_DATE_FORMAT
 
 
 def _ground_file_restore_path(ground_dir: str, basename: object) -> str:
-    """Return a safe restore path for an embedded ground station data file.
-
-    Only plain file names are accepted. The persisted ``basename`` must not be
-    absolute, empty, or carry directory components such as ``..``.
-
-    Args:
-        ground_dir: Private directory created for this restore.
-        basename: ``ground_files[<original path>]["basename"]`` from the payload.
-
-    Returns:
-        Absolute path inside *ground_dir* where the file can be written.
-
-    Raises:
-        ValueError: If basename is not a plain file name or the resolved path
-            would leave *ground_dir*.
-    """
-    if not isinstance(basename, str) or not basename:
-        raise ValueError(f"Invalid ground file basename: {basename!r}")
-
-    name = os.path.basename(basename)
-    if os.path.isabs(basename) or name != basename or name in {os.curdir, os.pardir}:
-        raise ValueError(f"Invalid ground file basename: {basename!r}")
-
-    root = os.path.realpath(ground_dir)
-    target = os.path.realpath(os.path.join(root, name))
-    if os.path.commonpath([root, target]) != root:
-        raise ValueError(f"Invalid ground file basename: {basename!r}")
-
-    return target
-
-
-@dataclass
-class NetworkConfig:
-    """Network configuration parameters for TopologyManager.
-
-    All fields are optional; defaults match the original built-in values.
-    Pass an instance to TopologyManager.__init__ to override any subset.
-
-    Attributes:
-        project_name: Human-readable name for the constellation project.
-            Defaults to None, which causes TopologyManager to fall back to
-            the simulation_manager's own project_name (or "Constellation").
-        update_time: Tick interval in seconds between topology updates.
-        gnd_link_capacity: Capacity in kbps for ground-station links.
-        isl_link_capacity: Capacity in kbps for inter-satellite links.
-        ground_object_link_capacity: Capacity in kbps for ground-object-to-ground-object links.
-        link_netem_limit: netem queue limit in packets for emulated links.
-            0 keeps the GoNetEm server default (1000 packets). This bounds the
-            packets held by the netem qdisc, i.e. the modelled link buffer.
-        link_txqueuelen: Transmit queue length in packets of the interfaces
-            terminating an emulated link. 0 keeps the GoNetEm server default
-            (1000 packets).
-        protocol: Network-layer protocol string (e.g. "ipv4").
-        routing: Default routing method (e.g. "static", "dynamic-ospf").
-        satellite_image: Docker image tag used for satellite containers.
-        network_launcher: Launcher backend identifier (e.g. "GONETEM").
-        gonetem_server: Address of the GoNetem gRPC server.
-        controller_veth_host: Host-side veth interface name for the controller link.
-        controller_veth_peer: Container-side veth interface name for the controller link.
-        controller_host_ip: IPv4 address assigned to the host side of the controller veth.
-        controller_subnet_prefix: Subnet prefix length for controller-plane addresses.
-        controller_bridge_name: Name of the OVS bridge inside the controller container.
-        controller_node_iface_pattern: Python format string for node controller interfaces.
-            Must format to ``eth<digits>``; ``{node_id}`` receives the controller
-            interface index (50000 + node id).
-        ground_station_pool: Data-plane pool subdivided into ground-station blocks.
-        satellite_pool: Data-plane pool subdivided into satellite blocks.
-        user_terminal_pool: Data-plane pool subdivided into user-terminal blocks.
-        ground_station_prefix_len: Prefix length of each ground-station block.
-        satellite_prefix_len: Prefix length of each satellite block.
-        user_terminal_prefix_len: Prefix length of each user-terminal block.
-    """
-
-    project_name: str | None = None
-    update_time: int = 5
-    gnd_link_capacity: int = 100000
-    isl_link_capacity: int = 100000
-    ground_object_link_capacity: int = 100000
-    link_netem_limit: int = 1000
-    link_txqueuelen: int = 1000
-    protocol: str = "ipv4"
-    routing: str = "static"
-    satellite_image: str = "jariassuarez/sgnt:satellite"
-    network_launcher: str = "GONETEM"
-    gonetem_server: str = "localhost:10110"
-    use_budget: bool = False
-
-    # Data-plane IPv4 addressing.  The defaults tile 10.0.0.0/8:
-    # ground stations /10, user terminals /10, satellites /9.
-    ground_station_pool: str = "10.0.0.0/10"
-    satellite_pool: str = "10.128.0.0/9"
-    user_terminal_pool: str = "10.64.0.0/10"
-    ground_station_prefix_len: int = 20
-    satellite_prefix_len: int = 27
-    user_terminal_prefix_len: int = 20
-
-    # Controller connection settings
-    controller_veth_host: str = "veth-host"
-    controller_veth_peer: str = "veth-controller"
-    controller_host_ip: str = "248.0.0.2"
-    controller_subnet_prefix: int = 16
-    controller_bridge_name: str = "Controller"
-    controller_node_iface_pattern: str = "eth{node_id}"
-
-    def __post_init__(self) -> None:
-        """Validate the queue-length fields and the tick interval.
-
-        Raises:
-            TypeError: If a queue-length field is not an integer.
-            ValueError: If a queue-length field is outside
-                ``[0, MAX_LINK_QUEUE_PACKETS]``, or if ``update_time`` is not
-                positive.
-        """
-        if self.update_time <= 0:
-            raise ValueError(
-                f"NetworkConfig.update_time must be positive, got {self.update_time}"
-            )
-
-        for name in ("link_netem_limit", "link_txqueuelen"):
-            value = getattr(self, name)
-            if isinstance(value, bool) or not isinstance(value, int):
-                raise TypeError(f"NetworkConfig.{name} must be an int, got {value!r}")
-            if value < 0 or value > MAX_LINK_QUEUE_PACKETS:
-                raise ValueError(
-                    f"NetworkConfig.{name} must be between 0 and "
-                    f"{MAX_LINK_QUEUE_PACKETS} packets, got {value}"
-                )
-
-        pattern = self.controller_node_iface_pattern
-        if "{node_id}" not in pattern:
-            raise ValueError(
-                "controller_node_iface_pattern must contain {node_id}, "
-                f"got {pattern!r}"
-            )
-        try:
-            formatted = pattern.format(node_id=0)
-        except (KeyError, IndexError, ValueError) as exc:
-            raise ValueError(
-                f"Invalid controller_node_iface_pattern {pattern!r}: {exc}"
-            ) from exc
-        if not formatted.startswith("eth") or not formatted[3:].isdigit():
-            raise ValueError(
-                "controller_node_iface_pattern must format to 'eth<digits>', "
-                f"got {formatted!r}"
-            )
+    """Return a safe restore path for an embedded ground station data file."""
+    return ground_file_restore_path(ground_dir, basename)
 
 
 class TopologyManager(
@@ -223,6 +86,7 @@ class TopologyManager(
     TrafficTestingMixin,
     DiagnosticsMixin,
     ControllerMixin,
+    BackendControlMixin,
 ):
     """Satellite network topology manager.
 
@@ -283,9 +147,7 @@ class TopologyManager(
         Returns:
             An initialised TopologyManager backed by the project's SimulationManager.
         """
-        sim_manager = create_and_load_simulation(
-            simulation_property.model_dump(), simulation_property.simulation_name
-        )
+        sim_manager = load_simulation(simulation_property)
         if network_config is None:
             network_config = NetworkConfig()
         instance = cls(simulation_manager=sim_manager, network_config=network_config)
@@ -319,117 +181,7 @@ class TopologyManager(
         Returns:
             A dictionary that can be passed to _deserialize_runtime_state().
         """
-        state: dict[str, Any] = {
-            "simulation_name": getattr(
-                self.simulation_manager, "project_name", "Constellation"
-            ),
-            "start_date": self.simulation_manager.time_manager.start_date.strftime(
-                _RUNTIME_DATE_FORMAT
-            ),
-            "end_date": self.simulation_manager.time_manager.end_date.strftime(
-                _RUNTIME_DATE_FORMAT
-            ),
-            "satellites": [],
-            "ground_stations": [],
-            "user_terminals": [],
-            "points_of_presence": [],
-            "links": {
-                "inter_satellite": [],
-                "ground_station": [],
-                "user_terminal": [],
-                "ground_object": [],
-            },
-        }
-
-        for sat in self.simulation_manager.get_satellites():
-            mm = sat.get_movement_model()
-            state["satellites"].append(
-                {
-                    "name": sat.satellite_name,
-                    "tle_line1": getattr(mm, "line1", ""),
-                    "tle_line2": getattr(mm, "line2", ""),
-                    "object_id": sat.object_id,
-                    "domain": sat.domain,
-                }
-            )
-
-        for gs in self.simulation_manager.get_ground_stations():
-            pos = gs.spatial_position_info
-            state["ground_stations"].append(
-                {
-                    "label": gs.label,
-                    "latitude": pos.latitude,
-                    "longitude": pos.longitude,
-                    "altitude": pos.altitude,
-                    "object_id": gs.object_id,
-                    "domain": gs.domain,
-                }
-            )
-
-        for ut in self.simulation_manager.get_user_terminals():
-            pos = ut.spatial_position_info
-            state["user_terminals"].append(
-                {
-                    "label": ut.label,
-                    "latitude": pos.latitude,
-                    "longitude": pos.longitude,
-                    "altitude": pos.altitude,
-                    "object_id": ut.object_id,
-                    "domain": ut.domain,
-                }
-            )
-
-        for pop in self.simulation_manager.get_point_of_presences():
-            pos = pop.spatial_position_info
-            state["points_of_presence"].append(
-                {
-                    "label": pop.label,
-                    "latitude": pos.latitude,
-                    "longitude": pos.longitude,
-                    "altitude": pos.altitude,
-                    "object_id": pop.object_id,
-                    "domain": pop.domain,
-                }
-            )
-
-        for link in self.simulation_manager.get_inter_satellites_links():
-            direction = getattr(link.inter_satellite_direction, "name", "UNDEFINED")
-            state["links"]["inter_satellite"].append(
-                {
-                    "source": getattr(link.source, "satellite_name", ""),
-                    "destination": getattr(link.destination, "satellite_name", ""),
-                    "direction": direction,
-                }
-            )
-
-        for link in self.simulation_manager.get_ground_stations_links():
-            src = getattr(
-                link.source, "satellite_name", getattr(link.source, "label", "")
-            )
-            dst = getattr(
-                link.destination,
-                "satellite_name",
-                getattr(link.destination, "label", ""),
-            )
-            state["links"]["ground_station"].append({"source": src, "destination": dst})
-
-        for link in self.simulation_manager.get_user_terminal_links():
-            src = getattr(
-                link.source, "satellite_name", getattr(link.source, "label", "")
-            )
-            dst = getattr(
-                link.destination,
-                "satellite_name",
-                getattr(link.destination, "label", ""),
-            )
-            state["links"]["user_terminal"].append({"source": src, "destination": dst})
-
-        for link in self.simulation_manager.get_static_ground_object_links():
-            src = getattr(link.source, "label", "")
-            dst = getattr(link.destination, "label", "")
-            state["links"]["ground_object"].append({"source": src, "destination": dst})
-
-        return state
+        return serialize_runtime_state(self)
 
     def to_file(self, path: str, network_config: NetworkConfig | None = None) -> None:
         """Save the satcom configuration and network config to a JSON file.
@@ -456,34 +208,12 @@ class TopologyManager(
         if network_config is None:
             network_config = self._network_config_from_instance()
 
-        if self.simulation_property is not None:
-            sim_prop_data = self.simulation_property.model_dump()
-        else:
-            sim_prop_data = dict(
-                self.simulation_manager.configuration.get("properties", {})
-            )
-
-        ground_files: dict[str, dict[str, str]] = {}
-        for gop in sim_prop_data.get("ground_objects_properties", []):
-            data_file = gop.get("data_file", "")
-            if data_file and os.path.isfile(data_file):
-                with open(data_file, encoding="utf-8") as fh:
-                    ground_files[data_file] = {
-                        "content": fh.read(),
-                        "basename": os.path.basename(data_file),
-                    }
-
-        payload: dict[str, Any] = {
-            "simulation_property": sim_prop_data,
-            "network_config": network_config.__dict__,
-            "ground_files": ground_files,
-        }
-
-        if self.simulation_property is None:
-            payload["runtime_state"] = self._serialize_runtime_state()
-
-        with open(path, "w", encoding="utf-8") as fh:
-            json.dump(payload, fh, indent=2)
+        save_to_file(
+            self,
+            path,
+            network_config,
+            serialize_state=self._serialize_runtime_state,
+        )
 
     @classmethod
     def _deserialize_runtime_state(
@@ -498,147 +228,17 @@ class TopologyManager(
         Returns:
             A fully initialised TopologyManager.
         """
-
-        empty_project = create_empty_project(
-            simulation_name=runtime_state.get("simulation_name", "Constellation"),
-            start_date=runtime_state.get("start_date", ""),
-            end_date=runtime_state.get("end_date", ""),
-        )
-        sim_manager = create_and_load_simulation(
-            empty_project.model_dump(), empty_project.simulation_name
-        )
-
-        for sat_data in runtime_state.get("satellites", []):
-            create_custom_satellite(
-                sat_data,
-                sim_manager,
-                object_id=sat_data.get("object_id", 0),
-                domain=sat_data.get("domain", "public"),
-            )
-
-        for gs_data in runtime_state.get("ground_stations", []):
-            gs = create_custom_ground_station(
-                name=gs_data["label"],
-                latitude=gs_data["latitude"],
-                longitude=gs_data["longitude"],
-                elevation_km=gs_data.get("altitude", 0) / 1000.0,
-                object_id=gs_data.get("object_id", 0),
-                domain=gs_data.get("domain", "public"),
-            )
-            add_custom_ground_station(gs, sim_manager)
-
-        for ut_data in runtime_state.get("user_terminals", []):
-            user_terminal = UserTerminal()
-            user_terminal.label = ut_data["label"]
-            user_terminal.object_id = ut_data.get("object_id", 0)
-            user_terminal.domain = ut_data.get("domain", "public")
-            user_terminal.set_position(
-                latitude=ut_data["latitude"],
-                longitude=ut_data["longitude"],
-                altitude=ut_data.get("altitude", 0),
-            )
-            _attach_ground_object_domain(user_terminal, sim_manager)
-            sim_manager.add_user_terminals(user_terminal)
-
-        for pop_data in runtime_state.get("points_of_presence", []):
-            point_of_presence = PointOfPresence()
-            point_of_presence.label = pop_data["label"]
-            point_of_presence.object_id = pop_data.get("object_id", 0)
-            point_of_presence.domain = pop_data.get("domain", "public")
-            point_of_presence.set_position(
-                latitude=pop_data["latitude"],
-                longitude=pop_data["longitude"],
-                altitude=pop_data.get("altitude", 0),
-            )
-            _attach_ground_object_domain(point_of_presence, sim_manager)
-            sim_manager.add_point_of_presence(point_of_presence)
-
-        from sat_com_model.models import InterSatelliteLinkDirection
-
-        links = runtime_state.get("links", {})
-        for isl in links.get("inter_satellite", []):
-            try:
-                sat_a = next(
-                    s
-                    for s in sim_manager.get_satellites()
-                    if s.satellite_name == isl["source"]
-                )
-                sat_b = next(
-                    s
-                    for s in sim_manager.get_satellites()
-                    if s.satellite_name == isl["destination"]
-                )
-            except StopIteration:
-                logging.warning(f"Failed to restore ISL: satellites not found {isl}")
-                continue
-
-            try:
-                link = sim_manager.create_and_add_inter_satellite_link_connection(
-                    sat_a, sat_b
-                )
-                dir_name = isl.get("direction", "UNDEFINED")
-                if dir_name == "ORBITAL":
-                    link.inter_satellite_direction = InterSatelliteLinkDirection.ORBITAL
-                elif dir_name == "ADJACENT":
-                    link.inter_satellite_direction = (
-                        InterSatelliteLinkDirection.ADJACENT
-                    )
-            except Exception as exc:
-                logging.warning(f"Failed to restore ISL {isl}: {exc}")
-
-        for gsl in links.get("ground_station", []):
-            try:
-                sat = next(
-                    s
-                    for s in sim_manager.get_satellites()
-                    if s.satellite_name == gsl["source"]
-                )
-                gs = next(
-                    g
-                    for g in sim_manager.get_ground_stations()
-                    if g.label == gsl["destination"]
-                )
-                sim_manager.create_and_add_ground_station_link_connection(sat, gs)
-            except Exception as exc:
-                logging.warning(f"Failed to restore GSL {gsl}: {exc}")
-
-        for utl in links.get("user_terminal", []):
-            try:
-                sat = next(
-                    s
-                    for s in sim_manager.get_satellites()
-                    if s.satellite_name == utl["source"]
-                )
-                ut = next(
-                    u
-                    for u in sim_manager.get_user_terminals()
-                    if u.label == utl["destination"]
-                )
-                sim_manager.create_and_add_user_terminal_link_connection(sat, ut)
-            except Exception as exc:
-                logging.warning(f"Failed to restore user-terminal link {utl}: {exc}")
-
-        for gol in links.get("ground_object", []):
-            try:
-                go_a = next(
-                    g
-                    for g in sim_manager.get_all_ground_objects()
-                    if g.label == gol["source"]
-                )
-                go_b = next(
-                    g
-                    for g in sim_manager.get_all_ground_objects()
-                    if g.label == gol["destination"]
-                )
-                sim_manager.create_and_add_ground_object_link_connection(go_a, go_b)
-            except Exception as exc:
-                logging.warning(f"Failed to restore ground-object link {gol}: {exc}")
-
+        sim_manager = restore_runtime_state(runtime_state, network_config)
         instance = cls.from_simulation_manager(sim_manager, network_config)
+        apply_runtime_state(instance, runtime_state)
         return instance
 
     @classmethod
-    def from_file(cls, path: str) -> "TopologyManager":
+    def from_file(
+        cls,
+        path: str,
+        network_config: NetworkConfig | None = None,
+    ) -> "TopologyManager":
         """Load a TopologyManager from a JSON file produced by to_file().
 
         Restores embedded ground station data files to a private temporary
@@ -652,9 +252,14 @@ class TopologyManager(
 
         Args:
             path: Path to the JSON file previously written by to_file().
+            network_config: Optional config that replaces the persisted
+                ``network_config`` wholesale. Use it to enable IPv6 before the
+                address plan is built. When omitted, the persisted config is
+                used, so existing call sites are unchanged.
 
         Returns:
-            An initialised TopologyManager with the persisted configuration applied.
+            An initialised TopologyManager with the persisted (or overridden)
+            configuration applied.
 
         Raises:
             FileNotFoundError: If path does not exist.
@@ -665,37 +270,18 @@ class TopologyManager(
         with open(path, encoding="utf-8") as fh:
             payload = json.load(fh)
 
-        network_config = NetworkConfig(**payload["network_config"])
+        if network_config is None:
+            network_config = NetworkConfig(**payload["network_config"])
 
         if "runtime_state" in payload:
             return cls._deserialize_runtime_state(
                 payload["runtime_state"], network_config
             )
 
-        sim_prop_data: dict[str, Any] = payload["simulation_property"]
-        ground_files: dict[str, dict[str, str]] = payload.get("ground_files", {})
-
-        if ground_files:
-            stem = os.path.splitext(os.path.basename(path))[0]
-            ground_dir = tempfile.mkdtemp(prefix=f"{stem}_ground_files_")
-
-            path_map: dict[str, str] = {}
-            for original_path, file_info in ground_files.items():
-                restored_path = _ground_file_restore_path(
-                    ground_dir, file_info.get("basename")
-                )
-                with open(restored_path, "w", encoding="utf-8") as fh:
-                    fh.write(file_info["content"])
-                path_map[original_path] = restored_path
-
-            for gop in sim_prop_data.get("ground_objects_properties", []):
-                orig = gop.get("data_file", "")
-                if orig in path_map:
-                    gop["data_file"] = path_map[orig]
-
-        simulation_property = SimulationProperty.model_validate(sim_prop_data)
-
+        simulation_property = restore_simulation_property(payload, path)
         instance = cls.from_satcom(simulation_property, network_config)
+        if "runtime_overlay" in payload:
+            apply_runtime_state(instance, payload["runtime_overlay"])
         return instance
 
     def __init__(
@@ -720,6 +306,9 @@ class TopologyManager(
         # interfaces are built. Initialised eagerly so the add thread pool
         # cannot race on first use.
         self._failed_link_adds: set[frozenset[str]] = set()
+        # Links whose backend add succeeded while their local interfaces or
+        # addresses are still pending. Retries must not repeat LinkAdd.
+        self._backend_link_adds: set[frozenset[str]] = set()
         self.interfaces: list[Interface] = []  # List of all interfaces in the network
         self.interface_version = 0
 
@@ -737,8 +326,9 @@ class TopologyManager(
         # Active network launcher (GoNetEm)
         self.launcher: NetworkLauncher | None = None
 
-        # Topology-wide IPv4 plan, built during init().
+        # Topology-wide address plans, built during init().
         self.address_plan: Any = None
+        self.address_plan_v6: Any = None
 
         # Optional HIL manager. Set this before calling start_gonetem() to
         # replace specific ground stations with host-bridged hardware.
@@ -793,6 +383,10 @@ class TopologyManager(
         # Active routing daemon - set during init_routing() based on routing method
         self.routing_daemon: RoutingDaemon | None = None
 
+        # Most recent top-level link operation counters (added/updated/deleted)
+        # from update_simulation(). Read-only diagnostic for callers/tests.
+        self.last_link_operation_stats: dict = {}
+
         # Track active traffic flows started via TrafficTestingMixin
         self._active_flows: list = []
 
@@ -806,12 +400,7 @@ class TopologyManager(
 
     def _network_config_from_instance(self) -> NetworkConfig:
         """Build a NetworkConfig from the current instance fields."""
-        values = {
-            field.name: getattr(self, field.name)
-            for field in fields(NetworkConfig)
-            if hasattr(self, field.name)
-        }
-        return NetworkConfig(**values)
+        return config_from_instance(self)
 
     def _apply_network_config(self, config: NetworkConfig) -> None:
         """Apply a NetworkConfig to this instance's network attributes.
@@ -821,13 +410,7 @@ class TopologyManager(
                 If config.project_name is None, falls back to the simulation
                 manager's project_name attribute, or "Constellation".
         """
-        base_name = config.project_name or getattr(
-            self.simulation_manager, "project_name", "Constellation"
-        )
-        self.project_name = f"{base_name}_{int(time.time())}"
-        for field in fields(NetworkConfig):
-            if field.name != "project_name":
-                setattr(self, field.name, getattr(config, field.name))
+        apply_config(self, config)
 
     def load_config(self) -> None:
         """No-op: configuration is supplied at construction time via from_satcom()."""
@@ -846,15 +429,7 @@ class TopologyManager(
             ValueError: If self.simulation_manager is None, or if its time manager
                 has no tick action (the simulation would never update).
         """
-        if not hasattr(self, "simulation_manager") or self.simulation_manager is None:
-            raise ValueError("Simulation manager is not set")
-
-        if not self.simulation_manager.time_manager.on_tick_actions:
-            raise ValueError(
-                "The time manager has no tick action: load the simulation through "
-                "sat_com_topology (SimulationManager.set_time_manager) so its "
-                "default update runs on each tick"
-            )
+        require_tick_action(getattr(self, "simulation_manager", None))
 
     def get_gonetem_status(self) -> bool:
         """Return whether GoNetEm has been started."""
@@ -919,52 +494,16 @@ class TopologyManager(
         Returns:
             dict with bool values for 'satellites', 'ground_stations', 'links'.
         """
-        updates = {
-            "satellites": False,
-            "ground_stations": False,
-            "links": False,
-        }
-
-        new_sat_hash = self._compute_satellites_hash()
-        new_gs_hash = self._compute_ground_stations_hash()
-        new_links_hash = self._compute_links_hash()
-
-        if new_sat_hash != self.satellites_hash:
-            updates["satellites"] = True
-            self.satellites_hash = new_sat_hash
-
-        if new_gs_hash != self.ground_stations_hash:
-            updates["ground_stations"] = True
-            self.ground_stations_hash = new_gs_hash
-
-        if new_links_hash != self.links_hash:
-            updates["links"] = True
-            self.links_hash = new_links_hash
-
-        return updates
+        return check_topology_updates(self)
 
     def _compute_satellites_hash(self):
-        return hash(
-            frozenset((sat.id, sat.hash_node()) for sat in self.satellites.values())
-        )
+        return compute_satellites_hash(self)
 
     def _compute_ground_stations_hash(self):
-        return hash(
-            frozenset((gs.id, gs.hash_node()) for gs in self.ground_stations.values())
-        )
+        return compute_ground_stations_hash(self)
 
     def _compute_links_hash(self):
-        return hash(
-            frozenset(
-                (
-                    frozenset((link.source.hash_node(), link.target.hash_node())),
-                    link.is_active,
-                    link.distance,
-                    link.delay,
-                )
-                for link in self.links.values()
-            )
-        )
+        return compute_links_hash(self)
 
     def get_current_time(self):
         """Get the current time from the simulation manager."""
@@ -1002,89 +541,7 @@ class TopologyManager(
 
     def get_current_graph(self):
         """Get the current topology as a NetworkX graph."""
-
-        if self.simulation_manager is None:
-            raise ValueError("Simulation manager is not set")
-        if self.nx_adapter is None:
-            raise ValueError("nx_adapter is not set")
-
-        if not self.preference:
-            logging.info("No preference provided, Defaulting to distance based")
-
-        available_preferences = [
-            "hops_prefer_ISLs",
-            "hops_no_preference",
-            "latency_prefer_ISLs",
-            "latency_no_preference",
-        ]
-
-        if self.preference not in available_preferences:
-            logging.warning(
-                f"Preference '{self.preference}' is not recognized. "
-                f"Available options: {available_preferences}. "
-                "Defaulting to 'latency_no_preference'."
-            )
-            self.preference = "latency_no_preference"
-
-        nx_adapter = self.nx_adapter
-        # Custom-created links may leave the optional direction unset, while
-        # the networkx adapter assumes an enum. Normalize before export.
-        ensure_inter_satellite_directions(
-            self.simulation_manager.get_inter_satellites_links()
-        )
-        graph = nx_adapter.create_full_networkx_graph(
-            export_object_position=True,
-            enable_export_flows_data=False,
-        )
-
-        def wrapper_link(u, v):
-            def ref(node_id):
-                if node_id in self.satellites:
-                    return f"Sat{node_id}"
-                if node_id in self.ground_stations:
-                    return f"Gnd{node_id}"
-                return None
-
-            source, target = ref(u), ref(v)
-            if source is None or target is None:
-                return None
-            return self.links.get(frozenset((source, target)))
-
-        def is_routable(u, v, data):
-            if data.get("disabled", False):
-                return False
-            link = wrapper_link(u, v)
-            if link is None:
-                return True
-            # sat_com_topology 5 keeps the disabled flag on the link object;
-            # the exported edge data only carries the model dump on request.
-            return link.is_active and not getattr(link.satcom_object, "disabled", False)
-
-        graph.remove_edges_from(
-            [
-                (u, v)
-                for u, v, data in graph.edges(data=True)
-                if not is_routable(u, v, data)
-            ]
-        )
-
-        for u, v in graph.edges():
-            if self.preference in ["hops_prefer_ISLs", "hops_no_preference"]:
-                graph[u][v]["weight"] = 1
-                if (
-                    self.preference == "hops_prefer_ISLs"
-                    and graph[u][v].get("type") == "InterSatelliteLink"
-                ):
-                    graph[u][v]["weight"] = 0.5
-            elif self.preference in ["latency_prefer_ISLs", "latency_no_preference"]:
-                graph[u][v]["weight"] = graph[u][v].get("distance_km", 1)
-                if (
-                    self.preference == "latency_prefer_ISLs"
-                    and graph[u][v].get("type") == "InterSatelliteLink"
-                ):
-                    graph[u][v]["weight"] *= 0.1
-
-        return graph
+        return build_current_graph(self)
 
     def get_satellites(self) -> list[Satellite]:
         """Return the list of satellites."""
@@ -1123,64 +580,87 @@ class TopologyManager(
         for satellite in satellites:
             satellite.set_addressable(True)
 
-    def test_connectivity(self, max_workers: int = 128) -> None:
+    def connectivity_matrix(
+        self,
+        nodes: list[Any] | None = None,
+        *,
+        max_workers: int = 128,
+        max_pairs: int | None = 10_000,
+        config: Any = None,
+    ) -> Any:
+        """Ping every ordered pair and return a typed matrix.
 
-        interval_sec = 0.01
-        count = 10
-        ping_config = PingConfig(
-            count=count, interval_sec=interval_sec, preload=1, packet_size=64
+        Args:
+            nodes: Nodes to test. Defaults to every ground station plus every
+                addressable satellite, matching :meth:`test_connectivity`.
+                Duplicate node names are ignored before the pair count is
+                checked and before any flow is scheduled.
+            max_workers: Maximum concurrent ping flows.
+            max_pairs: Safety bound for the all-pairs expansion. Raise before
+                scheduling when the deduplicated pair count exceeds it. Pass
+                ``None`` to disable the bound.
+            config: Optional ``PingConfig``; the connectivity helper supplies
+                a fast ten-ping default when omitted.
+
+        Returns:
+            A :class:`satgonetem.connectivity.ConnectivityMatrix`.
+        """
+        from satgonetem.connectivity import build_connectivity_matrix
+
+        if nodes is None:
+            nodes = [
+                *self.get_ground_stations(),
+                *[sat for sat in self.get_satellites() if sat.is_addressable()],
+            ]
+        else:
+            nodes = list(nodes)
+
+        # Deduplicate before counting: the builder ignores repeated names, so
+        # counting raw entries could reject a topology that schedules no extra
+        # pairs (and >100 unique nodes is a supported legacy topology).
+        unique_nodes = []
+        seen: set[str] = set()
+        for node in nodes:
+            name = str(getattr(node, "name", node))
+            if name in seen:
+                continue
+            seen.add(name)
+            unique_nodes.append(node)
+
+        pair_count = len(unique_nodes) * (len(unique_nodes) - 1)
+        if max_pairs is not None and pair_count > max_pairs:
+            raise ValueError(
+                f"Connectivity matrix would schedule {pair_count} pairs, "
+                f"exceeding max_pairs={max_pairs}; pass an explicit node subset "
+                "or raise max_pairs"
+            )
+
+        return build_connectivity_matrix(
+            unique_nodes,
+            config=config,
+            max_workers=max_workers,
         )
 
-        gnds = self.get_ground_stations()
+    def test_connectivity(
+        self,
+        max_workers: int = 128,
+        *,
+        max_pairs: int | None = None,
+    ) -> dict:
+        """Ping every ground station and addressable satellite and print a summary.
 
-        sats = [sat for sat in self.get_satellites() if sat.is_addressable()]
-
-        flows = []
-
-        all_nodes: list[Any] = [*gnds, *sats]
-        for i, gs_i in enumerate(all_nodes):
-            for gs_j in all_nodes:
-                if gs_i == gs_j:
-                    continue
-                flow = PingFlow(
-                    source=gs_i,
-                    destination=gs_j,
-                    config=ping_config,
-                    delay=i * interval_sec * count,
-                )
-                flows.append(flow)
-
-        from satgonetem.traffic.flow_scheduler import FlowScheduler
-
-        flow_scheduler = FlowScheduler(flows, max_workers=max_workers, debug=True)
-
-        flow_scheduler.run()
-
-        flow_scheduler.join()
-
-        results: list[PingResults] = []
-        errors = 0
-
-        for flow in flows:
-            try:
-                result = flow_scheduler.results(flow)
-                if result is not None:
-                    results.append(result)
-            except Exception as e:
-                print(f"Error occurred while fetching results for flow {flow}: {e}")
-                errors += 1
-
-        # results: List[PingResults] = [flow_scheduler.results(flow) for flow in flows]
-
-        total_lost_packets = sum(
-            (result.packets_transmitted - result.packets_received)
-            for result in results
-            if result is not None
+        Kept for compatibility with the original convenience helper. The legacy
+        API accepted any number of nodes, so the default is unbounded; pass
+        ``max_pairs`` to opt into the :meth:`connectivity_matrix` safety bound.
+        The full typed result is available from :meth:`connectivity_matrix` and
+        is also returned here as a dictionary.
+        """
+        matrix = self.connectivity_matrix(
+            max_workers=max_workers,
+            max_pairs=max_pairs,
         )
-
-        print(
-            f"Completed {len(flows)} ping flows with {errors} errors. Total lost packets: {total_lost_packets}"
-        )
+        matrix.print_summary()
+        return matrix.to_dict()
 
 
 def main():

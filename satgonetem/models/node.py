@@ -52,8 +52,9 @@ class Node:
 
         self.position: dict[str, float] = {}
         self.antenna: Antenna | None = None
-        # Address block assigned by the topology-wide IPv4 plan.
+        # Address blocks assigned by the topology-wide address plans.
         self.address_block: ipaddress.IPv4Network | None = None
+        self.address_block_v6: ipaddress.IPv6Network | None = None
 
         # We create a loopback interface for the node
         self.loopback = Interface("lo", iface_type="lo")
@@ -292,6 +293,57 @@ class Node:
         payload = "\n".join(lines)
         b64 = base64.b64encode(payload.encode()).decode()
         cmd = f"echo {b64} | base64 -d | ip -force -batch -"
+
+        self.execute_command(command=["sh", "-c", cmd], detach=False)  # type: ignore
+
+        return None
+
+    def set_ipv6_to_containers(
+        self,
+        interface: Interface | None,
+        set_lo: bool = True,
+    ) -> None:
+        """Apply this node's planned IPv6 addresses in one batched command.
+
+        The prefix comes from each :class:`Interface`; point-to-point links
+        use ``/127`` and loopbacks ``/128``.  ``addr replace`` keeps repeated
+        setup calls idempotent and updates an address if a link is recreated.
+
+        Args:
+            interface: One interface to push, or ``None`` for all node
+                interfaces.
+            set_lo: Also apply the node loopback address.
+        """
+        lines: list[str] = []
+
+        int_list = [interface] if interface is not None else self.interfaces
+
+        for iface in int_list:
+            ip = getattr(iface, "ipv6", None)
+            if not ip:
+                continue
+            if iface.ipv6_prefix_len not in (127, 128):
+                raise ValueError(
+                    f"{self.name} interface {iface.name} has unsupported IPv6 "
+                    f"prefix /{iface.ipv6_prefix_len}; expected /127 or /128"
+                )
+            lines.append(
+                f"addr replace {ip}/{iface.ipv6_prefix_len} dev {iface.get_iname()}"
+            )
+
+        if (
+            set_lo
+            and getattr(self, "loopback", None) is not None
+            and getattr(self.loopback, "ipv6", None)
+        ):
+            lines.append(f"addr replace {self.loopback.ipv6}/128 dev lo")
+
+        if not lines:
+            return None
+
+        payload = "\n".join(lines)
+        b64 = base64.b64encode(payload.encode()).decode()
+        cmd = f"echo {b64} | base64 -d | ip -6 -force -batch -"
 
         self.execute_command(command=["sh", "-c", cmd], detach=False)  # type: ignore
 

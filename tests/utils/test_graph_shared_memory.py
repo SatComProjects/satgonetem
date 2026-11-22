@@ -75,7 +75,7 @@ def test_write_edges_persists_converted_edge_and_metadata(graph_shm):
 
     header = graph_shm.header[0]
     assert header["num_edges"] == 1
-    assert header["version"] == 1
+    assert header["version"] == 2
 
     edge = graph_shm.edges[0]
     assert edge["src_ip"] == ip_to_int("10.0.0.4") == 167772164
@@ -96,7 +96,7 @@ def test_write_edges_increments_version_for_each_call(graph_shm):
 
     header = graph_shm.header[0]
     assert header["num_edges"] == 2
-    assert header["version"] == 2
+    assert header["version"] == 4
     assert graph_shm.edges[0]["src_name"] == 1
     assert graph_shm.edges[1]["src_name"] == 2
 
@@ -108,7 +108,7 @@ def test_write_edges_clears_records_left_by_a_previous_write(graph_shm):
 
     header = graph_shm.header[0]
     assert header["num_edges"] == 1
-    assert header["version"] == 2
+    assert header["version"] == 4
 
     stale = graph_shm.edges[1]
     assert stale["src_ip"] == 0
@@ -142,7 +142,7 @@ def test_clear_zeroes_records_without_resetting_header(graph_shm):
 
     header = graph_shm.header[0]
     assert header["num_edges"] == 1
-    assert header["version"] == 1
+    assert header["version"] == 2
 
 
 def test_write_edges_rejects_more_edges_than_capacity(graph_shm):

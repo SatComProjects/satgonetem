@@ -163,15 +163,17 @@ def test_changed_path_replaces_the_route_without_deleting_it() -> None:
 class _KernelBackend:
     """Minimal emulation of the iproute2 batches executed by the daemon.
 
-    A ``route del`` for a prefix the kernel no longer has fails with
-    ``No such process``; the ``|| true`` guard added for stale deletes is the
-    only thing that lets such a batch continue with ``set -e``.
+    A tolerant delete is generated as an existence check followed by the
+    delete, so a ``route del`` for a prefix the kernel no longer has is
+    skipped. A failing delete of a present route aborts the ``set -e`` batch.
     """
 
     def __init__(self) -> None:
         self.routes: dict[tuple[str, str], str] = {}
         self.batches: list[str] = []
         self.fail_next_install = False
+        self.delete_error: Exception | None = None
+        self._delete_allowed = False
 
     def __call__(self, argv) -> str:
         batch = argv[2]
@@ -180,22 +182,44 @@ class _KernelBackend:
             command = command.strip()
             if not command or command == "set -e":
                 continue
-            if command.startswith("ip route del "):
-                self._delete(("ip", command.split()[3]), command)
-            elif command.startswith("ip -f mpls route del "):
-                self._delete(("mpls", command.split()[5]), command)
-            elif command.startswith("ip route replace "):
-                self._install(("ip", command.split()[3]), command)
-            elif command.startswith("ip -f mpls route replace "):
-                self._install(("mpls", command.split()[5]), command)
-            else:
-                raise AssertionError(f"unexpected command: {command}")
+            if command.startswith("if "):
+                self._delete_allowed = self._route_present(command[3:])
+                continue
+            if command == "fi":
+                self._delete_allowed = False
+                continue
+            if command.startswith("then "):
+                if self._delete_allowed:
+                    self._run(command[len("then ") :])
+                continue
+            self._run(command)
         return ""
 
-    def _delete(self, key: tuple[str, str], command: str) -> None:
+    def _route_present(self, condition: str) -> bool:
+        show = condition.removesuffix(" 2>&1 | grep -q .")
+        parts = show.split()
+        if parts[:5] == ["ip", "-f", "mpls", "route", "show"]:
+            return ("mpls", parts[6]) in self.routes
+        if parts[:4] == ["ip", "route", "show", "exact"]:
+            return ("ip", parts[4]) in self.routes
+        raise AssertionError(f"unexpected condition: {condition!r}")
+
+    def _run(self, command: str) -> None:
+        if command.startswith("ip route del "):
+            self._delete(("ip", command.split()[3]))
+        elif command.startswith("ip -f mpls route del "):
+            self._delete(("mpls", command.split()[5]))
+        elif command.startswith("ip route replace "):
+            self._install(("ip", command.split()[3]), command)
+        elif command.startswith("ip -f mpls route replace "):
+            self._install(("mpls", command.split()[5]), command)
+        else:
+            raise AssertionError(f"unexpected command: {command}")
+
+    def _delete(self, key: tuple[str, str]) -> None:
+        if self.delete_error is not None:
+            raise self.delete_error
         if key not in self.routes:
-            if "2>/dev/null || true" in command:
-                return
             raise RuntimeError("RTNETLINK answers: No such process")
         del self.routes[key]
 
@@ -230,7 +254,10 @@ def test_stale_route_absent_from_kernel_does_not_wedge_the_update() -> None:
     daemon._update_sr_route_for_source(source.id)
 
     batch = backend.batches[-1]
-    assert "ip route del 10.9.9.9/32 2>/dev/null || true" in batch
+    assert (
+        "if ip route show exact 10.9.9.9/32 2>&1 | grep -q .; "
+        "then ip route del 10.9.9.9/32; fi"
+    ) in batch
     assert stale_line not in daemon._prev_sr_gs_routes[source.id]
 
     far_route = backend.routes[("ip", f"{far_gs.loopback.ipv4}/32")]

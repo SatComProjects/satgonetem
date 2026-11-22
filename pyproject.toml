@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "satgonetem"
-version = "0.3.1"
+version = "0.3.2"
 description = "SatGoNetem - Satellite Network Emulation Tool"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -25,12 +25,12 @@ classifiers = [
 ]
 dependencies = [
     "docker>=7.1.0",
-    "grpcio>=1.62.0",
+    "grpcio>=1.80.0",
     "matplotlib>=3.10.0",
     "networkx>=3.4.0",
     "numpy>=2.2.0",
     "Pillow>=11.2.0",
-    "protobuf>=6.31.0",
+    "protobuf>=6.31.1",
     "PyYAML>=6.0.0",
     "sgp4>=2.23",
     "uvicorn[standard]>=0.29.0",
@@ -64,19 +64,28 @@ Documentation = "https://github.com/SatComProjects/satgonetem/docs"
 Repository = "https://github.com/SatComProjects/satgonetem"
 Issues = "https://github.com/SatComProjects/satgonetem/issues"
 
-[tool.setuptools]
-packages = ["satgonetem"]
+[project.scripts]
+satgonetem = "satgonetem.cli.main:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["satgonetem*"]
+
+[tool.setuptools.package-data]
+satgonetem = ["py.typed"]
+"satgonetem.data" = ["topology_files/*.json", "topology_files/*.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
-addopts = "-ra --strict-markers -m 'not slow and not benchmark' -p tests._cov_preload"
+addopts = "-ra --strict-markers -m 'not slow and not benchmark and not integration' -p tests._cov_preload"
 pythonpath = ["."]
 markers = [
     "unit: fast, deterministic unit tests",
     "integration: requires Docker, root, network, or another external service",
+    "root: requires root or effective CAP_NET_ADMIN and CAP_SYS_ADMIN; also marked integration",
     "slow: takes substantially longer than a unit test",
     "benchmark: performance or scale benchmark",
 ]

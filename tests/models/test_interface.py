@@ -83,6 +83,79 @@ class TestInterfaceSetIpv4:
         assert Interface(name="Sat0.1").network is None
 
 
+class TestInterfaceSetIpv6:
+    """Tests for the independent IPv6 address fields."""
+
+    def test_initial_ipv6_fields(self):
+        assert Interface(name="Sat0.1").ipv6 == ""
+        assert Interface(name="Sat0.1").ipv6_prefix_len == 127
+
+    def test_loopback_defaults_to_slash128(self):
+        iface = Interface(name="lo_Sat0", iface_type="lo")
+        assert iface.ipv6_prefix_len == 128
+
+    def test_link_defaults_to_slash127(self):
+        iface = Interface(name="Sat0.1")
+        iface.set_ipv6("fd00:2::4")
+
+        assert iface.ipv6 == "fd00:2::4"
+        assert iface.ipv6_prefix_len == 127
+        assert iface.network6 == ipaddress.ip_network("fd00:2::4/127")
+
+    def test_loopback_set_ipv6_uses_slash128(self):
+        iface = Interface(name="lo_Sat0", iface_type="lo")
+        iface.set_ipv6("fd00:2::1")
+
+        assert iface.ipv6_prefix_len == 128
+        assert iface.network6 == ipaddress.ip_network("fd00:2::1/128")
+
+    def test_explicit_prefix_is_stored(self):
+        iface = Interface(name="Sat0.1")
+        iface.set_ipv6("fd00:2::4", 64)
+
+        assert iface.ipv6_prefix_len == 64
+        assert iface.network6 == ipaddress.ip_network("fd00:2::/64")
+
+    def test_invalid_address_raises(self):
+        iface = Interface(name="Sat0.1")
+        with pytest.raises(ValueError, match="Invalid IPv6 address"):
+            iface.set_ipv6("10.128.0.4")
+
+    def test_invalid_prefix_raises(self):
+        iface = Interface(name="Sat0.1")
+        with pytest.raises(ValueError, match="Invalid IPv6 prefix"):
+            iface.set_ipv6("fd00:2::4", 129)
+
+    def test_network6_is_none_without_address(self):
+        assert Interface(name="Sat0.1").network6 is None
+
+    def test_ipv4_and_ipv6_are_independent(self):
+        iface = Interface(name="Sat0.1")
+        iface.set_ipv4("10.128.0.4", 31)
+        iface.set_ipv6("fd00:2::4", 127)
+
+        assert (iface.ipv4, iface.prefix_len) == ("10.128.0.4", 31)
+        assert (iface.ipv6, iface.ipv6_prefix_len) == ("fd00:2::4", 127)
+
+    def test_set_ipv6_leaves_ipv4_and_prefix_len_intact(self):
+        iface = Interface(name="Sat0.1")
+        iface.set_ipv4("10.128.0.4", 31)
+
+        iface.set_ipv6("fd00:2::4", 128)
+
+        assert (iface.ipv4, iface.prefix_len) == ("10.128.0.4", 31)
+        assert (iface.ipv6, iface.ipv6_prefix_len) == ("fd00:2::4", 128)
+
+    def test_set_ipv4_leaves_ipv6_and_its_prefix_intact(self):
+        iface = Interface(name="Sat0.1")
+        iface.set_ipv6("fd00:2::4", 127)
+
+        iface.set_ipv4("10.128.0.4", 32)
+
+        assert (iface.ipv6, iface.ipv6_prefix_len) == ("fd00:2::4", 127)
+        assert (iface.ipv4, iface.prefix_len) == ("10.128.0.4", 32)
+
+
 class TestInterfaceGetIname:
     """Tests for Interface.get_iname."""
 

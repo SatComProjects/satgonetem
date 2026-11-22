@@ -70,12 +70,34 @@ def test_read_snapshot_sees_recreated_segment_and_ignores_stale_capacity() -> No
         assert snapshot.max_edges >= 3
         assert [int(edge["src_name"]) for edge in snapshot.edges] == [1, 2, 3]
 
-        assert old_reader.header[0]["version"] == 1
+        assert old_reader.header[0]["version"] == 2
         assert old_reader.header[0]["num_edges"] == 1
         assert int(old_reader.edges[0]["src_name"]) == 1
     finally:
         if old_reader is not None:
             old_reader.close()
+        owner.close()
+        owner.unlink()
+
+
+def test_ensure_capacity_does_not_publish_old_version_with_empty_edges() -> None:
+    name = unique_name()
+    owner = GraphSharedMemory(name, max_edges=1, create=True)
+    try:
+        owner.write_edges([make_edge(src_name=1)])
+        owner.ensure_capacity(3)
+
+        assert int(owner.header[0]["version"]) == 0
+        with pytest.raises(TimeoutError):
+            GraphSharedMemory.read_snapshot(name, retries=0)
+
+        owner.write_edges(
+            [make_edge(src_name=1), make_edge(src_name=2), make_edge(src_name=3)]
+        )
+        snapshot = GraphSharedMemory.read_snapshot(name)
+        assert snapshot.num_edges == 3
+        assert snapshot.version > 0
+    finally:
         owner.close()
         owner.unlink()
 
@@ -128,7 +150,7 @@ def test_read_snapshot_retries_while_version_is_zero(monkeypatch) -> None:
         snapshot = GraphSharedMemory.read_snapshot(name, retries=2, retry_delay=0.01)
 
         assert sleeps == [0.01]
-        assert snapshot.version == 1
+        assert snapshot.version == 2
         assert int(snapshot.edges[0]["src_name"]) == 8
     finally:
         owner.close()

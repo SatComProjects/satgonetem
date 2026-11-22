@@ -63,13 +63,46 @@ def _is_unlabelled_summary(rows: list[dict]) -> bool:
         return False
     intervals = rows[:-1]
     last = rows[-1]
-    if last["start"] != min(row["start"] for row in intervals):
+    if last["start"] > min(row["start"] for row in intervals):
         return False
     if last["end"] != max(row["end"] for row in intervals):
         return False
     interval_bytes = sum(row["bytes"] for row in intervals)
     tolerance = max(interval_bytes * _SUMMARY_TRANSFER_TOLERANCE, 1.0)
     return abs(last["bytes"] - interval_bytes) <= tolerance
+
+
+def _is_per_stream_total(
+    rows: list[dict], index: int, summary_span: tuple[float, float]
+) -> bool:
+    """Whether a row is a stream's full-test total preceding a ``[SUM]`` row.
+
+    Multi-stream iperf2 logs repeat each stream's cumulative transfer and
+    retransmit count in the rows immediately before the final ``[SUM]`` row.
+    Those rows span the whole test and their transfer equals the sum of that
+    stream's earlier interval rows, which distinguishes them from intervals
+    even when a one-second run makes the spans identical.
+
+    Args:
+        rows: Parsed rows in log order.
+        index: Index of the candidate row.
+        summary_span: ``(start, end)`` of the final summary row.
+
+    Returns:
+        True when the row duplicates its stream's interval series.
+    """
+    row = rows[index]
+    if row["_stream"] == "SUM" or (row["start"], row["end"]) != summary_span:
+        return False
+    preceding_bytes = sum(
+        candidate["bytes"]
+        for candidate in rows[:index]
+        if candidate["_stream"] == row["_stream"]
+    )
+    if preceding_bytes <= 0:
+        return False
+    tolerance = max(preceding_bytes * _SUMMARY_TRANSFER_TOLERANCE, 1.0)
+    return abs(row["bytes"] - preceding_bytes) <= tolerance
 
 
 def _parse_iperf2_log(
@@ -81,7 +114,9 @@ def _parse_iperf2_log(
     the last row, spans the union of the preceding interval rows, and its
     transfer is approximately their sum. Span length alone is never used as
     the discriminator: iperf2 intervals may legitimately be longer than one
-    second, and several streams can share a one-second span.
+    second, and several streams can share a one-second span. Multi-stream
+    logs also repeat each stream's full-test total before the final ``[SUM]``;
+    those rows are summaries too and are excluded from the interval series.
 
     UDP is detected from the log header because sender-side UDP interval
     rows do not include jitter/loss columns.
@@ -123,7 +158,11 @@ def _parse_iperf2_log(
         elif protocol == "TCP":
             # The bare column after the bandwidth is Retr for TCP and the
             # datagram count for UDP; only the former is a retransmit metric.
-            retransmits = re.match(r"\s*(\d+)", fields["rest"] or "")
+            # Enhanced -e output adds "Write/Err  Rtry" before the retry
+            # count, so prefer that column when present.
+            rest = fields["rest"] or ""
+            enhanced = re.match(r"\s*\d+/\d+\s+(\d+)", rest)
+            retransmits = enhanced or re.match(r"\s*(\d+)", rest)
             row["retransmits"] = (
                 int(retransmits.group(1)) if retransmits is not None else 0
             )
@@ -133,8 +172,17 @@ def _parse_iperf2_log(
         return protocol, [], None
 
     sum_rows = [i for i, row in enumerate(parsed) if row["_stream"] == "SUM"]
+    full_span = (
+        min(row["start"] for row in parsed),
+        max(row["end"] for row in parsed),
+    )
     if sum_rows:
-        summary_index = sum_rows[-1]
+        candidate = sum_rows[-1]
+        summary_index = (
+            candidate
+            if (parsed[candidate]["start"], parsed[candidate]["end"]) == full_span
+            else None
+        )
     elif _is_unlabelled_summary(parsed):
         summary_index = len(parsed) - 1
     else:
@@ -143,6 +191,16 @@ def _parse_iperf2_log(
     summary_row_indices = set(sum_rows)
     if summary_index is not None:
         summary_row_indices.add(summary_index)
+        summary_span = (parsed[summary_index]["start"], parsed[summary_index]["end"])
+        # A truncated log can end on an interval [SUM] row; its span does not
+        # cover the test, so its same-span rows are intervals, not totals.
+        if summary_span == full_span:
+            summary_row_indices.update(
+                index
+                for index in range(len(parsed))
+                if index not in summary_row_indices
+                and _is_per_stream_total(parsed, index, summary_span)
+            )
 
     data_rows: list[dict] = []
     for index, row in enumerate(parsed):

@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 from sat_com_model.models import PointOfPresence, UserTerminal
 
-from satgonetem.services.topology_satcom import TopologyManager
+from satgonetem.services.topology_satcom import NetworkConfig, TopologyManager
 from satgonetem.utils.project_builder import (
     add_custom_ground_station,
     create_and_load_simulation,
@@ -224,3 +224,131 @@ def test_runtime_state_roundtrip_preserves_user_terminals_and_pops(
     for ground_object in (user_terminals[0], pops[0]):
         assert ground_object.ground_object_domain is not None
         assert ground_object.ground_object_domain.type == "ground_station"
+
+
+def test_runtime_state_roundtrip_preserves_link_impairments_and_addressability(
+    tmp_path,
+):
+    """Per-link impairment/admin/capacity-mode and addressability survive reload."""
+    project = create_empty_project(
+        simulation_name="RuntimeLinkState",
+        start_date=START_DATE.strftime("%d/%m/%Y %H:%M:%S"),
+        end_date=END_DATE.strftime("%d/%m/%Y %H:%M:%S"),
+    )
+    sim_manager = create_and_load_simulation(
+        project.model_dump(), project.simulation_name
+    )
+    create_custom_satellite(_CUSTOM_SATELLITE, sim_manager, object_id=7)
+    ground_station = create_custom_ground_station(
+        "AuditGS", 48.0, 2.0, 0.0, object_id=9
+    )
+    add_custom_ground_station(ground_station, sim_manager)
+    satellite = sim_manager.get_satellites()[0]
+    sim_manager.create_and_add_ground_station_link_connection(satellite, ground_station)
+
+    topology = TopologyManager.from_simulation_manager(sim_manager)
+    link = next(
+        candidate
+        for candidate in topology.get_links()
+        if candidate.type == "GroundStationLink"
+    )
+    link.loss = 12.5
+    link.jitter = 7
+    link.admin_up = False
+    link.use_budget = True
+    link.satcom_object.disabled = True
+    link.is_active = False
+    topology.get_satellites()[0].set_addressable(True)
+
+    path = tmp_path / "runtime_link_state.json"
+    topology.to_file(str(path))
+    payload = json.loads(path.read_text())
+
+    satellite_record = payload["runtime_state"]["satellites"][0]
+    link_record = payload["runtime_state"]["links"]["ground_station"][0]
+    assert satellite_record["addressable"] is True
+    assert link_record["loss"] == 12.5
+    assert link_record["jitter"] == 7
+    assert link_record["admin_up"] is False
+    assert link_record["use_budget"] is True
+    assert link_record["disabled"] is True
+    assert link_record["is_active"] is False
+
+    reloaded = TopologyManager.from_file(str(path))
+    restored_link = next(
+        candidate
+        for candidate in reloaded.get_links()
+        if candidate.type == "GroundStationLink"
+    )
+
+    assert reloaded.simulation_manager.time_manager.start_date == START_DATE
+    assert reloaded.get_satellites()[0].is_addressable() is True
+    assert restored_link.loss == 12.5
+    assert restored_link.jitter == 7
+    assert restored_link.admin_up is False
+    assert restored_link.use_budget is True
+    assert restored_link.is_active is False
+    assert restored_link.satcom_object.disabled is True
+    assert restored_link.peer_interfaces
+    assert all(not interface.is_active for interface in restored_link.peer_interfaces)
+
+
+def test_property_backed_topology_saves_link_state_overlay(tmp_path):
+    topology = TopologyManager.from_file(TEST_TOPOLOGY)
+    link = next(candidate for candidate in topology.get_links() if candidate.is_active)
+    link.loss = 9.5
+    link.jitter = 4
+    link.admin_up = False
+    link.use_budget = True
+
+    path = tmp_path / "property_overlay.json"
+    topology.to_file(str(path))
+    payload = json.loads(path.read_text())
+
+    assert "runtime_overlay" in payload
+    assert payload["runtime_overlay"]["links"]
+
+    reloaded = TopologyManager.from_file(str(path))
+    restored = next(
+        candidate
+        for candidate in reloaded.get_links()
+        if candidate.source.name == link.source.name
+        and candidate.target.name == link.target.name
+    )
+    assert restored.loss == 9.5
+    assert restored.jitter == 4
+    assert restored.admin_up is False
+    assert restored.use_budget is True
+
+
+def test_runtime_state_roundtrip_keeps_ipv6_enabled(tmp_path, runtime_topology):
+    """A topology saved with IPv6 enabled reloads with the plan rebuilt."""
+    path = tmp_path / "runtime_ipv6.json"
+
+    runtime_topology.to_file(str(path), network_config=NetworkConfig(ipv6_enabled=True))
+    reloaded = TopologyManager.from_file(str(path))
+
+    assert reloaded.ipv6_enabled is True
+    assert reloaded.address_plan_v6 is not None
+    for node in list(reloaded.get_satellites()) + list(reloaded.get_ground_stations()):
+        assert node.address_block_v6 is not None
+        assert node.address_block_v6.prefixlen == 64
+        assert node.loopback.ipv6_prefix_len == 128
+
+
+def test_runtime_state_from_file_override_enables_ipv6(tmp_path, runtime_topology):
+    """An explicit config wins wholesale on the runtime-state load path."""
+    path = tmp_path / "runtime_ipv6_disabled.json"
+
+    runtime_topology.to_file(
+        str(path), network_config=NetworkConfig(ipv6_enabled=False)
+    )
+    reloaded = TopologyManager.from_file(
+        str(path), network_config=NetworkConfig(ipv6_enabled=True)
+    )
+
+    assert reloaded.ipv6_enabled is True
+    assert reloaded.address_plan_v6 is not None
+    assert [sat.address_block_v6 is not None for sat in reloaded.get_satellites()] == [
+        True
+    ]

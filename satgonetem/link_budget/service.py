@@ -9,7 +9,9 @@ the high-level service, not on individual `itur` calls or low-level formulae.
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass
+from numbers import Real
 
 from satgonetem.link_budget.antenna import Antenna
 from satgonetem.link_budget.conversions import linear_to_db
@@ -23,6 +25,13 @@ from satgonetem.link_budget.receiver import (
 from satgonetem.link_budget.strategies import CapacityStrategy, ShannonCapacityStrategy
 
 logger = logging.getLogger(__name__)
+
+
+def _is_positive_finite(value: object) -> bool:
+    """Return True when *value* is a finite real number greater than zero."""
+    if isinstance(value, bool) or not isinstance(value, Real):
+        return False
+    return math.isfinite(float(value)) and float(value) > 0.0
 
 
 @dataclass
@@ -97,14 +106,29 @@ class LinkBudgetService:
 
         Returns:
             Capacity in kbps (rounded down).  Returns *0* when an antenna is
-            missing, when gain/EIRP computation fails, or when atmospheric
-            attenuation cannot be computed.
+            missing, when a numeric input (frequency, distance, bandwidth) is
+            not finite and positive, when gain/EIRP computation fails, when
+            free-space loss or :math:`C/N_0` cannot be computed, or when
+            atmospheric attenuation cannot be computed.
         """
+        if inputs.tx_antenna is None or inputs.rx_antenna is None:
+            logger.debug("Link budget inputs are missing an antenna")
+            return 0
+
+        for name in ("frequency_ghz", "distance_km", "bandwidth_hz"):
+            value = getattr(inputs, name)
+            if not _is_positive_finite(value):
+                logger.debug("Invalid link budget %s: %r", name, value)
+                return 0
+
         # --- Transmitter EIRP ---
         try:
             tx_eirp_db = inputs.tx_antenna.get_eirp_db(inputs.frequency_ghz)
         except (ValueError, TypeError) as exc:
             logger.debug("TX EIRP computation failed: %s", exc)
+            return 0
+        if not math.isfinite(tx_eirp_db):
+            logger.debug("TX EIRP is not finite: %r", tx_eirp_db)
             return 0
 
         # --- Receiver G/T ---
@@ -114,9 +138,18 @@ class LinkBudgetService:
         except (ValueError, TypeError) as exc:
             logger.debug("RX G/T computation failed: %s", exc)
             return 0
+        if not math.isfinite(g_over_t_db):
+            logger.debug("RX G/T is not finite: %r", g_over_t_db)
+            return 0
 
         # --- Free-space loss ---
-        fsl_db = calculate_free_space_loss_db(inputs.frequency_ghz, inputs.distance_km)
+        try:
+            fsl_db = calculate_free_space_loss_db(
+                inputs.frequency_ghz, inputs.distance_km
+            )
+        except (ValueError, TypeError, ArithmeticError) as exc:
+            logger.debug("Free-space loss computation failed: %s", exc)
+            return 0
 
         # --- Atmospheric attenuation ---
         try:
@@ -140,12 +173,19 @@ class LinkBudgetService:
             return 0
 
         # --- C/N₀ ---
-        cn0_dbhz = calculate_carrier_to_noise_power_spectral_density_ratio(
-            eirp_db=tx_eirp_db,
-            g_over_t_db=g_over_t_db,
-            free_space_loss_db=fsl_db,
-            other_losses_db=other_losses_db,
-        )
+        try:
+            cn0_dbhz = calculate_carrier_to_noise_power_spectral_density_ratio(
+                eirp_db=tx_eirp_db,
+                g_over_t_db=g_over_t_db,
+                free_space_loss_db=fsl_db,
+                other_losses_db=other_losses_db,
+            )
+        except (ValueError, TypeError, ArithmeticError) as exc:
+            logger.debug("C/N0 computation failed: %s", exc)
+            return 0
+        if not math.isfinite(cn0_dbhz):
+            logger.debug("C/N0 is not finite: %r", cn0_dbhz)
+            return 0
 
         # --- Capacity via strategy ---
         try:
@@ -154,6 +194,8 @@ class LinkBudgetService:
             )
         except RuntimeError as exc:
             logger.debug("Capacity strategy failed: %s", exc)
+            return 0
+        if not math.isfinite(capacity_bps) or capacity_bps <= 0.0:
             return 0
 
         return int(capacity_bps / 1000.0)

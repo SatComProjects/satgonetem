@@ -118,6 +118,15 @@ class TestStaticRoutingDaemonInit:
         ):
             assert daemon.init() is False
 
+    def test_returns_false_when_population_raises_value_error(self, daemon):
+        """A routing-table build error must not escape init()."""
+        with patch.object(
+            daemon,
+            "_populate_routing_tables",
+            side_effect=ValueError("Interface Sat0.1 on Sat0 has no peer"),
+        ):
+            assert daemon.init() is False
+
 
 class TestStaticRoutingDaemonUpdate:
     """Tests for StaticRoutingDaemon.update()."""
@@ -138,6 +147,19 @@ class TestStaticRoutingDaemonUpdate:
             daemon.update(new_links=[])
 
         mock_apply.assert_called_once()
+
+    def test_clears_route_cache_when_interface_version_changes(self, daemon, topology):
+        daemon._last_interface_version = 1
+        topology.interface_version = 2
+
+        with (
+            patch.object(daemon._route_planner, "clear_reuse_cache") as clear_cache,
+            patch.object(daemon, "_populate_routing_tables"),
+            patch.object(daemon, "_apply_all_routes"),
+        ):
+            daemon.update(new_links=[])
+
+        clear_cache.assert_called_once()
 
     def test_skips_route_application_when_topology_inactive(self, daemon, topology):
         topology.status = False
@@ -1320,3 +1342,45 @@ class TestStaticRoutingDaemonFailureTracking:
 
         assert node.ipv4_previous_routing_table == []
         assert node.ipv4_routing_table == []
+
+    def test_batch_exception_marks_every_node_failed(self, daemon):
+        node = Node("Sat0")
+        node.ipv4_routing_table = [make_entry()]
+
+        with patch.object(
+            daemon, "_install_route_batches", side_effect=RuntimeError("rpc down")
+        ):
+            with pytest.raises(RuntimeError, match="rpc down"):
+                daemon._apply_route_changes([node])
+
+        assert "Sat0" in daemon._failed_nodes
+
+    def test_failed_install_is_retried_after_server_recovers(self):
+        """A batch-level failure must be re-sent once the server is reachable."""
+        topo, gnd0, gnd1, sat0, sat1 = _make_line_topology()
+        nodes = [gnd0, gnd1, sat0, sat1]
+        client = FakeRouteInstallClient(error=RuntimeError("server unavailable"))
+        for node in nodes:
+            node.grpc_client = client
+            node.project_id = "prj"
+        daemon = StaticRoutingDaemon(topo)
+
+        assert daemon.init() is False
+        assert client.requests, "the first install must have been attempted"
+        assert {node.name for node in nodes} <= daemon._failed_nodes
+
+        client.error = None
+        client.requests.clear()
+        daemon.update([])
+
+        assert len(client.requests) == 1
+        request = client.requests[0]
+        assert set(request.nodes) == {node.name for node in nodes}
+        for node in nodes:
+            assert node.ipv4_routing_table
+            assert request.nodes[node.name].routes
+        assert daemon._failed_nodes == set()
+
+        # Once recovered and installed, an unchanged topology is a no-op.
+        daemon.update([])
+        assert len(client.requests) == 1

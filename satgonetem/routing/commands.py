@@ -67,10 +67,17 @@ def enable_mpls_commands(node: Any, *, load_modules: bool = True) -> list[str]:
 
 
 def enable_mpls(node: Any, *, load_modules: bool = True) -> None:
-    """Enable kernel MPLS forwarding on a node."""
-    node.execute_command(
-        "; ".join(enable_mpls_commands(node, load_modules=load_modules))
-    )
+    """Enable kernel MPLS forwarding on a node.
+
+    The sysctl commands are one fail-fast batch: a per-interface failure must
+    abort setup instead of being hidden by a later command. Module loading
+    stays best-effort because a built-in MPLS stack has no module to load.
+    """
+    commands = enable_mpls_commands(node, load_modules=load_modules)
+    modules = [command for command in commands if command.startswith("modprobe ")]
+    sysctls = [command for command in commands if not command.startswith("modprobe ")]
+    batch = "; ".join([*modules, " && ".join(sysctls)])
+    node.execute_command(f"set -e; {batch}")
 
 
 def format_net_address(loopback_ip: str) -> str:
