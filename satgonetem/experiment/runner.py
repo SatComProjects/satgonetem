@@ -376,7 +376,7 @@ class ExperimentRunner:
             write_json(run_dir / "flows.json", flows)
         except Exception as exc:  # noqa: BLE001 - report what can be written
             self._record_error(f"writing flows.json failed: {exc}")
-        if live and self.scenario.connectivity:
+        if live and topology is not None and self.scenario.connectivity:
             try:
                 matrix = topology.connectivity_matrix()
                 write_json(run_dir / "connectivity.json", matrix.to_dict())
@@ -469,13 +469,24 @@ class ExperimentRunner:
                 errors=list(self._errors),
             )
 
-        topology = self._load_topology()
-        topology.update_time = self.scenario.tick_s
-        if hasattr(topology, "update_factor"):
-            topology.update_factor = 1.0
-        collector = self._collector_factory(topology)
         samples: list[dict[str, Any]] = []
         flows: list[dict[str, Any]] = []
+        try:
+            topology = self._load_topology()
+            topology.update_time = self.scenario.tick_s
+            if hasattr(topology, "update_factor"):
+                topology.update_factor = 1.0
+            collector = self._collector_factory(topology)
+        except Exception as exc:  # noqa: BLE001 - persist a failed preparation
+            self._record_error(f"preparing the topology failed: {exc}")
+            (run_dir / "metrics.jsonl").write_text("", encoding="utf-8")
+            flows, summary = self._finalize_run(run_dir, None, live)
+            return RunResult(
+                run_dir=run_dir,
+                summary=summary,
+                flows=flows,
+                errors=list(self._errors),
+            )
 
         interrupted: BaseException | None = None
         try:
