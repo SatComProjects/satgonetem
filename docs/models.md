@@ -376,14 +376,21 @@ not strictly below the end. Its defaults differ from the Pydantic
 `MPLSConfiguration` in `sat_com_models.py`: `use_php=False` here versus
 `php=True` there.
 
-`SRLabelStackEntry.label_stack` is written in push order and joined with `/`
-for the kernel command. An empty stack degrades to a plain IP route.
+`SRLabelStackEntry.label_stack` is ordered outermost first and joined with `/`
+for the kernel command: the first label is the top of the stack and is popped
+by the first transit node, after which the kernel processes the next label. An
+empty stack degrades to a plain IP route. Linux accepts at most
+`MAX_NEW_LABELS` (30) pushed labels, so a path with more than 30 transit nodes
+cannot be installed as a single stack.
 
 `SegmentRoutingManager.get_label_stack_for_path()` takes the complete path
 from source to destination. The source is never labelled, and the destination
 is labelled only when PHP is disabled (`use_php=False`). The ingress route and
 the stack reported by `set_sr_custom_path()` use this same builder, so the
-reported and installed stacks always agree.
+reported stack matches the ingress stack installed for addressable sources.
+The side effects of `set_sr_custom_path()` can lag: routes are rebuilt only
+while the topology is active, and installation errors are logged rather than
+raised, so a failed install can leave the reported stack ahead of the kernel.
 
 ## Declarative configuration models
 

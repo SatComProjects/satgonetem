@@ -214,7 +214,7 @@ class SegmentRoutingManager:
             use_php: If True, omit the destination's SID (Penultimate Hop Popping).
 
         Returns:
-            List of labels to push, bottom to top.
+            List of labels to push, outermost (processed first) first.
 
         Raises:
             ValueError: If any node in the path has no allocated Node SID.
