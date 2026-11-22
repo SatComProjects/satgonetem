@@ -93,14 +93,27 @@ class NetworkLifecycleMixin:
         except Exception:
             # Startup failed after the project may have been opened. Close it
             # best-effort and reset state so a retry does not leak a project.
+            cleanup_failed = False
             try:
-                launcher.force_close_project()
+                cleanup_confirmed = launcher.force_close_project() is True
             except Exception as cleanup_exc:
                 logging.error(
                     "Failed to force-close GoNetEm project after startup failure: %s",
                     cleanup_exc,
                 )
-            self.launcher = None
+            else:
+                cleanup_failed = not cleanup_confirmed
+            if cleanup_failed:
+                # Keep the handle so stop_gonetem() can retry the forced close
+                # instead of leaking the project silently.
+                self._pending_force_close = True
+                logging.error(
+                    "Force-close after startup failure did not confirm cleanup; "
+                    "retaining the launcher for stop_gonetem() to retry"
+                )
+            else:
+                self.launcher = None
+                self._pending_force_close = False
             self.set_status(False)
             self.set_gonetem_status(False)
             self.set_routing_initiated(False)

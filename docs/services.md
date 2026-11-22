@@ -284,8 +284,10 @@ topology.stop_gonetem()         # close the project
 - wires HIL links through `hil_manager.wire_links()`;
 - sets `status` and `gonetem_is_on`, records `start_time_`.
 
-On failure it force-closes the project, clears the launcher, resets the three
-flags, and re-raises.
+On failure it force-closes the project, resets the three flags, and re-raises.
+The launcher is cleared only when the forced close returns `True`; if it
+returns `False`, the launcher is retained, `_pending_force_close` is set, and
+`stop_gonetem()` can retry the cleanup.
 
 `stop_gonetem()`:
 
@@ -560,7 +562,9 @@ privileges. See
 ## Failure and cleanup rules
 
 - A failed `start_gonetem()` force-closes the project and resets all startup
-  flags.
+  flags. The launcher is retained when the forced close returns `False`, so
+  `stop_gonetem()` can retry the cleanup instead of silently dropping the
+  handle.
 - A failed `stop_gonetem()` still resets the status flags and clears
   `routing_method`; it re-raises the HIL teardown error after cleanup. The
   launcher and project handles are cleared when project close succeeds or the
