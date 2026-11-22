@@ -228,6 +228,14 @@ class TestTcpBidirAggregation:
 
         assert res.total_retransmits == 14
 
+    def test_max_and_min_throughput_aggregate_both_directions(self):
+        res = _tcp_bidir_results()
+
+        # Each interval carries 200 Mbps forward + 400 Mbps reverse.
+        assert res.max_throughput_mbps == pytest.approx(600.0)
+        assert res.min_throughput_mbps == pytest.approx(600.0)
+        assert res.max_throughput_mbps >= res.avg_throughput_mbps
+
 
 class TestUdpBidirAggregation:
     """UDP bidirectional runs aggregate receiver metrics from both directions."""
@@ -282,3 +290,5 @@ class TestNonBidirUnchanged:
         assert res.total_bytes_sent == 250_000_000
         assert res.total_bytes_received == 240_000_000
         assert res.total_retransmits == 10
+        assert res.max_throughput_mbps == pytest.approx(200.0)
+        assert res.min_throughput_mbps == pytest.approx(200.0)

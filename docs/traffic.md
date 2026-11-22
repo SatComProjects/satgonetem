@@ -174,6 +174,12 @@ The `delay` parameter (default `0.0`) tells the background thread to sleep that 
 | `avg_loss_percent` | `float` | Packet loss percentage |
 | `total_out_of_order` | `int` | Out-of-order packets |
 
+For `bidir=True`, throughput and totals aggregate both directions:
+`avg_throughput_mbps` is the sum of the forward and reverse interval rates,
+`max_throughput_mbps`/`min_throughput_mbps` are per-interval sums, and byte,
+packet, retransmit, loss and jitter figures cover both endpoints. iperf3 3.11
+or newer is required for the `*_bidir_reverse` summaries.
+
 ### DataFrames and plotting
 
 ```python

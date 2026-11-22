@@ -317,6 +317,52 @@ class Iperf3Results:
                 )
         return self._col_mean(series, "bits_per_second") / self._BPS_TO_MBPS
 
+    def _series_interval_rates(self, series: pd.DataFrame | None) -> list[float]:
+        """Return one throughput value per reporting interval, in Mbps.
+
+        Args:
+            series: Summary rows for one direction.
+
+        Returns:
+            Per-interval rates in Mbps, or an empty list when the series has
+            no usable rate data.
+        """
+        if series is None or series.empty:
+            return []
+        if "bytes" in series.columns and "seconds" in series.columns:
+            seconds = series["seconds"].astype(float)
+            byte_counts = series["bytes"].astype(float)
+            rates = (byte_counts * 8.0 / seconds.where(seconds > 0)) / self._BPS_TO_MBPS
+            return [float(value) for value in rates.dropna()]
+        if "bits_per_second" in series.columns:
+            return [
+                float(value) / self._BPS_TO_MBPS
+                for value in series["bits_per_second"].dropna()
+            ]
+        return []
+
+    def _combined_interval_rates(self) -> list[float] | None:
+        """Return per-interval forward+reverse rates for a bidirectional run.
+
+        Returns:
+            One aggregate rate per interval in Mbps, or None when the result
+            has no reverse series or the two direction series cannot be paired.
+        """
+        series = self._summary_series()
+        if series is None:
+            return None
+        reverse = self._bidir_reverse_series(series)
+        if reverse is None:
+            return None
+        forward_rates = self._series_interval_rates(series)
+        reverse_rates = self._series_interval_rates(reverse)
+        if not forward_rates or len(forward_rates) != len(reverse_rates):
+            return None
+        return [
+            forward + reverse_rate
+            for forward, reverse_rate in zip(forward_rates, reverse_rates, strict=True)
+        ]
+
     @property
     def avg_throughput_mbps(self) -> float:
         """Mean throughput in Mbps, excluding omitted warm-up intervals.
@@ -338,12 +384,26 @@ class Iperf3Results:
 
     @property
     def max_throughput_mbps(self) -> float:
-        """Peak interval throughput in Mbps."""
+        """Peak interval throughput in Mbps.
+
+        For bidirectional (``--bidir``) results both directions are summed per
+        interval, matching :attr:`avg_throughput_mbps`.
+        """
+        combined = self._combined_interval_rates()
+        if combined:
+            return max(combined)
         return self._col_max(self._primary_df(), "bits_per_second") / self._BPS_TO_MBPS
 
     @property
     def min_throughput_mbps(self) -> float:
-        """Minimum interval throughput in Mbps."""
+        """Minimum interval throughput in Mbps.
+
+        For bidirectional (``--bidir``) results both directions are summed per
+        interval, matching :attr:`avg_throughput_mbps`.
+        """
+        combined = self._combined_interval_rates()
+        if combined:
+            return min(combined)
         return self._col_min(self._primary_df(), "bits_per_second") / self._BPS_TO_MBPS
 
     @property
