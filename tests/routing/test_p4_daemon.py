@@ -10,6 +10,7 @@ import io
 import logging
 import os
 import subprocess
+import threading
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 from uuid import uuid4
@@ -51,6 +52,52 @@ class FakeProcess:
         if self._wait_errors:
             raise self._wait_errors.pop(0)
         return self.returncode
+
+
+class RacyStderr:
+    """A stderr stand-in where a second reader consumes the failure output.
+
+    The reader thread blocks until the process is stopped (or the timeout
+    expires). A concurrent ``read()`` before that point wins the race and
+    discards the pending text, reproducing the lost-output failure mode.
+    """
+
+    def __init__(self, message):
+        self._message = message
+        self._released = threading.Event()
+        self._consumed_by_read = False
+        self.read_calls = 0
+
+    def release(self):
+        self._released.set()
+
+    def readline(self):
+        self._released.wait(timeout=2)
+        if self._consumed_by_read:
+            return ""
+        message, self._message = self._message, ""
+        return message
+
+    def read(self):
+        self.read_calls += 1
+        if not self._released.is_set():
+            self._consumed_by_read = True
+            self._message = ""
+            return ""
+        message, self._message = self._message, ""
+        return message
+
+
+class RacyProcess(FakeProcess):
+    """Fake controller process whose termination releases the stderr reader."""
+
+    def __init__(self, stderr):
+        super().__init__(returncode=3)
+        self.stderr = stderr
+
+    def terminate(self):
+        super().terminate()
+        self.stderr.release()
 
 
 def _make_export_link(source, target):
@@ -214,6 +261,23 @@ def test_start_detects_immediate_exit_and_stops_process(daemon, monkeypatch):
     assert process.terminate_calls == 1
     assert process.wait_calls == 1
     assert process.kill_calls == 0
+    assert daemon.p4_controller_process is None
+
+
+def test_start_preserves_early_exit_stderr_without_concurrent_read(
+    daemon, monkeypatch, caplog
+):
+    _patch_os(monkeypatch, exists=True, executable=True)
+    stderr = RacyStderr("controller boot failure")
+    process = RacyProcess(stderr)
+    _patch_popen(monkeypatch, process=process)
+    _patch_sleep(monkeypatch)
+
+    with caplog.at_level(logging.ERROR):
+        assert daemon.start_p4_controller() is False
+
+    assert stderr.read_calls == 0
+    assert "controller boot failure" in caplog.text
     assert daemon.p4_controller_process is None
 
 

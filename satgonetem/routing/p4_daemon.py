@@ -4,6 +4,7 @@ import socket
 import subprocess
 import threading
 import time
+from collections import deque
 from collections.abc import Callable
 from typing import Any
 
@@ -14,6 +15,8 @@ from satgonetem.routing.graph_shared_memory import GraphSharedMemory
 
 _READINESS_POLL_INTERVAL = 0.1
 _READINESS_PROBE_TIMEOUT = 0.5
+_OUTPUT_DRAIN_TIMEOUT = 1.0
+_MAX_BUFFERED_STDERR_LINES = 200
 
 
 def safe_int(x, default=0):
@@ -162,6 +165,22 @@ class P4Daemon(RoutingDaemon):
         self.logger.info("P4 controller started")
         return True
 
+    def _drain_controller_output(
+        self,
+        threads: tuple[threading.Thread, threading.Thread],
+        stderr_lines: deque[str],
+    ) -> None:
+        """Join the output readers and report the stderr they collected.
+
+        The reader threads own ``proc.stdout``/``proc.stderr``; the main thread
+        must never read those streams concurrently. Joining before inspecting
+        the buffer makes the failure output deterministic.
+        """
+        for thread in threads:
+            thread.join(timeout=_OUTPUT_DRAIN_TIMEOUT)
+        if stderr_lines:
+            self.logger.error("P4 controller stderr:\n%s", "\n".join(stderr_lines))
+
     def _probe_controller_port(self) -> bool:
         """Return True when the controller endpoint accepts a TCP connection."""
         try:
@@ -219,13 +238,19 @@ class P4Daemon(RoutingDaemon):
 
         self.p4_controller_process = proc
 
-        # Background threads to stream stdout/stderr into logger
-        def _stream_reader(stream, log_fn):
+        # Background threads stream stdout/stderr into the logger. stderr is
+        # also buffered so the main thread can report it after joining.
+        stderr_lines: deque[str] = deque(maxlen=_MAX_BUFFERED_STDERR_LINES)
+
+        def _stream_reader(stream, log_fn, sink=None):
             try:
                 for line in iter(stream.readline, ""):
                     if not line:
                         break
-                    log_fn(line.rstrip())
+                    text = line.rstrip()
+                    if sink is not None:
+                        sink.append(text)
+                    log_fn(text)
             except Exception:
                 pass
 
@@ -233,7 +258,9 @@ class P4Daemon(RoutingDaemon):
             target=_stream_reader, args=(proc.stdout, self.logger.info), daemon=True
         )
         t_err = threading.Thread(
-            target=_stream_reader, args=(proc.stderr, self.logger.error), daemon=True
+            target=_stream_reader,
+            args=(proc.stderr, self.logger.error, stderr_lines),
+            daemon=True,
         )
         t_out.start()
         t_err.start()
@@ -246,14 +273,8 @@ class P4Daemon(RoutingDaemon):
                     f"P4 controller process exited during startup "
                     f"with code {proc.returncode}"
                 )
-                # Read any remaining stderr if available
-                try:
-                    err = proc.stderr.read() if proc.stderr is not None else None
-                    if err:
-                        self.logger.error(err)
-                except Exception:
-                    pass
                 self.stop_p4_controller()
+                self._drain_controller_output((t_out, t_err), stderr_lines)
                 return False
 
             if probe():
@@ -267,6 +288,7 @@ class P4Daemon(RoutingDaemon):
                     f"ready within {timeout} seconds"
                 )
                 self.stop_p4_controller()
+                self._drain_controller_output((t_out, t_err), stderr_lines)
                 return False
 
             time.sleep(min(_READINESS_POLL_INTERVAL, remaining))
