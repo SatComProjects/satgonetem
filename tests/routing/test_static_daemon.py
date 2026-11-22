@@ -841,6 +841,44 @@ class TestRouteReuse:
         assert new_sat0_to_gnd0 is old_sat0_to_gnd0
         assert new_gnd0_to_gnd1 is not old_gnd0_to_gnd1
 
+    def test_replaced_destination_with_equal_next_hop_gets_new_route(self):
+        """Replacing a destination with the same next hop must invalidate the cache."""
+        topo, gnd0, gnd1, sat0, sat1 = _make_line_topology()
+        daemon = StaticRoutingDaemon(topo)
+
+        with patch.object(daemon, "_apply_all_routes"):
+            daemon.init()
+
+            # Replace Gnd1 with Gnd2 at the far end of the line.  Gnd0's next
+            # hop towards both destinations is Sat0, so the next-hop vector is
+            # unchanged while the destination identity is not.
+            replacement = _make_gs("Gnd2", "10.8.0.0")
+            _link_nodes(sat1, replacement)
+            graph = nx.Graph()
+            for node in (gnd0, sat0, sat1, replacement):
+                graph.add_node(node.id)
+            graph.add_edge(gnd0.id, sat0.id, weight=1)
+            graph.add_edge(sat0.id, sat1.id, weight=1)
+            graph.add_edge(sat1.id, replacement.id, weight=1)
+
+            topo.get_ground_stations.return_value = [gnd0, replacement]
+            topo.ground_stations = {gnd0.id: gnd0, replacement.id: replacement}
+            topo.get_current_graph.return_value = graph
+
+            daemon.update([])
+
+        routes_to_replacement = [
+            entry
+            for entry in gnd0.ipv4_routing_table
+            if entry.destination == replacement.loopback.ipv4
+        ]
+
+        assert len(routes_to_replacement) == 1
+        assert routes_to_replacement[0].target_node == replacement.name
+        assert all(
+            entry.destination != gnd1.loopback.ipv4 for entry in gnd0.ipv4_routing_table
+        )
+
 
 class TestRouteBuildGc:
     """Tests for the route-build GC suppression helper."""
