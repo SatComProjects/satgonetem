@@ -1,7 +1,8 @@
 # Architecture Decision Records
 
-This directory records the decisions that shape the SOLID/TDD adoption work.
-Each ADR is immutable once accepted; superseding decisions get a new ADR.
+This directory records the decisions that shape the engineering-principles and
+TDD adoption work. Each ADR is immutable once accepted; superseding decisions
+get a new ADR.
 
 | ADR | Decision | Status |
 |---|---|---|
