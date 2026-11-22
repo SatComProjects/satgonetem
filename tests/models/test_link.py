@@ -1,5 +1,6 @@
 """Tests for the Link model."""
 
+import logging
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -593,3 +594,95 @@ def test_link_accepts_injected_capacity_strategies(sat_node, gnd_node):
     assert service_cls.call_args_list[1].kwargs["capacity_strategy"] is uplink
     assert link.peer1_capacity == 120
     assert link.peer2_capacity == 60
+
+
+class TestLinkMissingPosition:
+    """Missing geometry must be explicit, not replaced by invented defaults."""
+
+    def test_missing_satellite_position_raises(self, sat_node, gnd_node):
+        sat_node.position = {}
+        link = Link(
+            source=sat_node,
+            target=gnd_node,
+            distance=550_000.0,
+            type="GroundStationLink",
+            default_capacity_kbps=500,
+        )
+
+        with pytest.raises(ValueError, match="Missing position.*Sat0"):
+            link._compute_elevation_angle(sat_node, gnd_node)
+
+    def test_missing_ground_station_position_raises(self, sat_node, gnd_node):
+        gnd_node.position = {"latitude": 0.0}
+        link = Link(
+            source=sat_node,
+            target=gnd_node,
+            distance=550_000.0,
+            type="GroundStationLink",
+            default_capacity_kbps=500,
+        )
+
+        with pytest.raises(ValueError, match="Missing position.*Gnd0"):
+            link._compute_elevation_angle(sat_node, gnd_node)
+
+    def _make_budget_link(self, sat_node, gnd_node, default_capacity_kbps=777):
+        from satgonetem.link_budget.antenna import Antenna
+
+        sat_node.antenna = Antenna(
+            diameter=1.0, efficiency=0.6, sspa_output_power_db=40.0
+        )
+        gnd_node.antenna = Antenna(diameter=2.0, efficiency=0.6)
+        return Link(
+            source=sat_node,
+            target=gnd_node,
+            distance=550_000.0,
+            type="GroundStationLink",
+            default_capacity_kbps=default_capacity_kbps,
+            use_budget=True,
+        )
+
+    def test_budget_falls_back_when_satellite_position_missing(
+        self, sat_node, gnd_node, caplog
+    ):
+        sat_node.position = {}
+
+        with (
+            caplog.at_level(logging.WARNING),
+            patch.object(LinkBudgetService, "compute_one_way") as compute,
+        ):
+            link = self._make_budget_link(sat_node, gnd_node)
+
+        compute.assert_not_called()
+        assert link.peer1_capacity == 777
+        assert link.peer2_capacity == 777
+        assert "Missing position" in caplog.text
+        assert "Sat0" in caplog.text
+
+    def test_budget_falls_back_when_gs_longitude_missing(
+        self, sat_node, gnd_node, caplog
+    ):
+        gnd_node.position = {"latitude": 0.0, "altitude": 0.0}
+
+        with (
+            caplog.at_level(logging.WARNING),
+            patch.object(LinkBudgetService, "compute_one_way") as compute,
+        ):
+            link = self._make_budget_link(sat_node, gnd_node)
+
+        # The old code silently used longitude 0.0 and produced a plausible
+        # but wrong capacity; the budget must be skipped explicitly.
+        compute.assert_not_called()
+        assert link.peer1_capacity == 777
+        assert link.peer2_capacity == 777
+        assert "Missing position" in caplog.text
+        assert "Gnd0" in caplog.text
+
+    def test_valid_positions_still_reach_the_budget(self, sat_node, gnd_node):
+        with patch.object(
+            LinkBudgetService, "compute_one_way", side_effect=[1234, 5678]
+        ) as compute:
+            link = self._make_budget_link(sat_node, gnd_node)
+
+        assert compute.call_count == 2
+        assert link.peer1_capacity == 1234
+        assert link.peer2_capacity == 5678
