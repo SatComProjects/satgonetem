@@ -445,9 +445,12 @@ class ExperimentRunner:
         topology_value = manifest.get("topology")
         if topology_value:
             topology_path = Path(str(topology_value))
-            if not topology_path.is_absolute():
-                topology_path = (Path(self.scenario.base_dir) / topology_path).resolve()
-            manifest["topology"] = str(topology_path)
+            if topology_path.is_absolute():
+                manifest["topology"] = str(topology_path)
+            else:
+                candidate = (Path(self.scenario.base_dir) / topology_path).resolve()
+                if candidate.is_file():
+                    manifest["topology"] = str(candidate)
         manifest["run_dir"] = str(run_dir)
         manifest["started_at"] = self._now().isoformat()
         _write_text_atomic(

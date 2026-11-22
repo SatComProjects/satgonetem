@@ -383,6 +383,22 @@ def test_run_manifest_reloads_as_scenario(tmp_path):
     assert Path(reloaded.topology).is_file()
 
 
+def test_dry_run_keeps_bundled_topology_name_replayable(tmp_path):
+    scenario = Scenario(
+        name="bundled",
+        topology="test_topology.json",
+        duration_s=1,
+        tick_s=1,
+    )
+
+    result = ExperimentRunner(scenario).run(output_dir=tmp_path / "run", dry_run=True)
+
+    manifest_data = yaml.safe_load((result.run_dir / "manifest.yaml").read_text())
+    assert manifest_data["topology"] == "test_topology.json"
+    reloaded = Scenario.from_file(result.run_dir / "manifest.yaml")
+    assert reloaded.topology == "test_topology.json"
+
+
 class _BoomTopology(_FakeTopology):
     def next_step(self):
         raise RuntimeError("tick boom")
