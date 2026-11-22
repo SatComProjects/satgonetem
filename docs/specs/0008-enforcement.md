@@ -4,6 +4,7 @@
 - Date: 2026-11-21
 - Depends on: 0001–0007
 - Supersedes: —
+- Amended: 2026-11-22 — principle enforcement and completion (see below)
 
 ## Context
 
@@ -73,3 +74,23 @@ uv run --frozen --extra dev pytest -q --cov=satgonetem --cov-fail-under=75
   connectivity check passes.
 - Final architecture review: no runtime import cycles; models do not import
   services or launchers; generated protobuf remains excluded from lint.
+
+## Amendment (2026-11-22): principle enforcement and completion
+
+### Requirements
+
+- **MUST** include a principle-compliance review in final validation: KISS,
+  DRY, SOLID, separation of concerns, and YAGNI.
+- **MUST** verify that error handling is explicit, boundary inputs are
+  validated, and no secret material is committed.
+- **MUST** require the completion report to explain what changed, report tests
+  executed and their results, identify known limitations, and list
+  documentation updates.
+
+### Acceptance criteria
+
+- The closing architecture review records principle compliance and any
+  justified exception.
+- The completion report contains the four required items.
+- `git diff` review shows no duplicated business logic, no speculative
+  abstraction, no layer entanglement, and no hardcoded secrets.

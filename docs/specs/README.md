@@ -1,7 +1,8 @@
 # Specifications
 
-This directory contains the implementation specifications for the SOLID/TDD
-adoption programme. Each specification states requirements, acceptance
+This directory contains the implementation specifications for the
+engineering principles (KISS, DRY, SOLID, separation of concerns, YAGNI) and
+TDD adoption programme. Each specification states requirements, acceptance
 criteria, non-goals, and verification commands. Architecture decisions are
 recorded in [../adr/](../adr/).
 
@@ -23,12 +24,23 @@ recorded in [../adr/](../adr/).
 | [0012 — Live integration test tier](0012-live-integration-tier.md) | 9 | Implemented |
 | [0013 — Decompose the four largest classes](0013-god-class-decomposition.md) | 9 | Implemented |
 
+Dated amendment sections are normative. They extend an implemented spec without
+rewriting its original implementation record.
+
 ## Rules
 
 - A specification is agreed before implementation starts.
 - Acceptance criteria are observable and testable.
 - Behavior changes require their own specification; refactor specs are
   behavior-preserving.
+- Every spec MUST apply the engineering principles in
+  [AGENTS.md](../../AGENTS.md#engineering-principles) and state its non-goals.
+  YAGNI means unrequested capabilities are explicitly deferred, not implemented.
+- Requirements MUST include explicit error handling and boundary input
+  validation, and MUST NOT introduce hardcoded secrets.
+- Acceptance criteria MUST include a principle check: no duplicated business
+  logic, preserved layer boundaries (CLI/API, orchestration/domain, I/O/data
+  access), and no speculative abstraction.
 - A spec is marked `Implemented` only after its verification commands have been
   run and recorded.
 - Use [the template](#template) for new specs and keep the index above current.
@@ -46,11 +58,17 @@ recorded in [../adr/](../adr/).
 ## Context
 Problem, current behavior, and why this change is needed.
 
+## Engineering principles
+How the change applies KISS, DRY, SOLID, separation of concerns, and YAGNI.
+State explicitly what is deferred (YAGNI).
+
 ## Requirements
-Normative requirements (MUST/SHOULD).
+Normative requirements (MUST/SHOULD), including error handling and boundary
+input validation.
 
 ## Acceptance criteria
-Observable checks, including exact commands where practical.
+Observable checks, including exact commands where practical, plus the
+principle-compliance check.
 
 ## Non-goals
 What this spec explicitly does not change.
@@ -59,4 +77,8 @@ What this spec explicitly does not change.
 
 ## Verification
 Commands and expected results.
+
+## Completion report
+What changed, tests executed and results, known limitations, and documentation
+updates.
 ```

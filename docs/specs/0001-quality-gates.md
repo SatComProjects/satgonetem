@@ -4,6 +4,7 @@
 - Date: 2026-11-21
 - Depends on: —
 - Supersedes: —
+- Amended: 2026-11-22 — engineering principles (see below)
 
 ## Context
 
@@ -107,3 +108,31 @@ Expected: all commands exit 0; CI shows all required checks.
 - Repository rulesets require pull requests on `develop` and `main`.
   Both require `Lint`, `Type check`, `Test (Python 3.10–3.14)`,
   `Security audit`, and `Build package` (see Spec 0008).
+
+## Amendment (2026-11-22): engineering principles
+
+The quality gates below also enforce the engineering principles in
+[AGENTS.md](../../AGENTS.md#engineering-principles).
+
+### Requirements
+
+- **MUST** review every change against KISS, DRY, SOLID, separation of
+  concerns, and YAGNI in addition to the existing gates.
+- **MUST** reject duplicated business logic, speculative abstractions, layer
+  entanglement (CLI/API vs orchestration/domain vs I/O/data access), and
+  unrequested features.
+- **MUST** handle errors explicitly, validate boundary inputs, and never
+  hardcode secrets.
+- **MUST** report what changed, tests executed and results, known limitations,
+  and documentation updates before completion.
+
+### Acceptance criteria
+
+- The pull request description states the principle check and any justified
+  exception.
+- The final diff review confirms no duplicated business logic, no new layer
+  coupling, and no unrequested capability.
+- Error paths and boundary validation are covered by tests where practical; no
+  secret material is present.
+- The completion report contains the four required items: what changed; tests
+  and their results; known limitations; and documentation updates.
