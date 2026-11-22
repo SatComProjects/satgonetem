@@ -74,7 +74,7 @@ def scale_topology(live_env: LiveEnvironment) -> Iterator[TopologyManager]:
         yield topology
     finally:
         if project_id is None:
-            project_id = topology.project_id
+            project_id = getattr(topology, "project_id", None)
         teardown_live_topology(topology, live_env.docker, project_id)
 
 
