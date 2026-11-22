@@ -158,3 +158,115 @@ def test_changed_path_replaces_the_route_without_deleting_it() -> None:
     batch = _batch_text(source)
     assert f"ip route del {far_gs.loopback.ipv4}/32" not in batch
     assert f"ip route replace {far_gs.loopback.ipv4}/32" in batch
+
+
+class _KernelBackend:
+    """Minimal emulation of the iproute2 batches executed by the daemon.
+
+    A ``route del`` for a prefix the kernel no longer has fails with
+    ``No such process``; the ``|| true`` guard added for stale deletes is the
+    only thing that lets such a batch continue with ``set -e``.
+    """
+
+    def __init__(self) -> None:
+        self.routes: dict[tuple[str, str], str] = {}
+        self.batches: list[str] = []
+        self.fail_next_install = False
+
+    def __call__(self, argv) -> str:
+        batch = argv[2]
+        self.batches.append(batch)
+        for command in batch.split("; "):
+            command = command.strip()
+            if not command or command == "set -e":
+                continue
+            if command.startswith("ip route del "):
+                self._delete(("ip", command.split()[3]), command)
+            elif command.startswith("ip -f mpls route del "):
+                self._delete(("mpls", command.split()[5]), command)
+            elif command.startswith("ip route replace "):
+                self._install(("ip", command.split()[3]), command)
+            elif command.startswith("ip -f mpls route replace "):
+                self._install(("mpls", command.split()[5]), command)
+            else:
+                raise AssertionError(f"unexpected command: {command}")
+        return ""
+
+    def _delete(self, key: tuple[str, str], command: str) -> None:
+        if key not in self.routes:
+            if "2>/dev/null || true" in command:
+                return
+            raise RuntimeError("RTNETLINK answers: No such process")
+        del self.routes[key]
+
+    def _install(self, key: tuple[str, str], command: str) -> None:
+        if self.fail_next_install:
+            self.fail_next_install = False
+            raise RuntimeError("RTNETLINK answers: Network is down")
+        self.routes[key] = command
+
+
+def test_stale_route_absent_from_kernel_does_not_wedge_the_update() -> None:
+    """A delete of an already-absent route must not abort the whole batch.
+
+    A container restart (or a partially applied earlier batch) can leave the
+    cache holding a route the kernel no longer has.  ``set -e`` would abort at
+    that delete, the cache would keep the stale key, and every later update
+    would fail at the same line.
+    """
+    topology, source, far_gs, graph = _make_topology()
+    daemon = _make_daemon(topology)
+    backend = _KernelBackend()
+    source.execute_command = backend
+
+    daemon._update_sr_route_for_source(source.id)
+
+    stale_line = "ip route replace 10.9.9.9/32 via 10.10.0.2 dev Gnd0.2"
+    daemon._prev_sr_gs_routes[source.id].append(stale_line)
+    assert ("ip", "10.9.9.9/32") not in backend.routes
+
+    # Force a route change so the same batch also installs new routes.
+    graph.remove_edge(source.id, 1)
+    daemon._update_sr_route_for_source(source.id)
+
+    batch = backend.batches[-1]
+    assert "ip route del 10.9.9.9/32 2>/dev/null || true" in batch
+    assert stale_line not in daemon._prev_sr_gs_routes[source.id]
+
+    far_route = backend.routes[("ip", f"{far_gs.loopback.ipv4}/32")]
+    assert "16003" in far_route, "the replacement route was not installed"
+    assert any(
+        "16003" in line and far_gs.loopback.ipv4 in line
+        for line in daemon._prev_sr_gs_routes[source.id]
+    ), "the cache did not commit the surviving routes"
+
+
+def test_failed_install_after_tolerant_delete_recovers_on_next_update() -> None:
+    topology, source, far_gs, graph = _make_topology()
+    daemon = _make_daemon(topology)
+    backend = _KernelBackend()
+    source.execute_command = backend
+
+    daemon._update_sr_route_for_source(source.id)
+
+    stale_line = "ip route replace 10.9.9.9/32 via 10.10.0.2 dev Gnd0.2"
+    daemon._prev_sr_gs_routes[source.id].append(stale_line)
+    graph.remove_edge(source.id, 1)
+    backend.fail_next_install = True
+
+    daemon._update_sr_route_for_source(source.id)
+
+    # The batch aborted after the stale delete; the cache must not claim the
+    # new routes were installed.
+    assert stale_line in daemon._prev_sr_gs_routes[source.id]
+    assert ("ip", f"{far_gs.loopback.ipv4}/32") in backend.routes
+    assert "16003" not in backend.routes[("ip", f"{far_gs.loopback.ipv4}/32")]
+
+    daemon._update_sr_route_for_source(source.id)
+
+    assert stale_line not in daemon._prev_sr_gs_routes[source.id]
+    assert "16003" in backend.routes[("ip", f"{far_gs.loopback.ipv4}/32")]
+    assert any(
+        "16003" in line and far_gs.loopback.ipv4 in line
+        for line in daemon._prev_sr_gs_routes[source.id]
+    )
