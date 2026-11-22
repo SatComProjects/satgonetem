@@ -104,14 +104,39 @@ def test_udp_packets_use_sender_totals_for_bidir() -> None:
     summary = _summary(
         {
             "sum": {"packets": 1786},
-            "sum_received": {"packets": 1700, "lost_packets": 20},
-            "sum_received_bidir_reverse": {"packets": 3400, "lost_packets": 10},
+            "sum_received": {"packets": 1720, "lost_packets": 20},
+            "sum_received_bidir_reverse": {"packets": 3410, "lost_packets": 10},
         }
     )
 
-    # iperf3's receiver summaries count received packets; the transmitted
-    # total is received + lost (5130), which is also the loss denominator.
+    # iperf3's receiver summary reports the sender's transmitted count in
+    # ``packets``; ``lost_packets`` is already a subset and must not be added.
     assert summary.total_packets == 5130
+
+
+def test_bidir_udp_live_shape_does_not_double_count_lost_packets() -> None:
+    summary = _summary(
+        {
+            "sum_received": {
+                "packets": 121_379,
+                "lost_packets": 18_416,
+                "jitter_ms": 0.5,
+            },
+            "sum_received_bidir_reverse": {
+                "packets": 118_091,
+                "lost_packets": 23_400,
+                "jitter_ms": 0.2,
+            },
+        }
+    )
+
+    assert summary.total_packets == 239_470
+    assert summary.total_lost_packets == 41_816
+    assert summary.avg_loss_percent == pytest.approx(41_816 / 239_470 * 100)
+    received = (121_379 - 18_416) + (118_091 - 23_400)
+    assert summary.avg_jitter_ms == pytest.approx(
+        (0.5 * (121_379 - 18_416) + 0.2 * (118_091 - 23_400)) / received
+    )
 
 
 def test_udp_packets_fall_back_to_sum_when_receiver_pair_is_zero() -> None:
@@ -154,25 +179,25 @@ def test_udp_losses_and_percent_recombine_for_bidir() -> None:
     summary = _summary(
         {
             "sum": {"lost_packets": 0, "lost_percent": 0.0},
-            "sum_received": {"packets": 1700, "lost_packets": 20},
-            "sum_received_bidir_reverse": {"packets": 3400, "lost_packets": 10},
+            "sum_received": {"packets": 1720, "lost_packets": 20},
+            "sum_received_bidir_reverse": {"packets": 3410, "lost_packets": 10},
         }
     )
 
     # iperf3 defines lost_percent over transmitted packets:
-    # 100 * lost / (received + lost), here 100 * 30 / 5130.
+    # 100 * lost / packets, here 100 * 30 / 5130.
     assert summary.total_lost_packets == 30
     assert summary.total_packets == 5130
     assert summary.avg_loss_percent == pytest.approx(30 / 5130 * 100)
 
 
 def test_all_received_packets_lost_reports_full_loss() -> None:
-    """Received == 0 does not fall back when lost packets were counted."""
+    """Transmitted packets can consist entirely of lost packets."""
     summary = _summary(
         {
             "sum": {"lost_packets": 7, "lost_percent": 1.5},
-            "sum_received": {"packets": 0, "lost_packets": 100},
-            "sum_received_bidir_reverse": {"packets": 0, "lost_packets": 100},
+            "sum_received": {"packets": 100, "lost_packets": 100},
+            "sum_received_bidir_reverse": {"packets": 100, "lost_packets": 100},
         }
     )
 
