@@ -12,10 +12,13 @@ import importlib.util
 import threading
 import time
 from types import ModuleType
+from unittest.mock import MagicMock
 
 import pytest
 
 import satgonetem.traffic.iperf3_ports as iperf3_ports
+from satgonetem.traffic.iperf3_config import Iperf3Config
+from satgonetem.traffic.iperf3_flow import FlowStatus, Iperf3Flow
 from satgonetem.traffic.iperf3_ports import (
     _Iperf3PortAllocator,
     get_iperf3_port_range,
@@ -102,3 +105,27 @@ def test_reconfiguration_cannot_race_with_allocation(monkeypatch) -> None:
     assert reconfigured.is_set()
     assert allocated == [7000]
     assert get_iperf3_port_range() == (7000, 7000)
+
+
+def test_stop_during_delay_does_not_leave_a_port_reserved(monkeypatch) -> None:
+    """A flow cancelled before its delay elapses must not exhaust the pool."""
+    monkeypatch.setattr(
+        iperf3_ports,
+        "_IPERF3_PORT_ALLOCATOR",
+        _Iperf3PortAllocator(base_port=5201, max_port=5201),
+    )
+    node = MagicMock()
+    node.loopback.ipv4 = "10.0.0.1"
+    flow = Iperf3Flow(node, node, Iperf3Config(duration=1), delay=30.0)
+
+    flow.start()
+    assert flow._port is None
+    assert iperf3_ports._IPERF3_PORT_ALLOCATOR.in_use_ports == set()
+
+    flow.stop()
+
+    assert flow.status() == FlowStatus.ERROR
+    assert iperf3_ports._IPERF3_PORT_ALLOCATOR.in_use_ports == set()
+    # A leaked reservation would make this reconfiguration fail.
+    set_iperf3_port_range(7000, 7001)
+    assert get_iperf3_port_range() == (7000, 7001)

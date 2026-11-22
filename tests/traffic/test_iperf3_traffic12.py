@@ -143,7 +143,6 @@ class TestUniqueFlowPorts:
 
         assert flow_a.status() == FlowStatus.DONE
         assert flow_b.status() == FlowStatus.DONE
-        assert flow_a._port != flow_b._port
         # Shared config is untouched by both flows.
         assert config.port == 5201
 
@@ -154,14 +153,15 @@ class TestUniqueFlowPorts:
         assert len(client_a_cmds) == 1
         assert len(client_b_cmds) == 1
 
-        assert any(f"-p {flow_a._port} " in cmd for cmd in server_cmds)
-        assert any(f"-p {flow_b._port} " in cmd for cmd in server_cmds)
-        assert f"-p {flow_a._port} " in client_a_cmds[0]
-        assert f"-p {flow_b._port} " in client_b_cmds[0]
-
-        # Results report the effective port, not the shared config port.
-        assert flow_a.results().to_json()["config"]["port"] == flow_a._port
-        assert flow_b.results().to_json()["config"]["port"] == flow_b._port
+        # The reservation is released after completion, so read the effective
+        # port from the commands/results the flow produced.
+        port_a = flow_a.results().to_json()["config"]["port"]
+        port_b = flow_b.results().to_json()["config"]["port"]
+        assert port_a != port_b
+        assert any(f"-p {port_a} " in cmd for cmd in server_cmds)
+        assert any(f"-p {port_b} " in cmd for cmd in server_cmds)
+        assert f"-p {port_a} " in client_a_cmds[0]
+        assert f"-p {port_b} " in client_b_cmds[0]
 
     @patch("satgonetem.traffic.iperf3_flow.time.sleep")
     def test_stop_pkill_uses_flow_port(self, _mock_sleep):

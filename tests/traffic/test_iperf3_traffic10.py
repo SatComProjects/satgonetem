@@ -7,6 +7,7 @@ used.
 """
 
 import json
+import re
 from unittest.mock import MagicMock, patch
 
 from satgonetem.traffic.iperf3_utils import (
@@ -149,7 +150,15 @@ def test_client_setup_failure_sets_error_and_kills_detached_server():
 
     kills = _kill_calls(dst)
     assert kills, "detached server kill was not attempted"
+    # The reservation is released after completion, so read the allocated port
+    # from the server command this flow issued.
+    server_cmd = next(
+        str(call)
+        for call in dst.execute_command.call_args_list
+        if "iperf3 -s -1" in str(call)
+    )
+    port = re.search(r"-p (\d+)", server_cmd).group(1)
     # The kill must be scoped to this flow's bind address and allocated port.
     assert any(
-        f"[i]perf3 -s -1 -B 10.0.0.2 -p {flow._port}" in str(call) for call in kills
+        f"[i]perf3 -s -1 -B 10.0.0.2 -p {port}" in str(call) for call in kills
     ), f"kill was not scoped to this flow: {kills!r}"
