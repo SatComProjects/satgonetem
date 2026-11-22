@@ -402,6 +402,47 @@ def test_monitor_links_maps_interface_usage_to_links(monkeypatch):
     assert link.rx == 0
 
 
+def test_monitor_links_returns_empty_for_empty_topology(diagnostics_host):
+    assert diagnostics_host.links == {}
+
+    assert diagnostics_host.monitor_links() == []
+
+
+def test_monitor_links_uses_a_single_satellite_snapshot(monkeypatch):
+    """Paths and worker names must come from the same topology snapshot."""
+    from types import SimpleNamespace
+
+    from tests.support import make_link
+
+    host = _DiagnosticsHost(project_name="proj")
+    sat0 = host.add_satellite("Sat0")
+    sat1 = host.add_satellite("Sat1")
+    sat0.satcom_object = SimpleNamespace(topology_uniq_id=0)
+    sat1.satcom_object = SimpleNamespace(topology_uniq_id=1)
+    host.links = {frozenset(("Sat0", "Sat1")): make_link(sat0, sat1)}
+    host._build_link_key = lambda source, target: frozenset(("Sat0", "Sat1"))
+
+    snapshots = [[sat0, sat1], []]
+    host.get_satellites = lambda: snapshots.pop(0)
+
+    monkeypatch.setattr(
+        host,
+        "_process_interface_file",
+        lambda path: {"proj.Sat1": 1234} if path.endswith("Sat0") else {},
+    )
+
+    result = host.monitor_links()
+
+    assert result == [
+        {
+            "src": "Sat0",
+            "dst": "Sat1",
+            "value": 1234,
+            "type": "InterSatelliteLink",
+        }
+    ]
+
+
 def test_node_terminal_sends_resizes_reads_and_closes():
     from types import SimpleNamespace
 
