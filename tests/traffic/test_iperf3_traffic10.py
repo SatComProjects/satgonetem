@@ -64,7 +64,7 @@ def _kill_calls(node: MagicMock) -> list:
     return [
         call
         for call in node.execute_command.call_args_list
-        if "pkill" in str(call) and "iperf3 -s -1" in str(call)
+        if "pkill" in str(call) and "[i]perf3 -s -1" in str(call)
     ]
 
 
@@ -151,5 +151,5 @@ def test_client_setup_failure_sets_error_and_kills_detached_server():
     assert kills, "detached server kill was not attempted"
     # The kill must be scoped to this flow's bind address and allocated port.
     assert any(
-        f"iperf3 -s -1 -B 10.0.0.2 -p {flow._port}" in str(call) for call in kills
+        f"[i]perf3 -s -1 -B 10.0.0.2 -p {flow._port}" in str(call) for call in kills
     ), f"kill was not scoped to this flow: {kills!r}"

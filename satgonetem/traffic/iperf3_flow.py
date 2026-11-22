@@ -121,9 +121,14 @@ class Iperf3Flow(ThreadedFlow):
         super().start()
 
     def _stop_process(self) -> None:
-        """Send SIGTERM to the running iperf3 client and server."""
+        """Send SIGTERM to the running iperf3 client and server.
+
+        The bracket expression ``[i]perf3`` matches the real processes but
+        not the wrapper ``sh -c`` command line that carries the pattern, so
+        pkill cannot signal its own parent shell.
+        """
         port = self._port if self._port is not None else self.config.port
-        kill_cmd = f"pkill -f 'iperf3 .*-p {port} ' 2>/dev/null; true"
+        kill_cmd = f"pkill -f '[i]perf3 .*-p {port} ' 2>/dev/null; true"
         self.source.execute_command(kill_cmd, detach=True)
         self.destination.execute_command(kill_cmd, detach=True)
 
@@ -214,9 +219,9 @@ class Iperf3Flow(ThreadedFlow):
         """
         port = self._port if self._port is not None else self.config.port
         if dst_ip:
-            pattern = f"iperf3 -s -1 -B {dst_ip} -p {port}"
+            pattern = f"[i]perf3 -s -1 -B {dst_ip} -p {port}"
         else:
-            pattern = f"iperf3 -s -1 .* -p {port}"
+            pattern = f"[i]perf3 -s -1 .* -p {port}"
         with contextlib.suppress(Exception):
             self.destination.execute_command(
                 f"pkill -f {shlex.quote(pattern)} 2>/dev/null; true"
@@ -269,7 +274,12 @@ class Iperf3Flow(ThreadedFlow):
                 f"--json > {shlex.quote(server_json)} 2>&1"
             )
             self.destination.execute_command(server_cmd, detach=True)
-            _wait_for_iperf3_server(self.destination, dst_ip, run_config.port)
+            if not _wait_for_iperf3_server(self.destination, dst_ip, run_config.port):
+                raise RuntimeError(
+                    f"iperf3 server did not start on {dst_ip}:{run_config.port}; "
+                    f"client {self.source.name} -> {self.destination.name} "
+                    "was not started."
+                )
 
             client_cmd = run_config.build_client_command(dst_ip, src_ip, client_json)
             client_started = time.monotonic()

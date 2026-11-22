@@ -184,12 +184,16 @@ class TestRunIperf3FlowPorts:
     """The blocking entry point must allocate too."""
 
     @patch(
+        "satgonetem.traffic.iperf3_runner._wait_for_iperf3_server",
+        return_value=True,
+    )
+    @patch(
         "satgonetem.traffic.iperf3_flow._wait_for_iperf3_server",
         return_value=True,
     )
     @patch("satgonetem.traffic.iperf3_flow.time.sleep")
     def test_blocking_flow_uses_one_allocated_port_for_both_sides(
-        self, _mock_sleep, _mock_ready
+        self, _mock_sleep, _mock_ready, _mock_runner_ready
     ):
         src = _make_node("sat0", "10.0.0.1")
         dst = _make_node("gnd0", "10.0.0.2")

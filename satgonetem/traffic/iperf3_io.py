@@ -29,7 +29,9 @@ def _is_iperf3_server_listening(
         or None when the probe could not be executed (e.g. a mocked node).
     """
     port_token = f"{listen_ip}:{port}"
-    process_pattern = f"iperf3 -s -1 -B {listen_ip} -p {port}"
+    # Bracketed so pgrep -f cannot match the wrapper sh -c command line that
+    # carries the pattern itself.
+    process_pattern = f"[i]perf3 -s -1 -B {listen_ip} -p {port}"
     check_cmd = (
         f"ss -ltn 2>/dev/null | grep -F {shlex.quote(port_token)} "
         f"|| pgrep -f {shlex.quote(process_pattern)} 2>/dev/null"

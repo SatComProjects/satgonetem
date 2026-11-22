@@ -143,7 +143,11 @@ def run_iperf3_flow(
             f'sh -c "iperf3 -s -1 -B {dst_ip} -p {port} --json > {server_json} 2>&1"'
         )
         destination.execute_command(server_cmd, detach=True)
-        _wait_for_iperf3_server(destination, dst_ip, port)
+        if not _wait_for_iperf3_server(destination, dst_ip, port):
+            raise RuntimeError(
+                f"iperf3 server did not start on {dst_ip}:{port}; "
+                f"client {source.name} -> {destination.name} was not started."
+            )
 
         client_cmd = run_config.build_client_command(dst_ip, src_ip, client_json)
         source.execute_command(client_cmd, detach=False)
