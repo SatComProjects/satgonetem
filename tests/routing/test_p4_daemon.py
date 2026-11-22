@@ -111,7 +111,11 @@ def _patch_sleep(monkeypatch):
 @pytest.fixture
 def daemon(topology, tmp_path):
     """A daemon whose controller directory is never touched on disk."""
-    return P4Daemon(topology, str(tmp_path / "controller"))
+    return P4Daemon(
+        topology,
+        str(tmp_path / "controller"),
+        readiness_probe=lambda: True,
+    )
 
 
 @pytest.mark.parametrize(
@@ -164,7 +168,7 @@ def test_start_sets_executable_bit_when_script_is_not_executable(
     chmod_calls = _patch_os(monkeypatch, exists=True, executable=False)
     process = FakeProcess(returncode=None)
     popen = _patch_popen(monkeypatch, process=process)
-    sleep = _patch_sleep(monkeypatch)
+    _patch_sleep(monkeypatch)
     script_path = str(tmp_path / "controller" / "run_controller.sh")
 
     assert daemon.start_p4_controller() is True
@@ -172,7 +176,6 @@ def test_start_sets_executable_bit_when_script_is_not_executable(
     assert chmod_calls == [(script_path, 0o755)]
     popen.assert_called_once()
     assert popen.call_args.args[0] == [script_path]
-    sleep.assert_called_once_with(0.5)
     assert daemon.p4_controller_process is process
 
 
@@ -353,6 +356,7 @@ def test_start_p4_controller_uses_injected_process_runner(
         topology,
         str(tmp_path / "controller"),
         process_runner=runner,
+        readiness_probe=lambda: True,
     )
     _patch_os(monkeypatch, exists=True, executable=True)
     _patch_sleep(monkeypatch)
@@ -360,6 +364,84 @@ def test_start_p4_controller_uses_injected_process_runner(
     assert daemon.start_p4_controller() is True
     assert runner.calls
     assert runner.calls[0][0] == [str(tmp_path / "controller" / "run_controller.sh")]
+
+
+def test_start_checks_readiness_probe_before_returning_true(daemon, monkeypatch):
+    _patch_os(monkeypatch, exists=True, executable=True)
+    process = FakeProcess(returncode=None)
+    _patch_popen(monkeypatch, process=process)
+    sleep = _patch_sleep(monkeypatch)
+    probe = MagicMock(side_effect=[False, False, True])
+    monkeypatch.setattr(daemon, "_readiness_probe", probe, raising=False)
+
+    assert daemon.start_p4_controller(timeout=10) is True
+
+    assert probe.call_count == 3
+    assert sleep.call_count == 2
+    assert daemon.p4_controller_process is process
+
+
+def test_start_returns_false_and_stops_controller_when_readiness_times_out(
+    daemon, monkeypatch, caplog
+):
+    _patch_os(monkeypatch, exists=True, executable=True)
+    process = FakeProcess(returncode=None)
+    _patch_popen(monkeypatch, process=process)
+    _patch_sleep(monkeypatch)
+    probe = MagicMock(return_value=False)
+    monkeypatch.setattr(daemon, "_readiness_probe", probe, raising=False)
+
+    with caplog.at_level(logging.ERROR):
+        assert daemon.start_p4_controller(timeout=0) is False
+
+    assert probe.call_count == 1
+    assert "did not become ready" in caplog.text
+    assert process.terminate_calls == 1
+    assert daemon.p4_controller_process is None
+
+
+def test_start_accepts_injected_readiness_probe(topology, tmp_path, monkeypatch):
+    _patch_os(monkeypatch, exists=True, executable=True)
+    process = FakeProcess(returncode=None)
+    _patch_popen(monkeypatch, process=process)
+    _patch_sleep(monkeypatch)
+    probe = MagicMock(return_value=True)
+    daemon = P4Daemon(
+        topology,
+        str(tmp_path / "controller"),
+        readiness_probe=probe,
+    )
+
+    assert daemon.start_p4_controller() is True
+    probe.assert_called_once_with()
+
+
+def test_default_readiness_probe_checks_controller_port(
+    topology, tmp_path, monkeypatch
+):
+    daemon = P4Daemon(
+        topology,
+        str(tmp_path / "controller"),
+        controller_port=9559,
+    )
+    connection = MagicMock()
+    create_connection = MagicMock(return_value=connection)
+    monkeypatch.setattr(p4_daemon.socket, "create_connection", create_connection)
+
+    assert daemon._probe_controller_port() is True
+
+    create_connection.assert_called_once_with(("127.0.0.1", 9559), timeout=0.5)
+    connection.__enter__.assert_called_once_with()
+
+
+def test_default_readiness_probe_returns_false_when_port_is_unreachable(
+    topology, tmp_path, monkeypatch
+):
+    daemon = P4Daemon(topology, str(tmp_path / "controller"))
+    create_connection = MagicMock(side_effect=OSError("connection refused"))
+    monkeypatch.setattr(p4_daemon.socket, "create_connection", create_connection)
+
+    assert daemon._probe_controller_port() is False
 
 
 def test_update_before_init_is_a_documented_noop(daemon, caplog):

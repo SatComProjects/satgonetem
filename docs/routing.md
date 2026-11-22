@@ -178,7 +178,11 @@ picked up automatically.
   code.
 - `P4Daemon` is experimental and is **not** a registered routing method: its
   constructor requires a P4 controller directory. Instantiate it directly only
-  for experiments.
+  for experiments. `start_p4_controller()` returns `True` only after the
+  controller process is running and a readiness probe succeeds within the
+  timeout. The default probe opens a TCP connection to `127.0.0.1:9559` (the
+  P4Runtime port); override `controller_host`/`controller_port`, or pass a
+  `readiness_probe` callable for a different health check.
 
 ---
 
