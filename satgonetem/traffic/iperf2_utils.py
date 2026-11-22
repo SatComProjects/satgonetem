@@ -63,7 +63,7 @@ def _is_unlabelled_summary(rows: list[dict]) -> bool:
         return False
     intervals = rows[:-1]
     last = rows[-1]
-    if last["start"] != min(row["start"] for row in intervals):
+    if last["start"] > min(row["start"] for row in intervals):
         return False
     if last["end"] != max(row["end"] for row in intervals):
         return False
@@ -158,7 +158,11 @@ def _parse_iperf2_log(
         elif protocol == "TCP":
             # The bare column after the bandwidth is Retr for TCP and the
             # datagram count for UDP; only the former is a retransmit metric.
-            retransmits = re.match(r"\s*(\d+)", fields["rest"] or "")
+            # Enhanced -e output adds "Write/Err  Rtry" before the retry
+            # count, so prefer that column when present.
+            rest = fields["rest"] or ""
+            enhanced = re.match(r"\s*\d+/\d+\s+(\d+)", rest)
+            retransmits = enhanced or re.match(r"\s*(\d+)", rest)
             row["retransmits"] = (
                 int(retransmits.group(1)) if retransmits is not None else 0
             )
@@ -168,8 +172,17 @@ def _parse_iperf2_log(
         return protocol, [], None
 
     sum_rows = [i for i, row in enumerate(parsed) if row["_stream"] == "SUM"]
+    full_span = (
+        min(row["start"] for row in parsed),
+        max(row["end"] for row in parsed),
+    )
     if sum_rows:
-        summary_index = sum_rows[-1]
+        candidate = sum_rows[-1]
+        summary_index = (
+            candidate
+            if (parsed[candidate]["start"], parsed[candidate]["end"]) == full_span
+            else None
+        )
     elif _is_unlabelled_summary(parsed):
         summary_index = len(parsed) - 1
     else:
@@ -181,10 +194,6 @@ def _parse_iperf2_log(
         summary_span = (parsed[summary_index]["start"], parsed[summary_index]["end"])
         # A truncated log can end on an interval [SUM] row; its span does not
         # cover the test, so its same-span rows are intervals, not totals.
-        full_span = (
-            min(row["start"] for row in parsed),
-            max(row["end"] for row in parsed),
-        )
         if summary_span == full_span:
             summary_row_indices.update(
                 index

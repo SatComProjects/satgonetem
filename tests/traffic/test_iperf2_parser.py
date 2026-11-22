@@ -61,6 +61,50 @@ def _parse(lines: list[str]):
     return _parse_iperf2_log(lines)
 
 
+_TRUNCATED_INTERVAL_SUM_LOG = """\
+[ ID] Interval       Transfer     Bandwidth
+[  3]  0.00-1.00  sec  1.25 MBytes  10.50 Mbits/sec
+[  4]  0.00-1.00  sec  1.25 MBytes  10.50 Mbits/sec
+[SUM]  0.00-1.00  sec  2.50 MBytes  21.00 Mbits/sec
+[  3]  1.00-2.00  sec  1.25 MBytes  10.50 Mbits/sec
+[  4]  1.00-2.00  sec  1.25 MBytes  10.50 Mbits/sec
+[SUM]  1.00-2.00  sec  2.50 MBytes  21.00 Mbits/sec
+"""
+
+
+def test_truncated_interval_sum_is_not_an_overall_summary() -> None:
+    _protocol, rows, summary = _parse(_TRUNCATED_INTERVAL_SUM_LOG.splitlines())
+
+    assert summary is None
+    assert sum(row["bytes"] for row in rows) == pytest.approx(5.0 * _MIB)
+
+
+def test_unlabelled_final_total_with_non_zero_earliest_interval() -> None:
+    log = """\
+[ ID] Interval       Transfer     Bandwidth
+[  3]  2.00-3.00  sec  1.25 MBytes  10.50 Mbits/sec
+[  3]  3.00-4.00  sec  1.25 MBytes  10.50 Mbits/sec
+[  3]  0.00-4.00  sec  2.50 MBytes  5.25 Mbits/sec
+"""
+
+    _protocol, rows, summary = _parse(log.splitlines())
+
+    assert summary is not None
+    assert summary["bytes"] == pytest.approx(2.5 * _MIB)
+    assert len(rows) == 2
+
+
+def test_enhanced_output_uses_retry_column_for_retransmits() -> None:
+    log = """\
+[ ID] Interval       Transfer     Bandwidth       Write/Err  Rtry
+[  3]  0.00-1.00  sec  1.25 MBytes  10.50 Mbits/sec  1605/0      73
+"""
+
+    _protocol, rows, _summary = _parse(log.splitlines())
+
+    assert rows[0]["retransmits"] == 73
+
+
 def _write_log(tmp_path: Path, content: str) -> Path:
     path = tmp_path / "iperf2.log"
     path.write_text(content)
