@@ -489,8 +489,9 @@ class TopologySyncMixin:
                 raise ValueError("Simulation manager is not set")
 
             if advance_timestep:
-                self.current_time_step += 1
+                # Tick first: a failing tick must not consume a step.
                 self._update_simulation_manager_time()
+                self.current_time_step += 1
 
             self._sync_node_positions()
             link_changes = self._sync_links()
