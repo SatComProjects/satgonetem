@@ -147,7 +147,6 @@ def test_create_veth_creates_pair_and_restores_namespace(
     assert libc.setns.call_args_list == [
         call(22, CLONE_NEWNET),
         call(11, CLONE_NEWNET),
-        call(11, CLONE_NEWNET),
     ]
     sat_ipr.link.assert_any_call(
         "add",
@@ -169,7 +168,7 @@ def test_create_veth_returns_false_when_setns_fails(
 ) -> None:
     manager = HILManager({"Gnd0": "eth1"})
     libc = MagicMock()
-    libc.setns.side_effect = [-1, 0]
+    libc.setns.return_value = -1
     monkeypatch.setattr(
         hil_manager, "ctypes", SimpleNamespace(CDLL=MagicMock(return_value=libc))
     )
@@ -188,10 +187,43 @@ def test_create_veth_returns_false_when_setns_fails(
 
     iproute_factory.assert_not_called()
     assert "failed to enter namespace of Sat1 (pid 4242)" in caplog.text
+    assert libc.setns.call_args_list == [call(22, CLONE_NEWNET)]
+    assert saved_ns.closed is True
+    assert sat_ns.closed is True
+
+
+def test_create_veth_returns_false_when_namespace_restore_fails(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    manager = HILManager({"Gnd0": "eth1"})
+    libc = MagicMock()
+    libc.setns.side_effect = [0, -1, -1]
+    monkeypatch.setattr(
+        hil_manager, "ctypes", SimpleNamespace(CDLL=MagicMock(return_value=libc))
+    )
+
+    saved_ns = _FakeNsFile(11)
+    sat_ns = _FakeNsFile(22)
+    _install_fake_open(
+        monkeypatch,
+        {"/proc/self/ns/net": saved_ns, "/proc/4242/ns/net": sat_ns},
+    )
+    sat_ipr = _fake_iproute({"eth3": 101})
+    host_ipr = _fake_iproute({"hil3": 202})
+    iproute_factory = MagicMock(side_effect=[sat_ipr, host_ipr])
+    monkeypatch.setattr(hil_manager, "IPRoute", iproute_factory)
+    caplog.set_level(logging.ERROR)
+
+    assert manager._create_veth("Sat1", 4242, 3) is False
+
     assert libc.setns.call_args_list == [
         call(22, CLONE_NEWNET),
         call(11, CLONE_NEWNET),
+        call(11, CLONE_NEWNET),
     ]
+    # Host-side setup must not run after a failed restore.
+    iproute_factory.assert_called_once()
+    assert "failed to restore host network namespace" in caplog.text
     assert saved_ns.closed is True
     assert sat_ns.closed is True
 

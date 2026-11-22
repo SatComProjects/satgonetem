@@ -379,12 +379,12 @@ def test_grouping_splits_altitude_outliers_into_sub_planes() -> None:
     assert len(merged[0]) == 3
 
 
-def test_grouping_does_not_apply_min_plane_size() -> None:
-    # The parameter is documented but unused by this helper; the size filter
-    # is applied later, for ADJACENT links only, in add_mesh_links.
+def test_grouping_keeps_small_planes() -> None:
+    # Plane-size filtering belongs to add_mesh_links (ADJACENT links only);
+    # grouping must not drop small fragments.
     sats = [_sat(0.0), _sat(1.0), _sat(100.0), _sat(101.0)]
 
-    planes = _group_satellites_by_orbital_plane(sats, None, min_plane_size=100)
+    planes = _group_satellites_by_orbital_plane(sats, None)
 
     assert [len(plane) for plane in planes] == [2, 2]
 

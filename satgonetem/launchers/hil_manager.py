@@ -243,6 +243,8 @@ class HILManager:
 
         libc = ctypes.CDLL("libc.so.6", use_errno=True)
         saved_ns = open("/proc/self/ns/net", "rb")  # noqa: SIM115 - fd must stay open across namespaces
+        entered_satellite_ns = False
+        restored_host_ns = False
         try:
             with open(f"/proc/{sat_pid}/ns/net", "rb") as ns_fd:
                 if libc.setns(ns_fd.fileno(), CLONE_NEWNET) != 0:
@@ -252,6 +254,7 @@ class HILManager:
                         sat_pid,
                     )
                     return False
+                entered_satellite_ns = True
 
             with IPRoute() as ipr:
                 ipr.link(
@@ -264,7 +267,14 @@ class HILManager:
                 if lnks:
                     ipr.link("set", index=lnks[0]["index"], state="up")
 
-            libc.setns(saved_ns.fileno(), CLONE_NEWNET)
+            if libc.setns(saved_ns.fileno(), CLONE_NEWNET) != 0:
+                logging.error(
+                    "HIL: failed to restore host network namespace for %s (pid %d)",
+                    sat_name,
+                    sat_pid,
+                )
+                return False
+            restored_host_ns = True
 
             with IPRoute() as ipr:
                 lnks = ipr.link("get", ifname=host_iface)
@@ -289,7 +299,19 @@ class HILManager:
             )
             return False
         finally:
-            libc.setns(saved_ns.fileno(), CLONE_NEWNET)
+            # Restore only if the namespace switch succeeded and was not already
+            # undone on the success path. A failed restore is dangerous to
+            # ignore: this process would keep operating in the container ns.
+            if (
+                entered_satellite_ns
+                and not restored_host_ns
+                and libc.setns(saved_ns.fileno(), CLONE_NEWNET) != 0
+            ):
+                logging.error(
+                    "HIL: failed to restore host network namespace for %s (pid %d)",
+                    sat_name,
+                    sat_pid,
+                )
             saved_ns.close()
 
     def _create_bridge(self, gnd_name: str, gnd_id: int) -> bool:

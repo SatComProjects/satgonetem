@@ -294,12 +294,35 @@ def _elevation_at(
     return get_elevation_angle((latitude_deg, 0.0, altitude_m), (0.0, 0.0, 0.0))
 
 
-def _make_bisection_satellite(when, get_lonlatalt, position_at=None):
+def _make_bisection_satellite(when, get_lonlatalt_m, position_at_m=None):
+    """Build a model whose pyorbital accessor follows the real km contract.
+
+    Callables receive/return altitudes in metres; the ``get_lonlatalt`` stub
+    converts to kilometres, matching pyorbital (the production code must convert
+    back to metres before computing elevation).
+    """
     movement_model = MagicMock()
     movement_model.clock.get_current_time.return_value = when
-    movement_model.orbital_object.get_lonlatalt.side_effect = get_lonlatalt
-    if position_at is not None:
-        movement_model.get_position_at.side_effect = position_at
+
+    def get_lonlatalt_km(t):
+        lon, lat, alt_m = get_lonlatalt_m(t)
+        return lon, lat, alt_m / 1000.0
+
+    movement_model.orbital_object.get_lonlatalt.side_effect = get_lonlatalt_km
+
+    if position_at_m is not None:
+
+        def get_longitude_latitude_altitude(delta_t=0.0):
+            lon, lat, alt_m = position_at_m(when + datetime.timedelta(seconds=delta_t))
+            return SpatialPosition(
+                longitude=lon,
+                latitude=lat,
+                altitude=alt_m,
+            )
+
+        movement_model.get_longitude_latitude_altitude.side_effect = (
+            get_longitude_latitude_altitude
+        )
 
     satellite = MagicMock()
     satellite.satellite_name = "BisectSat"
@@ -379,19 +402,19 @@ def _raise_missing_lonlatalt(_t):
     raise AttributeError("no lonlatalt")
 
 
-def test_bisection_estimator_falls_back_to_get_position_at():
+def test_bisection_estimator_falls_back_to_get_longitude_latitude_altitude():
     when = datetime.datetime(2024, 1, 1, 12, 0, 0)
     satellite = _make_bisection_satellite(
         when,
         _raise_missing_lonlatalt,
-        position_at=lambda _t: (0.0, 0.0, SATELLITE_ALTITUDE_M),
+        position_at_m=lambda _t: (0.0, 0.0, SATELLITE_ALTITUDE_M),
     )
 
     estimate = _run_bisection_estimator(satellite, max_time=300.0)
 
     assert estimate == 300.0
     assert satellite.movement_model.orbital_object.get_lonlatalt.called
-    assert satellite.movement_model.get_position_at.called
+    assert satellite.movement_model.get_longitude_latitude_altitude.called
 
 
 def _make_retained_capacity_scenario():
