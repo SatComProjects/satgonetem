@@ -228,13 +228,18 @@ class GoNetEmProjectBuilder:
             rate = link.get_capacity()
             burst, buffer = _tbf_qos(rate, delay)
             queue = f"limit: {self.netem_limit}, txqueuelen: {self.txqueuelen}"
+            loss = float(getattr(link, "loss", 0.0) or 0.0)
+            jitter = int(getattr(link, "jitter", 0) or 0)
+            # Keep the historical default YAML byte-identical: only emit loss
+            # when it is non-zero. jitter is always present.
+            loss_token = f" loss: {loss}," if loss else ""
             peer1 = _yaml_scalar(f"{link.source.name}.{link.target.id}")
             peer2 = _yaml_scalar(f"{link.target.name}.{link.source.id}")
             result += (
                 f" - {{peer1: {peer1},"
                 f" peer2: {peer2},"
-                f" peer1qos: {{ rate: {rate}, buffer: {buffer}, jitter: 0, delay: {delay}, burst: {burst}, {queue}}},"
-                f" peer2qos: {{ rate: {rate}, buffer: {buffer}, jitter: 0, delay: {delay}, burst: {burst}, {queue}}}}}"
+                f" peer1qos: {{ rate: {rate}, buffer: {buffer},{loss_token} jitter: {jitter}, delay: {delay}, burst: {burst}, {queue}}},"
+                f" peer2qos: {{ rate: {rate}, buffer: {buffer},{loss_token} jitter: {jitter}, delay: {delay}, burst: {burst}, {queue}}}}}"
                 f" #Latency of {delay}ms \n"
             )
         return result

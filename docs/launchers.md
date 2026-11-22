@@ -19,6 +19,7 @@ Hardware-in-the-loop links are **not** a launcher: they are handled by
 | `gonetem_launcher.py` | Thin composition of the GoNetEm mixins |
 | `gonetem_client.py` | gRPC connection, link requests, capacities |
 | `gonetem_lifecycle.py` | Start/wire/link/close orchestration |
+| `gonetem_control.py` | Optional node/interface/snapshot control RPCs |
 | `gonetem_cleanup.py` | Docker cleanup and force-close |
 | `gonetem_project.py` | `network.yml` and `.gnet` generation |
 | `hil_manager.py` | `HILManager` (standalone, not a `NetworkLauncher`) |
@@ -199,9 +200,11 @@ The helper `_tbf_qos(rate_kbps, delay_ms)` computes a burst of
 GoNetEm's `limit = buffer × rate × delay / 8` equals `burst + BDP`. Zero rate
 returns `(0, 0.0)`.
 
-The generated YAML uses `jitter: 0` and no loss. `_link_request()`, used for
-dynamic updates, forwards `link.loss` (default 0) and `link.jitter` (default 0)
-when present.
+The generated YAML uses `jitter: <link.jitter>` (default `0`) and emits a
+`loss:` token only when `link.loss` is non-zero, so projects generated with
+default links are byte-identical to earlier releases. `_link_request()`, used
+for dynamic updates, forwards `link.loss` (default 0.0) and `link.jitter`
+(default 0) to both peer QoS mappings.
 
 ### Dynamic link operations
 
@@ -217,6 +220,53 @@ when present.
 response count does not match the request. `bulk_link_operations()` in
 `LinkOpsMixin` uses `update_links()` when available and falls back to
 per-link `update_link()` on servers that report `UNIMPLEMENTED`.
+
+### Backend controls
+
+`GoNetEmControlMixin` (composed into `GoNetEmLauncher`) exposes optional
+control RPCs for an open project. Every method requires a live `_client` and
+`_request`; otherwise it raises `RuntimeError` with an actionable message.
+Unary responses are checked for `Status.code == ERROR` and raise
+`RuntimeError(status.error)`. Transport `grpc.RpcError`s are wrapped in
+`RuntimeError` with the original exception as `__cause__`.
+
+| Method | RPC | Notes |
+|---|---|---|
+| `restart_node(node_name)` | `NodeRestart` | Container restarts without addresses, routes, or qdiscs |
+| `set_interface_state(node_name, if_index, up)` | `NodeSetIfState` | `if_index` is the `ethN` suffix |
+| `stop_all_nodes()` | `TopologyStopAll` | Stops every node container |
+| `start_all_nodes()` | `TopologyStartAll` | Containers start unconfigured |
+| `capture_interface(node_name, if_index, timeout_s=30.0)` | `NodeCapture` | Returns pcap bytes; deadline always applied |
+| `get_backend_status()` | `ProjectGetStatus` | Returns a JSON-serializable dictionary |
+| `save_project(timeout_s=60.0)` | `ProjectSave` | Returns archive bytes; rejects an empty stream |
+
+`CaptureSrvMsg` has no `DATA` code. The launcher treats `STDOUT` as capture
+payload and concatenates those chunks, ignores `STDERR` (diagnostics) and `OK`
+(completion marker), and raises on `ERROR`. This framing assumption matches
+the current server implementation. `ProjectSave` only accepts `DATA` messages
+and ignores `NODE_COUNT`/`NODE_SAVE` progress messages.
+
+`BackendControlMixin` wraps these methods for `TopologyManager` (the
+integrator composes it into the manager). It is deliberately optional:
+`NetworkLauncher` does not declare new abstract methods, and each operation is
+feature-detected on `self.launcher`, raising `RuntimeError` when the active
+backend lacks it.
+
+| Manager method | Behaviour |
+|---|---|
+| `restart_node(node_name)` | Calls the backend, then clears `node.container` / `node.container_pid`; the next reconfigure must reapply addressing, routing, and qdiscs |
+| `set_interface_state(node_name, interface, up)` | Accepts an `Interface`, emulator name, or `ethN`; maps it to the integer `ifIndex` by requiring `eth<digits>` (loopbacks and malformed names are rejected) |
+| `set_link_state(link, up)` | Sets `link.admin_up`, calls `NodeSetIfState` on both endpoints, and updates both peer interface flags; a later topology tick cannot overwrite the admin state because `update_interfaces_state()` uses `is_active and admin_up` |
+| `stop_all_nodes()` | Stops a running simulation loop first (without holding the simulation lock across `stop()`), then calls `TopologyStopAll` |
+| `start_all_nodes()` | Calls `TopologyStartAll`; callers must reapply addresses, routes, and qdiscs |
+| `capture_interface(node_name, interface, output=None, timeout_s=30.0)` | Returns bytes and atomically writes `output` when provided |
+| `get_backend_status()` | Validates that the backend result is a JSON-serializable dict |
+| `save_snapshot(path)` | Calls `ProjectSave` and atomically replaces `path` via a temporary file |
+| `set_link_impairment(link, loss_percent=None, jitter_ms=None)` | Updates `link.loss` / `link.jitter`, marks `to_update`, calls `update_links([link])`, and inspects both the batch status and the per-link result; on any failure it raises and leaves `to_update=True` for retry |
+
+`set_link_impairment()` intentionally does not use `update_link()`, which logs
+and swallows backend errors. If the backend has no `update_links` capability,
+the method raises rather than silently accepting an unverified impairment.
 
 ### Teardown
 

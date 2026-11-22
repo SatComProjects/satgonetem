@@ -22,13 +22,14 @@ in `services.link_backend` lets tests replace the launcher.
 class TopologyManager(
     TopologySyncMixin,          # initial sync and per-tick topology update
     LinkOpsMixin,               # add/update/delete links + stats
-    InterfaceMgrMixin,          # IPv4 plan, interfaces, address push
+    InterfaceMgrMixin,          # IPv4 + optional IPv6 plans, interfaces, address push
     NetworkLifecycleMixin,      # start/stop/force-stop, fast_start
     SimulationLoopMixin,        # background tick loop, lock, time jumps
     RoutingManagerMixin,        # daemon selection and lifecycle
     TrafficTestingMixin,        # ping/iperf3/hping3 fan-out
     DiagnosticsMixin,           # monitoring, tcpdump, terminals, summaries
     ControllerMixin,            # out-of-band management plane
+    BackendControlMixin,        # raw restart/pause/capture/status/snapshot controls
 ):
     ...
 ```
@@ -78,10 +79,13 @@ topology = TopologyManager.from_file("topology_files/iridium_topology.json")
 | `ground_object_link_capacity` | `100000` | kbps |
 | `link_netem_limit` | `1000` | packets; `0` = server default |
 | `link_txqueuelen` | `1000` | packets; `0` = server default |
+| `link_loss_percent` | `0.0` | percent, 0–100; default for new links |
+| `link_jitter_ms` | `0` | milliseconds; default for new links |
 
 `link_netem_limit` and `link_txqueuelen` are validated in `__post_init__`:
 they must be integers (not bools) in `[0, 1_000_000]`. The upper bound matches
-the GoNetEm server's `maxQueuePackets`.
+the GoNetEm server's `maxQueuePackets`. `link_loss_percent` must be a finite
+number in `[0, 100]`; `link_jitter_ms` must be a non-negative integer.
 
 ### Data-plane addressing
 
@@ -94,7 +98,25 @@ the GoNetEm server's `maxQueuePackets`.
 | `satellite_prefix_len` | `27` |
 | `user_terminal_prefix_len` | `20` |
 
-See [IPv4 Addressing](addressing.md) for allocation rules.
+Optional dual-stack IPv6 fields (disabled by default):
+
+| Field | Default |
+|---|---|
+| `ipv6_enabled` | `False` |
+| `ipv6_ground_station_pool` | `fd00:1::/40` |
+| `ipv6_satellite_pool` | `fd00:2::/40` |
+| `ipv6_user_terminal_pool` | `fd00:3::/40` |
+| `ipv6_ground_station_prefix_len` | `64` |
+| `ipv6_satellite_prefix_len` | `64` |
+| `ipv6_user_terminal_prefix_len` | `64` |
+
+Prefix lengths must be integers in `[0, 128]`; `ipv6_enabled` must be a real
+bool. When enabled, the pools are validated by constructing `Ipv6AddressPlan`
+in `__post_init__` (address family, private/ULA space, fit, and overlap).
+`NetworkConfig.from_mapping(values, base=None)` merges overrides over a base
+config and rejects unknown field names; use it for scenario configs.
+
+See [IPv4 and IPv6 Addressing](addressing.md) for allocation rules.
 
 ### Controller plane
 
@@ -164,10 +186,11 @@ or `TypeError` is raised.
    1. `_sync_satellites()` — build `Satellite` wrappers in parallel.
    2. `_sync_ground_stations()` — build `GroundStation` wrappers.
    3. `_sync_links()` — build `Link` wrappers and mark stale links.
-   4. `_initialize_address_plan()` — build the topology-wide IPv4 plan and
-      assign loopbacks.
+   4. `_initialize_address_plan()` — build the topology-wide IPv4 plan and,
+      when `ipv6_enabled`, the IPv6 plan; assign loopbacks for both families
+      and pre-allocate every link slot in both plans before mutating nodes.
    5. `_assign_interfaces_to_nodes()` — create the two interfaces for each
-      link and assign `/31` addresses.
+      link and assign IPv4 `/31` (and IPv6 `/127` when enabled) addresses.
    6. `_add_loopback_interfaces_to_list()` — add loopbacks to `interfaces`.
    7. `check_for_updates()` — seed the change-detection hashes.
 
@@ -185,6 +208,7 @@ later.
 | `interfaces` | Flat list of every `Interface`, including loopbacks |
 | `interface_version` | Incremented whenever interfaces are added or removed |
 | `address_plan` | `Ipv4AddressPlan` or `None` before init |
+| `address_plan_v6` | `Ipv6AddressPlan` when IPv6 is enabled, otherwise `None` |
 | `status` | Simulation manager is live/usable |
 | `gonetem_is_on` | Backend project is open |
 | `routing_initiated` | `init_routing()` succeeded and routes are installed |
@@ -325,8 +349,10 @@ launcher, project handles (`project_id`, `client`, `request`), routing daemon,
 and status flags without the close-retry retention. It is meant for recovery.
 
 `set_ip_addresses(satellites=True, ground_stations=True)` requires
-`address_plan` to exist. It calls `set_ipv4s_for_all_nodes()` and returns the
-elapsed seconds.
+`address_plan` to exist. It calls `set_ipv4s_for_all_nodes()`; when
+`ipv6_enabled` it also calls `set_ipv6s_for_all_nodes()` with the same flags.
+Both families are attempted even if one raises, and failures are re-raised
+after both attempts. It returns the elapsed seconds.
 
 `fast_start(routing_method="static")` is `start_gonetem()` +
 `set_ip_addresses()` + `init_routing()` in one call. It does **not** start the
@@ -355,15 +381,20 @@ Internals worth knowing:
 Owns the topology-wide address plan and interface construction.
 
 - `_initialize_address_plan()` registers nodes in sorted-ID order, assigns
-  loopbacks, and pre-allocates link slots in canonical order.
+  loopbacks, and pre-allocates link slots in canonical order. When
+  `ipv6_enabled` is set, both plans are validated and fully pre-allocated
+  before any node is mutated, so a failure leaves node state untouched.
 - `_build_interfaces_from_link()` is idempotent: a link that already has
-  peer interfaces returns immediately.
+  peer interfaces returns immediately. Both address families are allocated
+  before interfaces are created; a failure rolls back newly allocated slots
+  and any partially created interfaces.
 - Interface types are inferred from node-name prefixes: `Gnd`–`Gnd` is
   `GroundObjectLink`, one `Gnd` is `GroundStationLink`, otherwise
   `InterSatelliteLink`.
 - `set_ipv4s_for_all_nodes()` applies addresses per node in parallel, collects
   all failures, and raises one `RuntimeError` naming the failed nodes after
-  every node has been attempted.
+  every node has been attempted. `set_ipv6s_for_all_nodes()` follows the same
+  contract for IPv6.
 - `get_all_links_usage()` returns `[]` unless GoNetEm is running; otherwise it
   delegates to `monitor_links()`.
 
@@ -393,7 +424,8 @@ Add/delete run concurrently in a thread pool. After the backend operations,
 `_perform_local_link_operations()` updates the local interface objects:
 removals run sequentially (shared list mutation), add/update flag work runs in
 parallel, and removed links are cleaned from `self.links`, `self.interfaces`,
-and the address plan.
+and both address plans (`address_plan` and, when present, `address_plan_v6`),
+so later links can reuse the released slots.
 
 Local helpers such as `_execute_link_add/update/delete` dispatch to
 `HILManager` when the link is HIL-managed and otherwise call the launcher.
@@ -528,6 +560,31 @@ ignored; malformed JSON is logged and skipped.
 `open_bash_terminal()` requires `project_id` (set by the launcher) and one of
 `gnome-terminal`, `xterm`, `konsole`, `alacritty`, or `kitty`. The bridge
 module is documented in [Utilities](utils.md#interactive-terminal-bridge).
+
+## BackendControlMixin
+
+`BackendControlMixin` exposes optional GoNetEm control RPCs without extending
+the `NetworkLauncher` abstract contract. Each method feature-detects the
+launcher and raises a clear `RuntimeError` when the backend lacks the
+capability.
+
+| Method | Purpose |
+|---|---|
+| `restart_node(node_name)` | Restart one container and clear its stale handle |
+| `stop_all_nodes()` / `start_all_nodes()` | Stop the loop, then bulk node lifecycle |
+| `set_interface_state(node_name, interface, up)` | Bring one interface up/down |
+| `set_link_state(link, up)` | Both endpoints plus `link.admin_up` |
+| `capture_interface(node_name, interface, output=None)` | Capture bytes, atomically write optional output |
+| `get_backend_status()` | JSON-serializable node/interface status |
+| `save_snapshot(path)` | Atomic project archive snapshot |
+| `set_link_impairment(link, loss_percent=None, jitter_ms=None)` | Update loss/jitter and push a verified link update |
+
+`restart_node`, `stop_all_nodes`, and `start_all_nodes` are raw controls. A
+restarted or restarted-after-stop container returns without addresses, routes,
+or qdiscs; reapply them before resuming traffic. `capture_interface` assumes
+GoNetEm frames pcap bytes in `CaptureSrvMsg.STDOUT` and always applies a
+deadline. See [Network Launchers](launchers.md#backend-controls) for the
+backend-level contract and unverified server semantics.
 
 ## ControllerMixin
 

@@ -55,7 +55,7 @@ MANIFEST
 .slim/deepwork/
 sd/
 projects/
-main.py
+/main.py
 BUG_REPORT.md
 
 # Paper things

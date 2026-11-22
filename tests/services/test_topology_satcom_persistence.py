@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 from sat_com_model.models import PointOfPresence, UserTerminal
 
-from satgonetem.services.topology_satcom import TopologyManager
+from satgonetem.services.topology_satcom import NetworkConfig, TopologyManager
 from satgonetem.utils.project_builder import (
     add_custom_ground_station,
     create_and_load_simulation,
@@ -224,3 +224,36 @@ def test_runtime_state_roundtrip_preserves_user_terminals_and_pops(
     for ground_object in (user_terminals[0], pops[0]):
         assert ground_object.ground_object_domain is not None
         assert ground_object.ground_object_domain.type == "ground_station"
+
+
+def test_runtime_state_roundtrip_keeps_ipv6_enabled(tmp_path, runtime_topology):
+    """A topology saved with IPv6 enabled reloads with the plan rebuilt."""
+    path = tmp_path / "runtime_ipv6.json"
+
+    runtime_topology.to_file(str(path), network_config=NetworkConfig(ipv6_enabled=True))
+    reloaded = TopologyManager.from_file(str(path))
+
+    assert reloaded.ipv6_enabled is True
+    assert reloaded.address_plan_v6 is not None
+    for node in list(reloaded.get_satellites()) + list(reloaded.get_ground_stations()):
+        assert node.address_block_v6 is not None
+        assert node.address_block_v6.prefixlen == 64
+        assert node.loopback.ipv6_prefix_len == 128
+
+
+def test_runtime_state_from_file_override_enables_ipv6(tmp_path, runtime_topology):
+    """An explicit config wins wholesale on the runtime-state load path."""
+    path = tmp_path / "runtime_ipv6_disabled.json"
+
+    runtime_topology.to_file(
+        str(path), network_config=NetworkConfig(ipv6_enabled=False)
+    )
+    reloaded = TopologyManager.from_file(
+        str(path), network_config=NetworkConfig(ipv6_enabled=True)
+    )
+
+    assert reloaded.ipv6_enabled is True
+    assert reloaded.address_plan_v6 is not None
+    assert [sat.address_block_v6 is not None for sat in reloaded.get_satellites()] == [
+        True
+    ]

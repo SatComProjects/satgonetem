@@ -1,7 +1,8 @@
 # 0011 — Optional dual-stack IPv6 addressing
 
-- Status: Accepted
+- Status: Implemented
 - Date: 2026-11-22
+- Implementation date: 2026-11-22
 - Depends on: 0006, 0007
 - Supersedes: none
 
@@ -76,3 +77,14 @@ uv run --frozen --extra dev pytest -q tests/addressing/test_topology_addressing.
 uv run --frozen --extra dev ruff check satgonetem tests
 uv run --frozen --extra dev mypy
 ```
+
+### Verification record — 2026-11-22
+
+- `pytest -q tests/addressing tests/models tests/services/test_interface_mgr.py
+  tests/services/test_network_config.py
+  tests/services/test_topology_satcom_persistence.py` — 435 passed.
+- `pytest -q` — 1957 passed, 1 skipped, 9 deselected (Python 3.14).
+- `ruff check satgonetem tests` — pass; `mypy` — pass (116 files).
+- Unverified: `ip -6 addr replace` inside the Docker images and the
+  Python 3.10–3.13 runtime matrix (supplementary tests passed under 3.10;
+  CI runs the full matrix).

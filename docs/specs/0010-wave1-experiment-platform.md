@@ -1,7 +1,8 @@
 # 0010 — Wave 1 experiment platform and link controls
 
-- Status: Accepted
+- Status: Implemented
 - Date: 2026-11-22
+- Implementation date: 2026-11-22
 - Depends on: 0004, 0005, 0006, 0007, 0009
 - Supersedes: none
 
@@ -91,3 +92,16 @@ uv run --frozen --extra dev mypy
 uv build --out-dir dist
 python -c "import satgonetem; import satgonetem.cli.main"
 ```
+
+### Verification record — 2026-11-22
+
+- `pytest -q` — 1957 passed, 1 skipped, 9 deselected (Python 3.14).
+- `pytest -q tests/cli tests/experiment tests/telemetry tests/test_connectivity.py tests/test_packaging.py` — 37 passed under Python 3.10.
+- `ruff check satgonetem tests` — pass; `ruff format --check` — pass.
+- `mypy` — pass (116 files).
+- `uv lock --check` — pass.
+- `uv build` — wheel contains the CLI, `py.typed`, and bundled topology data;
+  a wheel installed in a clean venv resolves `test_topology.json`.
+- Unverified: live Docker/GoNetEm RPC effects (restart, capture framing,
+  interface state, snapshot) and live IPv6 address assignment inside the
+  container images.

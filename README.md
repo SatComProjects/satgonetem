@@ -13,6 +13,7 @@ SatGoNetem bridges orbital mechanics and Linux network emulation. It computes sa
 - [`docs/project_creation.md`](docs/project_creation.md) — End-to-end constellation design guide
 - [`docs/custom_project.md`](docs/custom_project.md) — TLE-only and mixed custom projects outside Walker shell generation
 - [`docs/topology_manager_api.md`](docs/topology_manager_api.md) — `TopologyManager` public API reference
+- [`docs/experiment.md`](docs/experiment.md) — CLI, YAML scenarios, run artifacts, telemetry, and connectivity matrix
 
 **Core internals**
 
@@ -53,6 +54,9 @@ SatGoNetem bridges orbital mechanics and Linux network emulation. It computes sa
 - Pluggable routing backends: static (Dijkstra), OSPF (Bird2), IS-IS SR (patched Bird2), SR-MPLS
 - Built-in traffic tools: ping, iperf3, hping3 with structured result parsing
 - Batch traffic scheduling via `FlowScheduler`
+- Declarative YAML experiments with run artifacts, telemetry, and reports
+- Optional dual-stack IPv6 addressing alongside the deterministic IPv4 plan
+- Per-link loss and jitter fields
 - Python API for constellation design and programmatic control
 - Supports Python 3.10 through 3.14
 
@@ -214,6 +218,20 @@ topology.stop()          # stop simulation loop
 topology.stop_gonetem()  # remove containers, veth pairs, and qdiscs
 ```
 
+### Using the CLI
+
+```bash
+satgonetem doctor
+satgonetem summary topology_files/test_topology.json
+satgonetem run scenario.yaml --out runs/001
+satgonetem report runs/001
+```
+
+`run` accepts a declarative YAML scenario with traffic, timed impairments, and
+network overrides. Use `--dry-run` to validate without loading the topology and
+`--offline` to sample without starting containers. See
+[`docs/experiment.md`](docs/experiment.md) for the schema and limitations.
+
 ## Architecture
 
 ```
@@ -225,7 +243,8 @@ satgonetem/
   routing/       RoutingDaemon (abstract) + static, OSPF, ISIS-SR, SR-MPLS
   traffic/       Ping, iperf2, iperf3, hping3 traffic tools and FlowScheduler
   link_budget/   Antenna, transmitter, receiver, propagation, MODCOD, geometry
-  addressing/    Deterministic IPv4 pools, node blocks, loopbacks, and /31 links
+  addressing/    Deterministic IPv4 pools and optional IPv6/ULA pools,
+                 node blocks, loopbacks, and point-to-point links
   services/      TopologyManager (central orchestrator)
                  mixins: topology sync, link ops, routing mgr, interface mgr,
                          network lifecycle, traffic testing, simulation loop,
@@ -240,7 +259,7 @@ satgonetem/
 
 **QoS stack per link:** `netem` (propagation delay) + `TBF` (rate limiting), configured by GoNetEm. The Python client batches per-tick changes through `LinkUpdateMany` (512 links per call) and falls back to per-link updates on older servers.
 
-## IPv4 Addressing
+## IPv4 and IPv6 Addressing
 
 Addresses come from a deterministic, private `10.0.0.0/8` plan by default:
 
@@ -251,6 +270,13 @@ Addresses come from a deterministic, private `10.0.0.0/8` plan by default:
 | Satellites | `10.128.0.0/9` | `/27` | 262,144 |
 
 Each node has a stable `/32` loopback at `<block>.0.1`; traffic and static routes target that loopback, not an interface. Every point-to-point link gets a `/31` starting at `<block>.0.4`. Ground stations and user terminals own their links; satellite links are owned by the lower satellite ID. See [`docs/addressing.md`](docs/addressing.md) for the link-ownership rules and configuration.
+
+Optional dual-stack IPv6 addressing is available with
+`NetworkConfig(ipv6_enabled=True)`. It uses private ULA pools
+(`fd00:1::/40` ground stations, `fd00:2::/40` satellites, `fd00:3::/40` user
+terminals), `/64` node blocks, `/128` loopbacks, and `/127` point-to-point
+links. IPv6 addressing is independent of the IPv4 plan; IPv6 routing and
+traffic are not implemented yet.
 
 The pools are configurable via `NetworkConfig`:
 
@@ -321,6 +347,8 @@ Key parameters on `TopologyManager`:
 | `ground_object_link_capacity` | 100000 | Ground-object link capacity in kbps |
 | `link_netem_limit` | 1000 | netem queue limit of emulated links, in packets (`0` = server default) |
 | `link_txqueuelen` | 1000 | Transmit queue length of emulated link interfaces, in packets (`0` = server default) |
+| `link_loss_percent` | 0.0 | Default packet loss percentage for new links |
+| `link_jitter_ms` | 0 | Default netem jitter for new links, in milliseconds |
 | `satellite_image` | `"jariassuarez/sgnt:satellite"` | Docker image used for satellite containers |
 | `network_launcher` | `"GONETEM"` | Recorded launcher backend identifier; GoNetEm is the implemented backend |
 | `gonetem_server` | `"localhost:10110"` | GoNetEm gRPC server address |
@@ -331,6 +359,10 @@ Key parameters on `TopologyManager`:
 | `ground_station_prefix_len` | 20 | Prefix length of each ground-station block |
 | `satellite_prefix_len` | 27 | Prefix length of each satellite block |
 | `user_terminal_prefix_len` | 20 | Prefix length of each user-terminal block |
+| `ipv6_enabled` | `False` | Enable optional dual-stack IPv6 addressing |
+| `ipv6_ground_station_pool` | `fd00:1::/40` | IPv6 ULA pool for ground-station `/64` blocks |
+| `ipv6_satellite_pool` | `fd00:2::/40` | IPv6 ULA pool for satellite `/64` blocks |
+| `ipv6_user_terminal_pool` | `fd00:3::/40` | IPv6 ULA pool for user-terminal `/64` blocks |
 
 See [`docs/services.md`](docs/services.md#networkconfig) for every `NetworkConfig` field.
 

@@ -217,3 +217,70 @@ class TestNodeSetIpv4ToContainers:
 
         with pytest.raises(ValueError, match="unsupported IPv4 prefix"):
             node.set_ipv4_to_containers(interface=None, set_lo=False)
+
+
+class TestNodeSetIpv6ToContainers:
+    """Tests for the batched IPv6 container address commands."""
+
+    @staticmethod
+    def _batch_command(node: Node) -> str:
+        return node.execute_command.call_args.kwargs["command"][-1]
+
+    @staticmethod
+    def _decode_batch(command: str) -> str:
+        encoded = command.split("echo ", 1)[1].split(" |", 1)[0]
+        return base64.b64decode(encoded).decode()
+
+    def test_uses_ipv6_batch_and_replace(self):
+        node = Node("Sat0")
+        node.execute_command = MagicMock()
+        iface = Interface(name="Sat0.1")
+        iface.set_ipv6("fd00:2::4", 127)
+        node.interfaces.append(iface)
+        node.loopback.set_ipv6("fd00:2::1", 128)
+
+        node.set_ipv6_to_containers(interface=None, set_lo=True)
+
+        command = self._batch_command(node)
+        assert "ip -6 -force -batch -" in command
+        payload = self._decode_batch(command)
+        assert "addr replace fd00:2::4/127 dev eth1" in payload
+        assert "addr replace fd00:2::1/128 dev lo" in payload
+        assert "addr add" not in payload
+
+    def test_explicit_interface_and_set_lo_false(self):
+        node = Node("Sat0")
+        node.execute_command = MagicMock()
+        iface = Interface(name="Sat0.1")
+        iface.set_ipv6("fd00:2::4", 127)
+        node.interfaces.append(iface)
+        node.loopback.set_ipv6("fd00:2::1", 128)
+
+        node.set_ipv6_to_containers(interface=iface, set_lo=False)
+
+        payload = self._decode_batch(self._batch_command(node))
+        assert payload == "addr replace fd00:2::4/127 dev eth1"
+
+    def test_skips_interfaces_without_an_ipv6_address(self):
+        node = Node("Sat0")
+        node.execute_command = MagicMock()
+        iface = Interface(name="Sat0.1")
+        iface.set_ipv4("10.128.0.4", 31)
+        node.interfaces.append(iface)
+
+        assert node.set_ipv6_to_containers(interface=None, set_lo=True) is None
+        node.execute_command.assert_not_called()
+
+    def test_rejects_unsupported_prefix(self):
+        node = Node("Sat0")
+        node.execute_command = MagicMock()
+        iface = Interface(name="Sat0.1")
+        iface.ipv6 = "fd00:2::4"
+        iface.ipv6_prefix_len = 64
+        node.interfaces.append(iface)
+
+        with pytest.raises(ValueError, match="unsupported IPv6 prefix"):
+            node.set_ipv6_to_containers(interface=None, set_lo=False)
+
+    def test_has_an_ipv6_block_attribute(self):
+        assert Node("Sat0").address_block_v6 is None

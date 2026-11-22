@@ -4,8 +4,10 @@ from types import SimpleNamespace
 
 import pytest
 
+from satgonetem.models.ground_station import GroundStation
 from satgonetem.models.link import Link
 from satgonetem.models.node import Node
+from satgonetem.models.satellite import Satellite
 from satgonetem.services.mixins.topology_sync import TopologySyncMixin
 
 
@@ -178,3 +180,92 @@ def test_main_sync_vectorizes_real_link_distance_and_returns_changes():
     assert changes["links_to_update"] == [link]
     assert changes["links_to_add"] == []
     assert changes["links_to_remove"] == []
+
+
+class _LinkFactorySync(TopologySyncMixin):
+    """Real Link factory harness with the manager attributes it reads."""
+
+    def __init__(self, satellites, ground_stations, **attributes):
+        self.satellites = satellites
+        self.ground_stations = ground_stations
+        self.links = {}
+        self.use_budget = False
+        self.link_budget_config = None
+        self.isl_link_capacity = 1000
+        self.gnd_link_capacity = 500
+        self.ground_object_link_capacity = 500
+        for name, value in attributes.items():
+            setattr(self, name, value)
+
+
+def _satcom_link(link_type="GroundStationLink"):
+    return SimpleNamespace(
+        source=SimpleNamespace(topology_uniq_id=0),
+        destination=SimpleNamespace(topology_uniq_id=1),
+        type=link_type,
+        disabled=False,
+    )
+
+
+def test_create_link_from_satcom_uses_loss_and_jitter_defaults():
+    sat = Satellite("Sat0")
+    gnd = GroundStation("Gnd0")
+    sat.position = {"latitude": 0.0, "longitude": 0.0, "altitude": 550.0}
+    gnd.position = {"latitude": 0.0, "longitude": 0.0, "altitude": 0.0}
+    sync = _LinkFactorySync({0: sat}, {1: gnd})
+
+    link = sync._create_link_from_satcom_link(_satcom_link())
+
+    assert link.loss == 0.0
+    assert link.jitter == 0
+
+
+def test_create_link_from_satcom_forwards_configured_impairments():
+    sat = Satellite("Sat0")
+    gnd = GroundStation("Gnd0")
+    sat.position = {"latitude": 0.0, "longitude": 0.0, "altitude": 550.0}
+    gnd.position = {"latitude": 0.0, "longitude": 0.0, "altitude": 0.0}
+    sync = _LinkFactorySync(
+        {0: sat},
+        {1: gnd},
+        link_loss_percent=2.5,
+        link_jitter_ms=15,
+    )
+
+    link = sync._create_link_from_satcom_link(_satcom_link())
+
+    assert link.loss == 2.5
+    assert link.jitter == 15
+
+
+def test_create_test_link_forwards_configured_impairments():
+    sat = Satellite("Sat0")
+    gnd = GroundStation("Gnd0")
+    sat.position = {"latitude": 0.0, "longitude": 0.0, "altitude": 550.0}
+    gnd.position = {"latitude": 0.0, "longitude": 0.0, "altitude": 0.0}
+    sync = _LinkFactorySync(
+        {0: sat},
+        {1: gnd},
+        link_loss_percent=1.25,
+        link_jitter_ms=7,
+    )
+
+    link = sync._create_test_link(sat, gnd)
+
+    assert link is not None
+    assert link.loss == 1.25
+    assert link.jitter == 7
+
+
+def test_create_test_link_uses_zero_impairments_when_unconfigured():
+    sat = Satellite("Sat0")
+    gnd = GroundStation("Gnd0")
+    sat.position = {"latitude": 0.0, "longitude": 0.0, "altitude": 550.0}
+    gnd.position = {"latitude": 0.0, "longitude": 0.0, "altitude": 0.0}
+    sync = _LinkFactorySync({0: sat}, {1: gnd})
+
+    link = sync._create_test_link(sat, gnd)
+
+    assert link is not None
+    assert link.loss == 0.0
+    assert link.jitter == 0

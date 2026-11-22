@@ -16,12 +16,24 @@ from satgonetem.launchers.gonetem_project import _yaml_scalar
 class FakeLink:
     """Minimal link object accepting the fields used by the project builder."""
 
-    def __init__(self, source, target, *, delay=10, capacity=1000, is_active=True):
+    def __init__(
+        self,
+        source,
+        target,
+        *,
+        delay=10,
+        capacity=1000,
+        is_active=True,
+        loss=0.0,
+        jitter=0,
+    ):
         self.source = source
         self.target = target
         self.delay = delay
         self.capacity = capacity
         self.is_active = is_active
+        self.loss = loss
+        self.jitter = jitter
 
     def get_capacity(self):
         return self.capacity
@@ -178,6 +190,37 @@ def test_topology_quotes_injected_names_in_controller_links():
     assert len(document["links"]) == 1
     assert document["links"][0]["peer1"] == "Controller.7"
     assert document["links"][0]["peer2"] == "SatA\ninjected: true.50007"
+
+
+def test_write_links_emits_nonzero_loss_and_jitter_for_both_peers():
+    sat = _satellite(0, "Sat0")
+    gnd = _ground_station(2, "Gnd0")
+    link = FakeLink(sat, gnd, capacity=2000, loss=2.5, jitter=15)
+    topology_manager = _topology({sat.id: sat}, {gnd.id: gnd}, {"sat-gnd": link})
+    launcher = _launcher(topology_manager)
+
+    generated = launcher.get_gonetem_topology()
+    document = yaml.safe_load(generated)
+
+    for qos in (document["links"][0]["peer1qos"], document["links"][0]["peer2qos"]):
+        assert qos["loss"] == pytest.approx(2.5)
+        assert qos["jitter"] == 15
+
+
+def test_write_links_default_yaml_keeps_no_loss_and_zero_jitter():
+    sat = _satellite(0, "Sat0")
+    gnd = _ground_station(2, "Gnd0")
+    link = FakeLink(sat, gnd, capacity=2000)
+    topology_manager = _topology({sat.id: sat}, {gnd.id: gnd}, {"sat-gnd": link})
+    launcher = _launcher(topology_manager)
+
+    generated = launcher.get_gonetem_topology()
+
+    assert "loss:" not in generated
+    assert generated.count("jitter: 0") == 2
+    document = yaml.safe_load(generated)
+    assert document["links"][0]["peer1qos"]["jitter"] == 0
+    assert document["links"][0]["peer2qos"]["jitter"] == 0
 
 
 @pytest.mark.parametrize(

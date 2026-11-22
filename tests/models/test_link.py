@@ -266,6 +266,78 @@ class TestLinkUpdateInterfacesState:
         isl_link.update_interfaces_state()
 
 
+class TestLinkImpairments:
+    """Loss/jitter/admin state are part of the link contract."""
+
+    @staticmethod
+    def _link(**kwargs):
+        node_a = Node("Sat0")
+        node_b = Node("Sat1")
+        return Link(
+            source=node_a,
+            target=node_b,
+            distance=300_000.0,
+            type="InterSatelliteLink",
+            default_capacity_kbps=1000,
+            **kwargs,
+        )
+
+    def test_loss_jitter_and_admin_up_defaults(self):
+        link = self._link()
+
+        assert link.loss == 0.0
+        assert link.jitter == 0
+        assert link.admin_up is True
+
+    def test_loss_and_jitter_are_stored(self):
+        link = self._link(loss=2.5, jitter=15)
+
+        assert link.loss == 2.5
+        assert link.jitter == 15
+
+    @pytest.mark.parametrize(
+        "loss",
+        [-0.1, 100.1, float("nan"), float("inf"), float("-inf"), 10**400, True, "1"],
+    )
+    def test_invalid_loss_is_rejected(self, loss):
+        with pytest.raises((TypeError, ValueError), match="loss"):
+            self._link(loss=loss)
+
+    @pytest.mark.parametrize("jitter", [-1, 1.5, True, "1"])
+    def test_invalid_jitter_is_rejected(self, jitter):
+        with pytest.raises((TypeError, ValueError), match="jitter"):
+            self._link(jitter=jitter)
+
+    def test_admin_up_must_be_bool(self):
+        with pytest.raises(TypeError, match="admin_up"):
+            self._link(admin_up="yes")
+
+    def test_admin_down_keeps_interfaces_inactive_across_ticks(self, isl_link):
+        iface = Interface(name="Sat0.1")
+        iface.is_active = True
+        isl_link.peer_interfaces = [iface]
+        isl_link.is_active = True
+        isl_link.admin_up = False
+
+        isl_link.update_interfaces_state()
+        assert iface.is_active is False
+
+        # A later topology tick must not resurrect an administratively down link.
+        isl_link.update_interfaces_state()
+        assert iface.is_active is False
+
+    def test_admin_up_restores_interfaces_when_link_is_active(self, isl_link):
+        iface = Interface(name="Sat0.1")
+        iface.is_active = False
+        isl_link.peer_interfaces = [iface]
+        isl_link.is_active = True
+        isl_link.admin_up = True
+
+        isl_link.update_interfaces_state()
+
+        assert iface.is_active is True
+
+
 class TestLinkElevationAngle:
     """Regression tests for the elevation angle passed to the link budget."""
 
