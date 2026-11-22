@@ -16,8 +16,10 @@ import yaml
 
 __all__ = [
     "EventSpec",
+    "GroundStationSpec",
     "Scenario",
     "ScenarioError",
+    "ShellSpec",
     "TrafficSpec",
 ]
 
@@ -215,21 +217,175 @@ class EventSpec:
 
 
 @dataclass(frozen=True)
+class ShellSpec:
+    """A Walker shell included in a scenario-generated topology."""
+
+    identifier: str
+    planes: int = 6
+    satellites_per_plane: int = 11
+    inclination_deg: float = 86.4
+    revs_per_day: float = 14.35
+    pattern: str = "star"
+    phase_difference: bool = True
+
+    def __post_init__(self) -> None:
+        if self.planes < 1 or self.satellites_per_plane < 1:
+            raise ScenarioError("shell planes and satellites_per_plane must be >= 1")
+        if not 0.0 <= self.inclination_deg <= 180.0:
+            raise ScenarioError("shell inclination_deg must be in [0, 180]")
+        if self.revs_per_day <= 0:
+            raise ScenarioError("shell revs_per_day must be > 0")
+        if self.pattern not in {"star", "delta"}:
+            raise ScenarioError("shell pattern must be star or delta")
+
+    @classmethod
+    def from_mapping(cls, data: Mapping[str, Any], label: str = "shell") -> ShellSpec:
+        _reject_unknown(
+            data,
+            {
+                "identifier",
+                "planes",
+                "satellites_per_plane",
+                "inclination_deg",
+                "revs_per_day",
+                "pattern",
+                "phase_difference",
+            },
+            label,
+        )
+        pattern = str(data.get("pattern", "star")).lower()
+        if pattern not in {"star", "delta"}:
+            raise ScenarioError(
+                f"{label}.pattern must be 'star' or 'delta', got {pattern!r}"
+            )
+        return cls(
+            identifier=_non_empty_str(data.get("identifier"), f"{label}.identifier"),
+            planes=_positive_int(data.get("planes", 6), f"{label}.planes"),
+            satellites_per_plane=_positive_int(
+                data.get("satellites_per_plane", 11),
+                f"{label}.satellites_per_plane",
+            ),
+            inclination_deg=_number(
+                data.get("inclination_deg", 86.4), f"{label}.inclination_deg"
+            ),
+            revs_per_day=_number(
+                data.get("revs_per_day", 14.35),
+                f"{label}.revs_per_day",
+                minimum=0.001,
+            ),
+            pattern=pattern,
+            phase_difference=_boolean(
+                data.get("phase_difference"),
+                f"{label}.phase_difference",
+                default=True,
+            ),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "identifier": self.identifier,
+            "planes": self.planes,
+            "satellites_per_plane": self.satellites_per_plane,
+            "inclination_deg": self.inclination_deg,
+            "revs_per_day": self.revs_per_day,
+            "pattern": self.pattern,
+            "phase_difference": self.phase_difference,
+        }
+
+
+@dataclass(frozen=True)
+class GroundStationSpec:
+    """A fixed ground station included in a scenario-generated topology."""
+
+    name: str
+    latitude: float
+    longitude: float
+    elevation_km: float = 0.0
+
+    def __post_init__(self) -> None:
+        if not -90.0 <= self.latitude <= 90.0:
+            raise ScenarioError("ground-station latitude must be in [-90, 90]")
+        if not -180.0 <= self.longitude <= 180.0:
+            raise ScenarioError("ground-station longitude must be in [-180, 180]")
+
+    @classmethod
+    def from_mapping(
+        cls, data: Mapping[str, Any], label: str = "ground_station"
+    ) -> GroundStationSpec:
+        _reject_unknown(
+            data,
+            {"name", "latitude", "longitude", "elevation_km"},
+            label,
+        )
+        latitude = _number(data.get("latitude"), f"{label}.latitude")
+        longitude = _number(data.get("longitude"), f"{label}.longitude")
+        if not -90.0 <= latitude <= 90.0:
+            raise ScenarioError(f"{label}.latitude must be in [-90, 90]")
+        if not -180.0 <= longitude <= 180.0:
+            raise ScenarioError(f"{label}.longitude must be in [-180, 180]")
+        return cls(
+            name=_non_empty_str(data.get("name"), f"{label}.name"),
+            latitude=latitude,
+            longitude=longitude,
+            elevation_km=_number(
+                data.get("elevation_km", 0.0), f"{label}.elevation_km"
+            ),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "latitude": self.latitude,
+            "longitude": self.longitude,
+            "elevation_km": self.elevation_km,
+        }
+
+
+@dataclass(frozen=True)
 class Scenario:
     """A validated experiment manifest."""
 
     name: str
-    topology: str
+    topology: str | None
     duration_s: float
     tick_s: int = 1
     routing: str | None = None
     network: Mapping[str, Any] = field(default_factory=dict)
+    shells: tuple[ShellSpec, ...] = ()
+    ground_stations: tuple[GroundStationSpec, ...] = ()
     traffic: tuple[TrafficSpec, ...] = ()
     events: tuple[EventSpec, ...] = ()
     metrics_interval_s: float = 1.0
     connectivity: bool = False
     output_dir: str | None = None
     base_dir: str = "."
+
+    def __post_init__(self) -> None:
+        if self.topology is not None and (self.shells or self.ground_stations):
+            raise ScenarioError(
+                "Use either topology or shells/ground_stations, not both"
+            )
+        if self.topology is None and not self.shells:
+            raise ScenarioError("Scenario requires topology or at least one shell")
+        if self.ground_stations and not self.shells:
+            raise ScenarioError("ground_stations require at least one shell")
+        if self.duration_s <= 0:
+            raise ScenarioError("duration_s must be > 0")
+        if self.tick_s < 1:
+            raise ScenarioError("tick_s must be >= 1")
+        if self.traffic and self.tick_s != 1:
+            raise ScenarioError(
+                "tick_s must be 1 when traffic is present; "
+                "flow durations are wall-clock seconds in this pass"
+            )
+        if self.metrics_interval_s <= 0:
+            raise ScenarioError("metrics_interval_s must be > 0")
+        shell_ids = [shell.identifier for shell in self.shells]
+        if len(shell_ids) != len(set(shell_ids)):
+            raise ScenarioError("shell identifiers must be unique")
+        station_names = [station.name for station in self.ground_stations]
+        if len(station_names) != len(set(station_names)):
+            raise ScenarioError("ground-station names must be unique")
 
     @classmethod
     def from_file(cls, path: str | Path) -> Scenario:
@@ -253,6 +409,8 @@ class Scenario:
                 "tick_s",
                 "routing",
                 "network",
+                "shells",
+                "ground_stations",
                 "traffic",
                 "events",
                 "metrics_interval_s",
@@ -271,10 +429,16 @@ class Scenario:
                 raise ScenarioError(f"scenario.network is invalid: {exc}") from exc
         traffic_data = data.get("traffic", [])
         events_data = data.get("events", [])
-        if not isinstance(traffic_data, list):
-            raise ScenarioError("scenario.traffic must be a list")
-        if not isinstance(events_data, list):
-            raise ScenarioError("scenario.events must be a list")
+        shells_data = data.get("shells", [])
+        ground_data = data.get("ground_stations", [])
+        for label, value in (
+            ("scenario.traffic", traffic_data),
+            ("scenario.events", events_data),
+            ("scenario.shells", shells_data),
+            ("scenario.ground_stations", ground_data),
+        ):
+            if not isinstance(value, list):
+                raise ScenarioError(f"{label} must be a list")
 
         tick_s = _positive_int(data.get("tick_s", 1), "scenario.tick_s")
         traffic = tuple(
@@ -286,10 +450,23 @@ class Scenario:
                 "scenario.tick_s must be 1 when traffic is present; "
                 "flow durations are wall-clock seconds in this pass"
             )
+        shells = tuple(
+            ShellSpec.from_mapping(item, f"scenario.shells[{index}]")
+            for index, item in enumerate(shells_data)
+        )
+        ground_stations = tuple(
+            GroundStationSpec.from_mapping(item, f"scenario.ground_stations[{index}]")
+            for index, item in enumerate(ground_data)
+        )
+        topology = (
+            _non_empty_str(data["topology"], "scenario.topology")
+            if data.get("topology") is not None
+            else None
+        )
 
         return cls(
             name=_non_empty_str(data.get("name"), "scenario.name"),
-            topology=_non_empty_str(data.get("topology"), "scenario.topology"),
+            topology=topology,
             duration_s=_number(
                 data.get("duration_s"), "scenario.duration_s", minimum=0.001
             ),
@@ -300,6 +477,8 @@ class Scenario:
                 else None
             ),
             network=dict(network),
+            shells=shells,
+            ground_stations=ground_stations,
             traffic=traffic,
             events=tuple(
                 EventSpec.from_mapping(item, f"scenario.events[{index}]")
@@ -330,6 +509,8 @@ class Scenario:
             "tick_s": self.tick_s,
             "routing": self.routing,
             "network": dict(self.network),
+            "shells": [item.to_dict() for item in self.shells],
+            "ground_stations": [item.to_dict() for item in self.ground_stations],
             "traffic": [item.to_dict() for item in self.traffic],
             "events": [item.to_dict() for item in self.events],
             "metrics_interval_s": self.metrics_interval_s,

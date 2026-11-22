@@ -20,13 +20,16 @@ core emulation model. IPv6 addressing is specified separately in 0011.
 ## Requirements
 
 1. **CLI.** Add a `satgonetem` console script with `version`, `doctor`,
-   `summary`, `run`, and `report` subcommands. `doctor` must check the Python
-   version, Docker availability, the GoNetEm endpoint, and the presence of a
-   sample topology. `summary` must work offline against a topology file.
-2. **Scenario manifest.** Support a YAML file describing a topology, tick
-   interval, routing method, optional network overrides, traffic specs,
-   event specs, metrics interval, and output directory. Validation errors must
-   name the offending field.
+   `summary`, `create`, `edit`, `run`, and `report` subcommands. `doctor` must
+   check the Python version, Docker availability, the GoNetEm endpoint, and the
+   presence of a sample topology. `summary` must work offline against a
+   topology file. `create` and `edit` open an interactive scenario shell that
+   can add Walker shells, ground stations, traffic, events, and network
+   overrides; they must not shell out to a text editor.
+2. **Scenario manifest.** Support a YAML file describing a topology *or*
+   Walker shells plus ground stations, a tick interval, routing method,
+   optional network overrides, traffic specs, event specs, metrics interval,
+   and output directory. Validation errors must name the offending field.
 3. **Run directory.** Every run writes `manifest.yaml`, `metrics.jsonl`, and
    `summary.json`; generate a human-readable `report.md` from those artifacts.
 4. **Telemetry.** Provide a `MetricsCollector` that samples topology counts,
@@ -54,6 +57,8 @@ core emulation model. IPv6 addressing is specified separately in 0011.
 
 - `satgonetem --help`, `satgonetem version`, and `satgonetem summary
   topology_files/test_topology.json` succeed without Docker.
+- `satgonetem create demo` creates a valid shell-based scenario and opens the
+  interactive shell; `satgonetem edit demo.yaml` loads and saves it.
 - `satgonetem doctor` exits 0 when prerequisites are present and non-zero with
   actionable messages when they are not.
 - A scenario run creates the four artifacts and a report that includes the
@@ -95,7 +100,9 @@ python -c "import satgonetem; import satgonetem.cli.main"
 
 ### Verification record — 2026-11-22
 
-- `pytest -q` — 1958 passed, 1 skipped, 9 deselected (Python 3.14).
+- `pytest -q` — 1976 passed, 1 skipped, 9 deselected (Python 3.14).
+- Interactive `create`/`edit` tests cover shell/ground-station/traffic/event
+  entry, save validation, overwrite protection, and the default filename.
 - `pytest -q tests/cli tests/experiment tests/telemetry tests/test_connectivity.py tests/test_packaging.py` — 37 passed under Python 3.10.
 - `ruff check satgonetem tests` — pass; `ruff format --check` — pass.
 - `mypy` — pass (116 files).

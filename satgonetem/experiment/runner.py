@@ -6,7 +6,7 @@ import json
 import logging
 import time
 from collections.abc import Callable
-from dataclasses import dataclass, field, fields
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -50,7 +50,7 @@ class ExperimentRunner:
         self,
         scenario: Scenario,
         *,
-        topology_factory: Callable[[Path, Any], Any] | None = None,
+        topology_factory: Callable[[Path | None, Any], Any] | None = None,
         collector_factory: Callable[[Any], Any] | None = None,
         now: Callable[[], datetime] | None = None,
     ) -> None:
@@ -86,33 +86,39 @@ class ExperimentRunner:
         return sorted(expanded, key=lambda value: value.at_s)
 
     def _resolve_topology(self) -> Path:
-        raw = Path(self.scenario.topology)
+        topology = self.scenario.topology
+        if topology is None:
+            raise RuntimeError("scenario has no topology path")
+        raw = Path(topology)
         candidates = [raw]
         if not raw.is_absolute():
             candidates.insert(0, Path(self.scenario.base_dir) / raw)
         for candidate in candidates:
             if candidate.is_file():
                 return candidate
-        return Path(resolve_topology(self.scenario.topology))
+        return Path(resolve_topology(topology))
 
     def _load_topology(self) -> Any:
         from satgonetem.services.topology_satcom import NetworkConfig, TopologyManager
+
+        if self.scenario.topology is None:
+            config = (
+                NetworkConfig.from_mapping(dict(self.scenario.network))
+                if self.scenario.network
+                else None
+            )
+            if self._topology_factory is not None:
+                return self._topology_factory(None, config)
+            from satgonetem.experiment.builder import build_scenario_topology
+
+            return build_scenario_topology(self.scenario, config)
 
         topology_path = self._resolve_topology()
         config = None
         if self.scenario.network:
             payload = json.loads(topology_path.read_text(encoding="utf-8"))
             base = NetworkConfig(**payload.get("network_config", {}))
-            from_mapping = getattr(NetworkConfig, "from_mapping", None)
-            if callable(from_mapping):
-                config = from_mapping(self.scenario.network, base=base)
-            else:
-                values = {
-                    field.name: getattr(base, field.name)
-                    for field in fields(NetworkConfig)
-                }
-                values.update(self.scenario.network)
-                config = NetworkConfig(**values)
+            config = NetworkConfig.from_mapping(self.scenario.network, base=base)
         if self._topology_factory is not None:
             return self._topology_factory(topology_path, config)
         return TopologyManager.from_file(str(topology_path), network_config=config)

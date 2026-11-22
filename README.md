@@ -54,6 +54,8 @@ SatGoNetem bridges orbital mechanics and Linux network emulation. It computes sa
 - Pluggable routing backends: static (Dijkstra), OSPF (Bird2), IS-IS SR (patched Bird2), SR-MPLS
 - Built-in traffic tools: ping, iperf3, hping3 with structured result parsing
 - Batch traffic scheduling via `FlowScheduler`
+- Interactive scenario shell (`satgonetem create` / `edit`) for Walker shells,
+  ground stations, traffic, and events
 - Declarative YAML experiments with run artifacts, telemetry, and reports
 - Optional dual-stack IPv6 addressing alongside the deterministic IPv4 plan
 - Per-link loss and jitter fields
@@ -223,13 +225,17 @@ topology.stop_gonetem()  # remove containers, veth pairs, and qdiscs
 ```bash
 satgonetem doctor
 satgonetem summary topology_files/test_topology.json
+satgonetem create my-scenario
+satgonetem edit my-scenario.yaml
 satgonetem run scenario.yaml --out runs/001
 satgonetem report runs/001
 ```
 
-`run` accepts a declarative YAML scenario with traffic, timed impairments, and
-network overrides. Use `--dry-run` to validate without loading the topology and
-`--offline` to sample without starting containers. See
+`create` starts an interactive scenario shell (Walker shells, ground stations,
+traffic, events, network overrides) and writes a scenario file; `edit` opens an
+existing scenario in the same shell. `run` accepts the resulting YAML scenario.
+Use `--dry-run` to validate without loading the topology and `--offline` to
+sample without starting containers. See
 [`docs/experiment.md`](docs/experiment.md) for the schema and limitations.
 
 ## Architecture

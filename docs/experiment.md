@@ -11,6 +11,8 @@ operation still goes through public `TopologyManager` methods.
 satgonetem version
 satgonetem doctor
 satgonetem summary topology_files/test_topology.json
+satgonetem create my-scenario
+satgonetem edit my-scenario.yaml
 satgonetem run scenario.yaml --out runs/001
 satgonetem report runs/001
 ```
@@ -18,6 +20,10 @@ satgonetem report runs/001
 - `doctor` checks Python, Docker, the GoNetEm endpoint, and bundled topology
   data. It exits non-zero when a prerequisite fails.
 - `summary` loads a topology without Docker and prints counts and link types.
+- `create` starts an interactive scenario shell and creates a file with a
+  default `LEO` shell (6 planes × 11 satellites). `edit` opens an existing
+  scenario in the same shell (defaults to the last created/edited scenario,
+  then `scenario.yaml`). Neither command uses an external editor.
 - `run` starts a scenario. `--dry-run` validates and writes the manifest only.
   `--offline` loads and samples the topology without starting containers.
 - `report` summarizes a run directory and prints the report path.
@@ -25,7 +31,36 @@ satgonetem report runs/001
 The console script is declared in `pyproject.toml` and installed as
 `satgonetem`.
 
+## Interactive scenario shell
+
+`satgonetem create <filename>` writes a valid starting scenario and opens a
+line-oriented shell. `satgonetem edit [filename]` loads an existing scenario
+(default: the last created/edited scenario, then `scenario.yaml`). Commands
+include:
+
+```text
+help
+show
+shell list
+gnd add Berlin 52.52 13.405
+gnd add Paris 48.8566 2.3522
+traffic add Gnd66 Gnd67 ping start=5 count=10
+event add action=impairment at=30 src=Sat0 dst=Sat1 loss=1.5 jitter=2
+network set ipv6_enabled true
+connectivity on
+save
+quit
+```
+
+`save` validates and writes the scenario. Generated satellites are named
+`Sat0`, `Sat1`, ...; ground stations follow them, so with the default 66
+satellites the first station is `Gnd66`. Use `gnd list` / `shell list` to see
+the planned names. A scenario uses either `topology` or `shells` +
+`ground_stations`, never both.
+
 ## Scenario format
+
+A scenario can reference a bundled/custom topology:
 
 ```yaml
 name: leo-handover-study
@@ -50,6 +85,28 @@ events:
 metrics_interval_s: 1
 connectivity: true                # run an all-pairs ping matrix at the end
 ```
+
+Or it can generate a Walker constellation directly:
+
+```yaml
+name: generated-leo
+duration_s: 600
+tick_s: 1
+routing: static
+shells:
+  - identifier: LEO
+    planes: 6
+    satellites_per_plane: 11
+    inclination_deg: 86.4
+    revs_per_day: 14.35
+    pattern: star
+ground_stations:
+  - {name: Berlin, latitude: 52.52, longitude: 13.405, elevation_km: 0.034}
+  - {name: Paris, latitude: 48.8566, longitude: 2.3522, elevation_km: 0.035}
+```
+
+Generated stations are emulated as `Gnd<N>`, `Gnd<N+1>`, ... where `N` is the
+total satellite count.
 
 Validation rejects unknown fields, unsupported traffic tools, malformed event
 actions, and traffic with `tick_s != 1`. A link-down event is expanded into a

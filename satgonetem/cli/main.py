@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import socket
 import sys
 from collections.abc import Iterable
@@ -159,6 +160,73 @@ def _cmd_run(args: argparse.Namespace) -> int:
     return 0
 
 
+def _last_scenario_path() -> Path:
+    state = Path(
+        os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local" / "state"))
+    )
+    return state / "satgonetem" / "last_scenario"
+
+
+def _remember_scenario(path: Path) -> None:
+    marker = _last_scenario_path()
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text(str(path.resolve()) + "\n", encoding="utf-8")
+
+
+def _recall_scenario() -> Path | None:
+    marker = _last_scenario_path()
+    if not marker.is_file():
+        return None
+    value = marker.read_text(encoding="utf-8").strip()
+    if not value:
+        return None
+    path = Path(value)
+    return path if path.is_file() else None
+
+
+def _cmd_create(args: argparse.Namespace) -> int:
+    from satgonetem.experiment.interactive import (
+        ScenarioDraft,
+        ScenarioShell,
+        default_scenario,
+    )
+
+    target = Path(args.filename)
+    if target.suffix.lower() not in {".yaml", ".yml"}:
+        target = target.with_suffix(".yaml")
+    if target.exists() and not args.force:
+        raise ValueError(
+            f"{target} already exists; use 'satgonetem edit {target}' or --force"
+        )
+
+    scenario = default_scenario(args.name or target.stem)
+    scenario.write_manifest(target)
+    _remember_scenario(target)
+    draft = ScenarioDraft.from_scenario(scenario)
+    draft.base_dir = str(target.resolve().parent)
+    print(
+        f"Created {target} with a default LEO shell. "
+        "Add ground stations, traffic, or more shells, then 'save'."
+    )
+    ScenarioShell(draft, target).run()
+    return 0
+
+
+def _cmd_edit(args: argparse.Namespace) -> int:
+    from satgonetem.experiment import Scenario
+    from satgonetem.experiment.interactive import ScenarioDraft, ScenarioShell
+
+    if args.filename:
+        path = Path(args.filename)
+    else:
+        path = _recall_scenario() or Path("scenario.yaml")
+    scenario = Scenario.from_file(path)
+    _remember_scenario(path)
+    draft = ScenarioDraft.from_scenario(scenario)
+    ScenarioShell(draft, path).run()
+    return 0
+
+
 def _cmd_report(args: argparse.Namespace) -> int:
     from satgonetem.telemetry import build_report
 
@@ -198,6 +266,23 @@ def build_parser() -> argparse.ArgumentParser:
     summary.add_argument("--json", action="store_true")
     summary.set_defaults(func=_cmd_summary)
 
+    create = subparsers.add_parser(
+        "create", help="create a scenario in an interactive shell"
+    )
+    create.add_argument("filename")
+    create.add_argument("--name", default=None)
+    create.add_argument("--force", action="store_true")
+    create.set_defaults(func=_cmd_create)
+
+    edit = subparsers.add_parser("edit", help="edit a scenario in an interactive shell")
+    edit.add_argument(
+        "filename",
+        nargs="?",
+        default=None,
+        help="scenario file (defaults to the last created/edited scenario)",
+    )
+    edit.set_defaults(func=_cmd_edit)
+
     run = subparsers.add_parser("run", help="run a scenario manifest")
     run.add_argument("scenario")
     run.add_argument("--out", default=None)
@@ -228,7 +313,7 @@ def main(argv: list[str] | None = None) -> int:
         return int(args.func(args))
     except KeyboardInterrupt:
         return 130
-    except (FileNotFoundError, ValueError, RuntimeError) as exc:
+    except (FileNotFoundError, ValueError, RuntimeError, OSError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
 
