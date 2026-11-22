@@ -114,6 +114,8 @@ def apply_runtime_state(manager: Any, runtime_state: dict[str, Any]) -> None:
         runtime_state: Dictionary produced by :func:`serialize_runtime_state`.
     """
     for sat_data in runtime_state.get("satellites", []):
+        if not isinstance(sat_data, dict):
+            continue
         if "addressable" not in sat_data:
             continue
         wrapper = _find_satellite_wrapper(manager, sat_data.get("name", ""))
@@ -121,7 +123,10 @@ def apply_runtime_state(manager: Any, runtime_state: dict[str, Any]) -> None:
             wrapper.set_addressable(bool(sat_data["addressable"]))
 
     persisted: dict[tuple[str, str, str], dict[str, Any]] = {}
-    for category, records in (runtime_state.get("links", {}) or {}).items():
+    link_state = runtime_state.get("links", {}) or {}
+    if not isinstance(link_state, dict):
+        link_state = {}
+    for category, records in link_state.items():
         if not isinstance(records, list):
             continue
         for record in records:
@@ -427,49 +432,61 @@ def restore_runtime_state(
     )
 
     for sat_data in runtime_state.get("satellites", []):
-        create_custom_satellite(
-            sat_data,
-            sim_manager,
-            object_id=sat_data.get("object_id", 0),
-            domain=sat_data.get("domain", "public"),
-        )
+        try:
+            create_custom_satellite(
+                sat_data,
+                sim_manager,
+                object_id=sat_data.get("object_id", 0),
+                domain=sat_data.get("domain", "public"),
+            )
+        except Exception as exc:  # noqa: BLE001 - one bad node must not abort
+            logging.warning("Failed to restore satellite %s: %s", sat_data, exc)
 
     for gs_data in runtime_state.get("ground_stations", []):
-        gs = create_custom_ground_station(
-            name=gs_data["label"],
-            latitude=gs_data["latitude"],
-            longitude=gs_data["longitude"],
-            elevation_km=gs_data.get("altitude", 0) / 1000.0,
-            object_id=gs_data.get("object_id", 0),
-            domain=gs_data.get("domain", "public"),
-        )
-        add_custom_ground_station(gs, sim_manager)
+        try:
+            gs = create_custom_ground_station(
+                name=gs_data["label"],
+                latitude=gs_data["latitude"],
+                longitude=gs_data["longitude"],
+                elevation_km=gs_data.get("altitude", 0) / 1000.0,
+                object_id=gs_data.get("object_id", 0),
+                domain=gs_data.get("domain", "public"),
+            )
+            add_custom_ground_station(gs, sim_manager)
+        except Exception as exc:  # noqa: BLE001 - one bad node must not abort
+            logging.warning("Failed to restore ground station %s: %s", gs_data, exc)
 
     for ut_data in runtime_state.get("user_terminals", []):
-        user_terminal = UserTerminal()
-        user_terminal.label = ut_data["label"]
-        user_terminal.object_id = ut_data.get("object_id", 0)
-        user_terminal.domain = ut_data.get("domain", "public")
-        user_terminal.set_position(
-            latitude=ut_data["latitude"],
-            longitude=ut_data["longitude"],
-            altitude=ut_data.get("altitude", 0),
-        )
-        _attach_ground_object_domain(user_terminal, sim_manager)
-        sim_manager.add_user_terminals(user_terminal)
+        try:
+            user_terminal = UserTerminal()
+            user_terminal.label = ut_data["label"]
+            user_terminal.object_id = ut_data.get("object_id", 0)
+            user_terminal.domain = ut_data.get("domain", "public")
+            user_terminal.set_position(
+                latitude=ut_data["latitude"],
+                longitude=ut_data["longitude"],
+                altitude=ut_data.get("altitude", 0),
+            )
+            _attach_ground_object_domain(user_terminal, sim_manager)
+            sim_manager.add_user_terminals(user_terminal)
+        except Exception as exc:  # noqa: BLE001 - one bad node must not abort
+            logging.warning("Failed to restore user terminal %s: %s", ut_data, exc)
 
     for pop_data in runtime_state.get("points_of_presence", []):
-        point_of_presence = PointOfPresence()
-        point_of_presence.label = pop_data["label"]
-        point_of_presence.object_id = pop_data.get("object_id", 0)
-        point_of_presence.domain = pop_data.get("domain", "public")
-        point_of_presence.set_position(
-            latitude=pop_data["latitude"],
-            longitude=pop_data["longitude"],
-            altitude=pop_data.get("altitude", 0),
-        )
-        _attach_ground_object_domain(point_of_presence, sim_manager)
-        sim_manager.add_point_of_presence(point_of_presence)
+        try:
+            point_of_presence = PointOfPresence()
+            point_of_presence.label = pop_data["label"]
+            point_of_presence.object_id = pop_data.get("object_id", 0)
+            point_of_presence.domain = pop_data.get("domain", "public")
+            point_of_presence.set_position(
+                latitude=pop_data["latitude"],
+                longitude=pop_data["longitude"],
+                altitude=pop_data.get("altitude", 0),
+            )
+            _attach_ground_object_domain(point_of_presence, sim_manager)
+            sim_manager.add_point_of_presence(point_of_presence)
+        except Exception as exc:  # noqa: BLE001 - one bad node must not abort
+            logging.warning("Failed to restore point of presence %s: %s", pop_data, exc)
 
     from sat_com_model.models import InterSatelliteLinkDirection
 
