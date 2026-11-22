@@ -44,7 +44,8 @@ def make_flow(state="RUNNING", thread_alive=True):
     flow = MagicMock()
     flow.status.return_value = SimpleNamespace(name=state)
     thread = MagicMock()
-    thread.is_alive.return_value = thread_alive
+    # join() is assumed to stop the thread: alive before, stopped after.
+    thread.is_alive.side_effect = [True, False] if thread_alive else [False]
     flow._thread = thread
     return flow
 

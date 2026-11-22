@@ -100,7 +100,8 @@ def test_stop_gonetem_stops_flows_and_clears_tracking():
     flow = MagicMock()
     flow.status.return_value = SimpleNamespace(name="RUNNING")
     thread = MagicMock()
-    thread.is_alive.return_value = True
+    # The thread reports alive before join() and stopped afterwards.
+    thread.is_alive.side_effect = [True, False]
     flow._thread = thread
     topology._active_flows = [flow]
 
@@ -126,7 +127,7 @@ def test_stop_gonetem_continues_when_flow_stop_fails():
     assert topology.gonetem_status is False
 
 
-def test_stop_gonetem_resets_state_when_close_project_fails():
+def test_stop_gonetem_retains_launcher_when_close_project_fails():
     topology = DummyTopology()
     topology.gonetem_status = True
     topology.routing_initiated = True
@@ -136,13 +137,14 @@ def test_stop_gonetem_resets_state_when_close_project_fails():
         def close_project(self):
             raise RuntimeError("ProjectClose failed")
 
-    topology.launcher = FailingLauncher()
+    launcher = FailingLauncher()
+    topology.launcher = launcher
 
     with pytest.raises(RuntimeError, match="ProjectClose failed"):
         topology.stop_gonetem()
 
     assert topology.gonetem_status is False
-    assert topology.launcher is None
+    assert topology.launcher is launcher
     assert topology.routing_initiated is False
     assert topology.routing_method is None
 
