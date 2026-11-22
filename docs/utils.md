@@ -144,13 +144,16 @@ Otherwise the new station participates in the topology but has no GSL.
 `add_mesh_links()` follows four deterministic steps:
 
 1. Group satellites into orbital planes by RAAN. Within one RAAN cluster,
-   altitude gaps larger than `max_altitude_difference` start a new sub-plane.
+   different inclinations start new sub-planes, and an altitude sub-plane keeps
+   only satellites within an absolute `max_altitude_difference` of its first
+   member (no drift chaining).
 2. Connect each plane in mean-anomaly order: `1→2, 2→3, …, last→0`
    (`add_orbital=True`).
-3. Connect consecutive planes by matching satellites in mean-anomaly order;
-   the last plane does not wrap to the first (`add_adjacent=True`). Planes with
-   fewer than `min_plane_size` satellites are skipped, and candidate ISLs
-   longer than 4000 km are dropped.
+3. Connect consecutive planes by pairing each satellite with the closest
+   still-unmatched satellite in the next plane (shortest angular mean-anomaly
+   distance); the last plane does not wrap to the first (`add_adjacent=True`).
+   Planes with fewer than `min_plane_size` satellites are skipped, and
+   candidate ISLs longer than 4000 km are dropped.
 4. Connect every ground station to its closest satellite (`add_ground=True`).
 
 ```python
@@ -259,7 +262,9 @@ sat_com_connectivity. They are referenced by string in a ground object's
 Both strategies retain valid existing connections first, respect
 `maximum_connected_satellites`, and return a
 `ComputedGroundObjectConnectionsResult` with obsolete links and new
-connections.
+connections. Retained links are left in place: they are neither marked
+obsolete nor recreated, and only the remaining connection budget is filled
+with new connections.
 
 `LongestConnectionTimeStrategy` selects the furthest satellite that is still
 approaching, which minimises handovers. `WeightedConnection` uses fixed class

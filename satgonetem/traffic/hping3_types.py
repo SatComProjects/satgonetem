@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import math
 import re
+import shlex
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -143,7 +144,7 @@ class Hping3Config:
                 finite flow can never turn into an unbounded flood.
         """
         self._validate()
-        parts = ["hping3", dst_ip, f"-c {self.count}"]
+        parts = ["hping3", shlex.quote(dst_ip), f"-c {self.count}"]
 
         proto = self.proto.lower()
         if proto == "udp":
@@ -164,7 +165,7 @@ class Hping3Config:
             parts.extend(_TCP_FLAG_MAP[f] for f in self.flags if f in _TCP_FLAG_MAP)
 
         if self.rate_type == "interval" and self.interval:
-            parts.append(f"-i {self.interval}")
+            parts.append(f"-i {shlex.quote(self.interval)}")
         elif self.rate_type == "fast":
             parts.append("--fast")
         elif self.rate_type == "faster":
@@ -172,7 +173,7 @@ class Hping3Config:
 
         src = self.spoof_src or bind_ip
         if src:
-            parts.append(f"-a {src}")
+            parts.append(f"-a {shlex.quote(src)}")
 
         # hping3 writes its final statistics to stderr; keep them in stdout.
         return " ".join(parts) + " 2>&1"

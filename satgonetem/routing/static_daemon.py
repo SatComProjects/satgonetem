@@ -774,7 +774,8 @@ class StaticRoutingDaemon(RoutingDaemon):
             gateway = ""
             if next_hop is not None:
                 interface = src_ifaces.get(int(next_hop))
-                gateway = interface.peer.ipv4
+                if interface is not None and interface.peer is not None:
+                    gateway = interface.peer.ipv4
             signature.append((dst.id, loopback_ips[dst.id], gateway, next_hop))
         return signature
 
@@ -1099,6 +1100,8 @@ class StaticRoutingDaemon(RoutingDaemon):
 
         next_hop = path[1]
         interface = self._resolve_interface(gs_src, gs_src.id, next_hop, iface_map)
+        if interface.peer is None:
+            raise ValueError(f"Interface {interface.name} on {gs_src.name} has no peer")
 
         gs_src.ipv4_routing_table.append(
             RoutingEntry(
@@ -1126,6 +1129,10 @@ class StaticRoutingDaemon(RoutingDaemon):
 
         next_hop = path[1]
         interface = self._resolve_interface(sat_src, sat_src.id, next_hop, iface_map)
+        if interface.peer is None:
+            raise ValueError(
+                f"Interface {interface.name} on {sat_src.name} has no peer"
+            )
 
         sat_src.ipv4_routing_table.append(
             RoutingEntry(

@@ -20,6 +20,41 @@ from sat_com_trajectopy.angle_utils import get_elevation_angle
 from sgp4.api import jday
 
 
+def _retain_or_obsolete_existing_ground_links(
+    ground_object: GroundObject,
+    visible_satellites,
+    maximum_number_of_links: int,
+    result: ComputedGroundObjectConnectionsResult,
+) -> set[int]:
+    """Partition existing ground-to-space links into retained and obsolete.
+
+    An existing link is retained when its satellite is still visible and the
+    ground object's connection budget is not exhausted.  Retained link objects
+    are left untouched: marking them obsolete, or appending a replacement,
+    would tear down and recreate a stable link on every connectivity tick.
+
+    Returns:
+        Ids of the satellites whose existing links were retained.
+    """
+    visible_satellite_ids = {id(visible.satellite) for visible in visible_satellites}
+    retained_satellite_ids: set[int] = set()
+
+    for link in ground_object.links:
+        if not isinstance(link, GroundToSpaceLink):
+            continue
+        satellite_id = id(link.source)
+        if (
+            satellite_id in visible_satellite_ids
+            and satellite_id not in retained_satellite_ids
+            and len(retained_satellite_ids) < maximum_number_of_links
+        ):
+            retained_satellite_ids.add(satellite_id)
+        else:
+            result.obsolete_links.append(link)
+
+    return retained_satellite_ids
+
+
 @register_ground_to_space_connectivity_strategy
 class LongestConnectionTimeStrategy(GroundToSpaceConnectionStrategy):
     """
@@ -261,15 +296,6 @@ class LongestConnectionTimeStrategy(GroundToSpaceConnectionStrategy):
             ComputedGroundObjectConnectionsResult()
         )
 
-        # Remove all existing links, we will compute them all anyway
-        computed_ground_object_connections_result.obsolete_links.extend(
-            [
-                link
-                for link in ground_object.links
-                if isinstance(link, GroundToSpaceLink)
-            ]
-        )
-
         visible_satellites = get_visible_satellites(
             satellites=satellites, ground_object=ground_object
         )
@@ -279,46 +305,18 @@ class LongestConnectionTimeStrategy(GroundToSpaceConnectionStrategy):
 
         ############## First check: Keep existing connections if they are still valid ##############
 
-        # Track satellites appended as retained connections so the second pass
-        # does not append them a second time.
-        retained_satellite_ids = set()
+        retained_satellite_ids = _retain_or_obsolete_existing_ground_links(
+            ground_object=ground_object,
+            visible_satellites=visible_satellites,
+            maximum_number_of_links=maximum_number_of_links,
+            result=computed_ground_object_connections_result,
+        )
 
-        for visible_satellite in visible_satellites:
-            if (
-                visible_satellite.satellite
-                in [
-                    link.source
-                    for link in ground_object.links
-                    if isinstance(
-                        link, GroundToSpaceLink
-                    )  # This checks if satellite is already connected
-                ]
-                and len(
-                    computed_ground_object_connections_result.new_ground_object_connections
-                )
-                < maximum_number_of_links
-            ):  # This checks if the maximum number of links is not exceeded
-                new_link = GroundToSpaceConnection(
-                    ground_object=ground_object,
-                    satellite=visible_satellite.satellite,
-                    connection_info={
-                        "elevation_above_horizon": visible_satellite.elevation_above_horizon
-                    },
-                )
-
-                # Keep the connection if it already exists
-                computed_ground_object_connections_result.new_ground_object_connections.append(
-                    new_link
-                )
-                retained_satellite_ids.add(id(visible_satellite.satellite))
-
-        if (
-            len(computed_ground_object_connections_result.new_ground_object_connections)
-            >= maximum_number_of_links
-        ):
-            # If we already have enough connections, we can stop here
-
+        if len(retained_satellite_ids) >= maximum_number_of_links:
+            # If the retained links already fill the budget, stop here.
             return computed_ground_object_connections_result
+
+        remaining_capacity = maximum_number_of_links - len(retained_satellite_ids)
 
         list_of_satellites = []
 
@@ -346,7 +344,7 @@ class LongestConnectionTimeStrategy(GroundToSpaceConnectionStrategy):
                 len(
                     computed_ground_object_connections_result.new_ground_object_connections
                 )
-                >= maximum_number_of_links
+                >= remaining_capacity
             ):
                 # If we already have enough connections, we can stop here
                 break
@@ -395,59 +393,23 @@ class WeightedConnection(GroundToSpaceConnectionStrategy):
             ComputedGroundObjectConnectionsResult()
         )
 
-        # Remove all existing links, we will compute them all anyway
-        computed_ground_object_connections_result.obsolete_links.extend(
-            [
-                link
-                for link in ground_object.links
-                if isinstance(link, GroundToSpaceLink)
-            ]
-        )
-
         # There is a linear relationship between distance and elevation so lets sort by elevation
         visible_satellites.sort(key=lambda x: x.elevation_above_horizon, reverse=True)
 
         ############## First check: Keep existing connections if they are still valid ##############
 
-        # Track satellites appended as retained connections so the second pass
-        # does not append them a second time.
-        retained_satellite_ids = set()
+        retained_satellite_ids = _retain_or_obsolete_existing_ground_links(
+            ground_object=ground_object,
+            visible_satellites=visible_satellites,
+            maximum_number_of_links=maximum_number_of_links,
+            result=computed_ground_object_connections_result,
+        )
 
-        for visible_satellite in visible_satellites:
-            if (
-                visible_satellite.satellite
-                in [
-                    link.source
-                    for link in ground_object.links
-                    if isinstance(
-                        link, GroundToSpaceLink
-                    )  # This checks if satellite is already connected
-                ]
-                and len(
-                    computed_ground_object_connections_result.new_ground_object_connections
-                )
-                < maximum_number_of_links
-            ):  # This checks if the maximum number of links is not exceeded
-                new_link = GroundToSpaceConnection(
-                    ground_object=ground_object,
-                    satellite=visible_satellite.satellite,
-                    connection_info={
-                        "elevation_above_horizon": visible_satellite.elevation_above_horizon
-                    },
-                )
-
-                # Keep the connection if it already exists
-                computed_ground_object_connections_result.new_ground_object_connections.append(
-                    new_link
-                )
-                retained_satellite_ids.add(id(visible_satellite.satellite))
-
-        if (
-            len(computed_ground_object_connections_result.new_ground_object_connections)
-            >= maximum_number_of_links
-        ):
-            # If we already have enough connections, we can stop here
+        if len(retained_satellite_ids) >= maximum_number_of_links:
+            # If the retained links already fill the budget, stop here.
             return computed_ground_object_connections_result
+
+        remaining_capacity = maximum_number_of_links - len(retained_satellite_ids)
 
         # Create a list to store the weighted visible satellites
         weighted_visible_satellites = []
@@ -487,7 +449,7 @@ class WeightedConnection(GroundToSpaceConnectionStrategy):
                 len(
                     computed_ground_object_connections_result.new_ground_object_connections
                 )
-                >= maximum_number_of_links
+                >= remaining_capacity
             ):
                 break
 

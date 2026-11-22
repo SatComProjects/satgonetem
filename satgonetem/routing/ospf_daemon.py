@@ -75,9 +75,10 @@ def _build_ospf_config(node: Node) -> str:
         "        };",
     ]
     for iface in node.interfaces:
+        peer_name = iface.peer.name if iface.peer is not None else "unknown"
         lines += [
             f'        interface "{iface.get_iname()}" {{',
-            f"            # link to {iface.peer.name}",
+            f"            # link to {peer_name}",
             "            type pointopoint;",
             f"            hello {OSPF_HELLO_INTERVAL};",
             f"            dead count {OSPF_DEAD_COUNT};",

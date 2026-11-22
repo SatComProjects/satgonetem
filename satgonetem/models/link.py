@@ -110,29 +110,36 @@ class Link:
         return self.source, self.target
 
     def _compute_elevation_angle(self, sat: Node, gs: Node) -> float:
-        """Compute the elevation angle from the ground station to the satellite."""
-        try:
-            elevation = get_elevation_angle(
-                sat_coordinates=(
-                    sat.position["latitude"],
-                    sat.position["longitude"],
-                    sat.position["altitude"],
-                ),
-                gnd_coordinates=(
-                    gs.position["latitude"],
-                    gs.position["longitude"],
-                    gs.position["altitude"],
-                ),
+        """Compute the elevation angle from the ground station to the satellite.
+
+        Raises:
+            ValueError: If either node lacks latitude/longitude/altitude.
+                Inventing a fallback elevation would silently produce a
+                plausible but wrong link budget.
+        """
+        missing = [
+            f"{node.name}.{key}"
+            for node in (sat, gs)
+            for key in ("latitude", "longitude", "altitude")
+            if key not in node.position
+        ]
+        if missing:
+            raise ValueError(
+                f"Missing position data for link geometry: {', '.join(missing)}"
             )
-            return elevation
-        except (KeyError, TypeError, ValueError) as exc:
-            logger.warning(
-                "Failed to compute elevation angle for %s->%s: %s",
-                sat.name,
-                gs.name,
-                exc,
-            )
-            return 30.0  # fallback typical elevation
+
+        return get_elevation_angle(
+            sat_coordinates=(
+                sat.position["latitude"],
+                sat.position["longitude"],
+                sat.position["altitude"],
+            ),
+            gnd_coordinates=(
+                gs.position["latitude"],
+                gs.position["longitude"],
+                gs.position["altitude"],
+            ),
+        )
 
     def _compute_budget_capacity(self) -> None:
         """Compute capacity for a *GroundStationLink* using the link budget.
@@ -141,8 +148,9 @@ class Link:
         stored as peer1_capacity.  Uplink (GS -> SAT) is computed with a
         ShannonCapacityStrategy and stored as peer2_capacity.
 
-        If either node lacks an antenna the method falls back to the default
-        static capacity from get_link_capacity, setting both peers equally.
+        If either node lacks an antenna, or either position is incomplete, the
+        method falls back to the default static capacity, setting both peers
+        equally and logging the fallback.
         """
         sat, gs = self._identify_sat_and_gs()
 
@@ -156,9 +164,22 @@ class Link:
             self.peer2_capacity = self.default_capacity_kbps
             return
 
-        elevation = self._compute_elevation_angle(sat, gs)
-        gs_lat = float(gs.position.get("latitude", 0.0))
-        gs_lon = float(gs.position.get("longitude", 0.0))
+        try:
+            elevation = self._compute_elevation_angle(sat, gs)
+            gs_lat = float(gs.position["latitude"])
+            gs_lon = float(gs.position["longitude"])
+        except (KeyError, TypeError, ValueError) as exc:
+            logger.warning(
+                "Missing or invalid position for %s->%s (%s); "
+                "using default capacity %d kbps",
+                sat.name,
+                gs.name,
+                exc,
+                self.default_capacity_kbps,
+            )
+            self.peer1_capacity = self.default_capacity_kbps
+            self.peer2_capacity = self.default_capacity_kbps
+            return
         gs_diam = gs.antenna.diameter if gs.antenna else 2.0
 
         if self.link_budget_config is not None:
