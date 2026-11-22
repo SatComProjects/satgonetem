@@ -177,6 +177,12 @@ class StaticRoutingDaemon(RoutingDaemon):
             new_links: Newly added links (unused for static routing).
             max_workers: Maximum number of worker threads for parallel route
                 updates.
+
+        Raises:
+            ValueError: If a reachable destination's next hop has no interface
+                on the source node, or that interface has no peer. The
+                inconsistency is reported instead of silently installing an
+                on-link route the topology cannot use.
         """
         if not self.topology.status:
             logging.warning("Static routing update skipped: topology not yet active")
