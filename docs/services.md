@@ -407,12 +407,17 @@ types raise `AttributeError`.
 - `init_routing(routing_method="", max_workers=MAX_WORKERS)` tears down any
   existing daemon, instantiates the requested one (built-in or registered),
   calls `init()`, and stores it on `routing_daemon`. It returns elapsed
-  seconds or `-1.0` on failure. A failed init never leaves a half-initialized
-  daemon installed.
-- `delete_routing()` calls `remove()` and clears the daemon and flags; returns
-  `-1.0` if routing was not initialized.
+  seconds or `-1.0` on failure. Unknown methods and daemon construction or
+  initialization errors are reported as `-1.0` and never leave a
+  half-initialized daemon installed.
+- `delete_routing()` calls `remove()` and clears the daemon and flags even when
+  `remove()` raises; returns `-1.0` if routing was not initialized.
+- Both lifecycle methods hold the simulation lock, so they serialize with the
+  simulation loop tick and API-driven topology mutations.
 - `get_path_between_nodes(source, target)` runs `networkx.shortest_path()` on
-  `get_current_graph()` using the `weight` attribute. It is a diagnostic
+  `get_current_graph()` using the `weight` attribute. Endpoints must be
+  `GroundStation` or `Satellite` instances (subclasses included); nodes missing
+  from the graph or disconnected return an empty path. It is a diagnostic
   helper, not the active daemon's forwarding table.
 - `get_allowed_routing_methods()` returns the built-ins plus registered names.
 
