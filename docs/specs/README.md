@@ -20,6 +20,8 @@ recorded in [../adr/](../adr/).
 | [0009 — Fix Phase 1 characterization defects](0009-defect-fixes.md) | 1.1 | Implemented |
 | [0010 — Wave 1 experiment platform and link controls](0010-wave1-experiment-platform.md) | 8 | Implemented |
 | [0011 — Optional dual-stack IPv6 addressing](0011-ipv6-addressing.md) | 8 | Implemented |
+| [0012 — Live integration test tier](0012-live-integration-tier.md) | 9 | Implemented |
+| [0013 — Decompose the four largest classes](0013-god-class-decomposition.md) | 9 | Implemented |
 
 ## Rules
 

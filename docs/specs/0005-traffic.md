@@ -75,10 +75,13 @@ uv run --frozen --extra dev pytest -q --cov=satgonetem/traffic --cov-fail-under=
   86.85% with 256 tests. Full suite: 1194 passed, 76.98% coverage.
 - Split hping3 configuration/results into `hping3_types.py`; its flow module is
   now ~110 lines.
-- Remaining cohesion exception: `iperf3_results.py` is still ~590 lines
-  because metric properties and presentation are a single public result
-  object. A follow-up parser/presenter split is tracked; command, I/O, flow,
-  runner, port, and plot modules are separated.
+- Follow-up completed: `iperf3_results.py` is now a 255-line facade over
+  `iperf3_end_summary` (end-section value object), `iperf3_intervals`
+  (flattening and time-series aggregates), `iperf3_report` (stateless
+  summary/dict/repr presenters), `iperf3_plotting` (`Iperf3Plotter`), and
+  `iperf3_units` (unit constants). Public behavior, including
+  `to_json()["raw"]` identity, is pinned by characterization tests. Command,
+  I/O, flow, runner, port, and plot modules remain separated.
 
 ## Known behavior gaps intentionally preserved
 

@@ -96,3 +96,14 @@ uv run --frozen --extra dev pytest -q --cov=satgonetem/services --cov-fail-under
   accepts injected downlink/uplink `CapacityStrategy` objects.
 - Known behavior questions (ignored controller interface pattern in old code,
   failed-operation stats) remain separate behavior specs.
+
+## Follow-up (Spec 0013, 2026-11-22)
+
+The remaining `topology_satcom.py` cohesion exception is closed: the facade is
+now 635 lines. `NetworkConfig`/config copying moved to
+`services/network_config.py`; runtime-state and file persistence to
+`services/topology_persistence.py`; simulation loading/tick validation to
+`services/satcom_project.py`; SatCom/test link construction to
+`services/satcom_link_factory.py`; graph and change-hash views to
+`services/topology_graph.py`. Mixin delegates, public attributes, persistence
+payloads, and the `RoutingContext` surface are unchanged.

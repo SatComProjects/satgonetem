@@ -1,9 +1,10 @@
 """Iperf3 compatibility facade.
 
 The implementation lives in ``iperf3_ports``, ``iperf3_config``,
-``iperf3_results``, ``iperf3_io``, ``iperf3_flow``, ``iperf3_runner``, and
-``iperf3_plots``. Existing imports from
-``satgonetem.traffic.iperf3_utils`` keep working.
+``iperf3_results`` (with ``iperf3_end_summary``, ``iperf3_intervals``,
+``iperf3_report``, ``iperf3_plotting``, and ``iperf3_units``), ``iperf3_io``,
+``iperf3_flow``, ``iperf3_runner``, and ``iperf3_plots``. Existing imports
+from ``satgonetem.traffic.iperf3_utils`` keep working.
 """
 
 from satgonetem.traffic.iperf3_config import Iperf3Config

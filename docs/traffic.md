@@ -14,6 +14,13 @@ Flows implement the `traffic.flow.Flow` protocol and share a `ThreadedFlow`
 lifecycle. Importing `satgonetem.traffic` is lazy: pandas/matplotlib load only
 when iperf3 result/plot APIs are used.
 
+`Iperf3Results` is a facade over `iperf3_end_summary.py` (sender/receiver/bidir
+end-section semantics), `iperf3_intervals.py` (interval DataFrames and rate
+math), `iperf3_report.py` (summary/JSON/repr formatting),
+`iperf3_plotting.py` (metric plots), and `iperf3_units.py` (unit constants).
+The public properties, `to_json()` shape, and mutable `json_side`/`client_notes`
+attributes are unchanged.
+
 All three are also exposed on `TopologyManager` as convenience methods. Each method accepts a single node or a list of nodes for both `source` and `destination`, starts a flow for every (source, destination) pair, and always returns a list of flow objects.
 
 ```python
