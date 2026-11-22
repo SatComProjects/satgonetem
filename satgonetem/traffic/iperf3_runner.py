@@ -119,7 +119,9 @@ def run_iperf3_flow(
         packet loss, out-of-order) are only reported on the receiving end;
         the client JSON is used when the server output cannot be read. For
         TCP, the client-side JSON is preferred, with the server as fallback.
-        Text iperf3 prints around its JSON object (e.g. warnings) is skipped.
+        Bidirectional runs always prefer the client JSON because it contains
+        both direction streams. Text iperf3 prints around its JSON object
+        (e.g. warnings) is skipped.
 
     Raises:
         ValueError: If the retrieved JSON is empty or unparseable.
@@ -148,7 +150,14 @@ def run_iperf3_flow(
         time.sleep(0.3)
 
         raw: str | None
-        if run_config.protocol.upper() == "UDP":
+        if run_config.bidir:
+            # The client JSON contains both direction streams; the server
+            # prints before exchanging results, so its reverse summary is
+            # empty (same rule as Iperf3Flow._json_side).
+            raw = _read_iperf3_json(source, client_json)
+            if raw is None:
+                raw = _read_iperf3_json(destination, server_json)
+        elif run_config.protocol.upper() == "UDP":
             raw = _read_iperf3_json(destination, server_json)
             if raw is None:
                 raw = _read_iperf3_json(source, client_json)

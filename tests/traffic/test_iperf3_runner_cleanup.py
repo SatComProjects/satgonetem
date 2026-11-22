@@ -68,6 +68,66 @@ _SERVER_TCP_JSON = json.dumps(
 )
 
 
+# Bidirectional UDP: the client JSON carries both directions' receiver
+# summaries. The server prints before exchanging results, so its reverse
+# summary is empty even though the forward direction is complete.
+_BIDIR_CLIENT_UDP_JSON = json.dumps(
+    {
+        "start": {
+            "test_start": {
+                "protocol": "UDP",
+                "duration": 1,
+                "num_streams": 1,
+                "bidir": 1,
+            }
+        },
+        "intervals": [],
+        "end": {
+            "sum_received": {
+                "bytes": 2_523_136,
+                "packets": 77,
+                "jitter_ms": 0.05,
+                "lost_packets": 0,
+            },
+            "sum_received_bidir_reverse": {
+                "bytes": 2_523_136,
+                "packets": 77,
+                "jitter_ms": 0.08,
+                "lost_packets": 0,
+            },
+        },
+    }
+)
+
+_BIDIR_SERVER_UDP_JSON = json.dumps(
+    {
+        "start": {
+            "test_start": {
+                "protocol": "UDP",
+                "duration": 1,
+                "num_streams": 1,
+                "bidir": 1,
+            }
+        },
+        "intervals": [],
+        "end": {
+            "sum_received": {
+                "bytes": 2_523_136,
+                "packets": 77,
+                "jitter_ms": 0.05,
+                "lost_packets": 0,
+            },
+            "sum_received_bidir_reverse": {
+                "bytes": 0,
+                "packets": 0,
+                "jitter_ms": 0.0,
+                "lost_packets": 0,
+            },
+        },
+    }
+)
+
+
 def _make_node(name: str, ipv4: str) -> MagicMock:
     node = MagicMock()
     node.name = name
@@ -234,3 +294,35 @@ def test_detached_server_is_killed_when_the_client_fails():
     assert all("iperf3 -s" not in cmd for cmd in kills), (
         f"kill pattern must not match its own command line: {kills!r}"
     )
+
+
+def test_udp_bidir_reads_the_client_json_with_both_directions():
+    """Server-side bidir JSON is one-sided; the runner must prefer the client.
+
+    iperf3 prints the server's JSON before exchanging results, so its
+    ``sum_received_bidir_reverse`` is empty. Reading the server file reports one
+    direction's bytes/packets and drops reverse jitter/loss, which is why the
+    client JSON must be used for bidirectional runs.
+    """
+    src = _make_node("gs0", "10.0.0.1")
+    dst = _make_node("gs1", "10.0.0.2")
+
+    def source_command(cmd, **_kwargs):
+        if cmd.startswith("cat "):
+            return _BIDIR_CLIENT_UDP_JSON
+        return ""
+
+    def destination_command(cmd, **_kwargs):
+        if cmd.startswith("cat "):
+            return _BIDIR_SERVER_UDP_JSON
+        return ""
+
+    src.execute_command.side_effect = source_command
+    dst.execute_command.side_effect = destination_command
+
+    result = run_iperf3_flow(
+        src, dst, Iperf3Config(protocol="UDP", duration=1, bidir=True)
+    )
+
+    assert result.total_bytes == 5_046_272
+    assert result.total_packets == 154
