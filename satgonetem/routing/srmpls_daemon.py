@@ -142,10 +142,12 @@ class SRMPLSDaemon(RoutingDaemon):
     SR-MPLS model used by this daemon:
     - Each node gets one stable Node SID (label = base + node_id).
     - Ground stations push a label stack encoding the complete path.
-    - Satellites only need their own SID pop rule and per-neighbour forward
-      rules, so satellite LFIB size is O(degree) rather than O(N).
-    - Only ground-station routes change when the topology changes; satellite
-      configuration is installed once at init and never touched again.
+    - Satellites install their own SID pop rule and per-neighbour forward
+      rules, which are O(degree).
+    - Every ground station and every addressable satellite is also an ingress
+      source: it pushes a label stack to every other destination. That ingress
+      table is O(N) and is rebuilt on every update; non-addressable satellites
+      are never ingress sources or destinations.
     """
 
     def __init__(self, topology: RoutingContext) -> None:
@@ -208,10 +210,13 @@ class SRMPLSDaemon(RoutingDaemon):
             return False
 
     def update(self, _new_links: list[Link], max_workers: int = 128) -> None:
-        """Rebuild SR-MPLS ground-station routes after topology changes.
+        """Rebuild SR-MPLS routes after topology changes.
 
-        Satellite Node SID rules are stable and never touched here. Only
-        ground-station label-stack routes are recomputed.
+        Recomputes ingress label-stack routes for every source (ground
+        stations and addressable satellites) and re-applies satellite
+        forwarding entries. Node SID allocations are stable, but satellite
+        SID/forward rules and ingress routes are both re-sent when their
+        attributes change.
 
         Args:
             _new_links: Unused. The topology graph is re-fetched from the
@@ -342,9 +347,13 @@ class SRMPLSDaemon(RoutingDaemon):
     def get_sr_statistics(self) -> dict[str, Any]:
         """Return SR-MPLS statistics.
 
+        ``nodes_with_routes`` counts every LFIB source (ground stations and
+        addressable satellites). ``ground_stations_with_routes`` counts only
+        the ground-station subset.
+
         Returns:
             Dict with enabled, node_sids_allocated, custom_paths, sr_routes,
-            and ground_stations_with_routes.
+            nodes_with_routes, and ground_stations_with_routes.
         """
         if self._label_manager is None:
             return {"enabled": False}
@@ -352,7 +361,10 @@ class SRMPLSDaemon(RoutingDaemon):
         stats = self._label_manager.get_statistics()
         stats["enabled"] = True
         stats["sr_routes"] = sum(len(v) for v in self.sr_lfib.values())
-        stats["ground_stations_with_routes"] = len(self.sr_lfib)
+        stats["nodes_with_routes"] = len(self.sr_lfib)
+        stats["ground_stations_with_routes"] = sum(
+            1 for node_id in self.sr_lfib if node_id in self.topology.ground_stations
+        )
         return stats
 
     def list_sr_custom_paths(self) -> list[dict[str, Any]]:
@@ -454,8 +466,9 @@ class SRMPLSDaemon(RoutingDaemon):
     ) -> int:
         """Rebuild SR-MPLS routing for the current time step.
 
-        Satellite Node SID rules are stable; only ground-station label-stack
-        routes are recomputed each call.
+        Satellite Node SID allocations are stable, but satellite SID/forward
+        rules and ingress label-stack routes are both recomputed and
+        re-applied on every call.
 
         Args:
             init_flag: When True, also enables MPLS on all nodes before
@@ -485,11 +498,12 @@ class SRMPLSDaemon(RoutingDaemon):
         return 0
 
     def _build_sr_gs_routes(self) -> None:
-        """Build SR label-stack routes for all ground-station pairs.
+        """Build SR label-stack ingress routes for every source.
 
-        Uses a custom path when one was set via set_sr_custom_path, otherwise
-        falls back to the shortest weighted path. Results are stored in
-        self.sr_lfib keyed by source ground-station ID.
+        Sources and destinations are all ground stations plus addressable
+        satellites. Uses a custom path when one was set via
+        set_sr_custom_path, otherwise falls back to the shortest weighted
+        path. Results are stored in self.sr_lfib keyed by source node ID.
         """
         from satgonetem.models.mpls_entry import SRLabelStackEntry
 
