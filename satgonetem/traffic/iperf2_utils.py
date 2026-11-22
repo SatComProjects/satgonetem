@@ -10,12 +10,13 @@ import matplotlib.pyplot as plt
 
 from satgonetem.ports import default_runner
 
-# iperf2 prints binary units: 1 MBytes = 2**20 bytes and 1 Mbits/sec =
-# 2**20 bits/sec. Both labels are scaled consistently for display below.
+# iperf2 prints transfer sizes in binary units (1 MBytes = 2**20 bytes) but
+# bit rates in decimal units (1 Mbits/sec = 1e6 bit/s): the label differs
+# even though both are printed with the same K/M/G prefixes.
 _BYTES_PER_MIB = 1024 * 1024
-_BITS_PER_MIB = 1024 * 1024
+_BITS_PER_MEGABIT = 1_000_000
 _BYTE_UNITS = {"": 1, "K": 1024, "M": 1024**2, "G": 1024**3}
-_BIT_UNITS = {"": 1, "K": 1024, "M": 1024**2, "G": 1024**3}
+_BIT_UNITS = {"": 1, "K": 1_000, "M": 1_000_000, "G": 1_000_000_000}
 
 _IPERF2_INTERVAL = re.compile(
     r"^\[\s*(?P<stream>\d+|SUM)\]\s*"
@@ -253,7 +254,7 @@ def generate_iperf2_plots(
     print(f"           {protocol} IPERF2 TEST STATISTICS")
     print("=" * 60)
     # Throughput
-    avg_throughput_mbps = df["bits_per_second"].mean() / _BITS_PER_MIB
+    avg_throughput_mbps = df["bits_per_second"].mean() / _BITS_PER_MEGABIT
     print(f"Average Throughput:      {avg_throughput_mbps:.2f} Mbps")
     # Retransmits / Loss
     if protocol == "TCP":
