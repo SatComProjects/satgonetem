@@ -282,6 +282,26 @@ def test_start_preserves_early_exit_stderr_without_concurrent_read(
     assert daemon.p4_controller_process is None
 
 
+def test_controller_stderr_is_logged_once_at_error_on_failure(
+    daemon, monkeypatch, caplog
+):
+    _patch_os(monkeypatch, exists=True, executable=True)
+    process = FakeProcess(returncode=3, stderr="controller boot failure\n")
+    _patch_popen(monkeypatch, process=process)
+    _patch_sleep(monkeypatch)
+
+    with caplog.at_level(logging.ERROR):
+        assert daemon.start_p4_controller() is False
+
+    matches = [
+        record
+        for record in caplog.records
+        if "controller boot failure" in record.getMessage()
+    ]
+    assert len(matches) == 1
+    assert matches[0].levelno == logging.ERROR
+
+
 def test_start_reports_running_process(daemon, monkeypatch):
     _patch_os(monkeypatch, exists=True, executable=True)
     process = FakeProcess(returncode=None)

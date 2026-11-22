@@ -240,7 +240,8 @@ class P4Daemon(RoutingDaemon):
         self.p4_controller_process = proc
 
         # Background threads stream stdout/stderr into the logger. stderr is
-        # also buffered so the main thread can report it after joining.
+        # also buffered so the main thread can report it at ERROR after
+        # joining; streaming it at ERROR as well would duplicate the tail.
         stderr_lines: deque[str] = deque(maxlen=_MAX_BUFFERED_STDERR_LINES)
 
         def _stream_reader(stream, log_fn, sink=None):
@@ -260,7 +261,7 @@ class P4Daemon(RoutingDaemon):
         )
         t_err = threading.Thread(
             target=_stream_reader,
-            args=(proc.stderr, self.logger.error, stderr_lines),
+            args=(proc.stderr, self.logger.debug, stderr_lines),
             daemon=True,
         )
         t_out.start()
