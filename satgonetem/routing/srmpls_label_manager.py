@@ -68,7 +68,9 @@ class SegmentRoutingManager:
         self.node_sids: dict[int, NodeSID] = {}
         self.reverse_sid_map: dict[int, int] = {}
         self.custom_paths: dict[tuple[int, int], list[int]] = {}
-        self._label_stack_cache: dict[tuple[int, int], list[int]] = {}
+        self._label_stack_cache: dict[
+            tuple[int, int, bool, tuple[int, ...]], list[int]
+        ] = {}
 
         logging.info(
             f"SegmentRoutingManager initialized with Node SID base {node_sid_base}"
@@ -147,7 +149,7 @@ class SegmentRoutingManager:
             raise ValueError("Path must end with destination node")
 
         self.custom_paths[(source_id, dest_id)] = path
-        self._label_stack_cache.pop((source_id, dest_id), None)
+        self._invalidate_pair_cache(source_id, dest_id)
 
         logging.info(
             f"Set custom SR path {source_id} -> {dest_id}: "
@@ -176,8 +178,26 @@ class SegmentRoutingManager:
         Returns:
             True if a custom path was removed, False if none existed.
         """
-        self._label_stack_cache.pop((source_id, dest_id), None)
+        self._invalidate_pair_cache(source_id, dest_id)
         return self.custom_paths.pop((source_id, dest_id), None) is not None
+
+    def _invalidate_pair_cache(self, source_id: int, dest_id: int) -> None:
+        """Drop every cached label stack for a source-destination pair.
+
+        The cache is keyed by pair, PHP mode, and path, so removing only one
+        key could leave a stale stack behind.
+
+        Args:
+            source_id: Source node ID.
+            dest_id: Destination node ID.
+        """
+        stale_keys = [
+            key
+            for key in self._label_stack_cache
+            if key[0] == source_id and key[1] == dest_id
+        ]
+        for key in stale_keys:
+            del self._label_stack_cache[key]
 
     def get_label_stack_for_path(
         self, path: list[int], use_php: bool = True
@@ -238,8 +258,8 @@ class SegmentRoutingManager:
         if not path or len(path) < 2:
             return [], []
 
-        cache_key = (source_id, dest_id)
-        if cache_key in self._label_stack_cache and custom is None:
+        cache_key = (source_id, dest_id, use_php, tuple(path))
+        if custom is None and cache_key in self._label_stack_cache:
             return path, self._label_stack_cache[cache_key]
 
         labels = self.get_label_stack_for_path(path, use_php=use_php)
