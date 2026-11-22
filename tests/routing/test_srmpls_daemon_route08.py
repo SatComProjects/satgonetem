@@ -104,7 +104,18 @@ def test_ground_station_batch_is_fail_fast():
 
 def test_satellite_batch_is_fail_fast():
     sat = _RecordingNode(30, "Sat30")
-    daemon = _make_daemon(satellites={30: sat}, sids={30: 16030})
+    daemon = _make_daemon(
+        satellites={30: sat},
+        sids={30: 16030},
+        sr_lfib={
+            30: [
+                _FakeLFIBEntry(
+                    "ip route replace 10.30.0.1/32 encap mpls 16001 "
+                    "via 10.0.0.2 dev sat30.1"
+                )
+            ]
+        },
+    )
 
     daemon._apply_sr_routes_to_satellites()
 
