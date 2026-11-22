@@ -867,11 +867,11 @@ def test_setup_link_fails_when_container_is_not_running(
     assert "HIL: container for Sat1 is not running" in caplog.text
 
 
-def test_setup_link_fails_when_container_reload_fails(
+def test_setup_link_fails_clearly_when_reload_fails_without_cached_pid(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     manager = HILManager({"Gnd0": "eth1"})
-    link = _link("Sat1", "Gnd0", src_pid=1111)
+    link = _link("Sat1", "Gnd0", src_pid=0)
     container = _tracked_container(1111)
     container.reload.side_effect = RuntimeError("container gone")
     link.source.container = container
@@ -883,7 +883,30 @@ def test_setup_link_fails_when_container_reload_fails(
 
     create_veth.assert_not_called()
     assert (
-        "HIL: could not refresh container state for Sat1: container gone" in caplog.text
+        "HIL: could not refresh container state for Sat1: container gone; "
+        "no cached container_pid available" in caplog.text
+    )
+    assert "HIL: no container_pid on Sat1, cannot set up link to Gnd0" in caplog.text
+
+
+def test_setup_link_falls_back_to_cached_pid_when_reload_fails(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    manager = HILManager({"Gnd0": "eth1"})
+    link = _link("Sat1", "Gnd0", src_pid=1111)
+    container = _tracked_container(9999)
+    container.reload.side_effect = RuntimeError("container gone")
+    link.source.container = container
+    create_veth = MagicMock(return_value=False)
+    monkeypatch.setattr(manager, "_create_veth", create_veth)
+    caplog.set_level(logging.WARNING)
+
+    manager.setup_link(link)
+
+    create_veth.assert_called_once_with("Sat1", 1111, 0)
+    assert (
+        "HIL: could not refresh container state for Sat1: container gone; "
+        "falling back to cached container_pid 1111" in caplog.text
     )
 
 
@@ -999,6 +1022,74 @@ def test_teardown_link_skips_veth_without_pid(
     teardown_bridge.assert_called_once_with("Gnd0")
     delete_veth.assert_not_called()
     assert "HIL: no container_pid on Sat1, cannot delete veth for Gnd0" in caplog.text
+
+
+def test_teardown_link_falls_back_to_cached_pid_when_reload_fails(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    manager = HILManager({"Gnd0": "eth1"})
+    link = _link("Sat1", "Gnd0", src_pid=1111)
+    container = _tracked_container(9999)
+    container.reload.side_effect = RuntimeError("container gone")
+    link.source.container = container
+    teardown_bridge = MagicMock()
+    delete_veth = MagicMock()
+    monkeypatch.setattr(manager, "_teardown_bridge", teardown_bridge)
+    monkeypatch.setattr(manager, "_delete_sat_veth", delete_veth)
+    caplog.set_level(logging.WARNING)
+
+    manager.teardown_link(link)
+
+    teardown_bridge.assert_called_once_with("Gnd0")
+    delete_veth.assert_called_once_with("Sat1", 1111, 0)
+    assert (
+        "HIL: could not refresh container state for Sat1: container gone; "
+        "falling back to cached container_pid 1111" in caplog.text
+    )
+
+
+def test_teardown_link_fails_clearly_when_reload_fails_without_cached_pid(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    manager = HILManager({"Gnd0": "eth1"})
+    link = _link("Sat1", "Gnd0", src_pid=0)
+    container = _tracked_container(1111)
+    container.reload.side_effect = RuntimeError("container gone")
+    link.source.container = container
+    teardown_bridge = MagicMock()
+    delete_veth = MagicMock()
+    monkeypatch.setattr(manager, "_teardown_bridge", teardown_bridge)
+    monkeypatch.setattr(manager, "_delete_sat_veth", delete_veth)
+    caplog.set_level(logging.ERROR)
+
+    manager.teardown_link(link)
+
+    teardown_bridge.assert_called_once_with("Gnd0")
+    delete_veth.assert_not_called()
+    assert (
+        "HIL: could not refresh container state for Sat1: container gone; "
+        "no cached container_pid available" in caplog.text
+    )
+    assert "HIL: no container_pid on Sat1, cannot delete veth for Gnd0" in caplog.text
+
+
+def test_teardown_link_skips_veth_when_container_is_stopped(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    manager = HILManager({"Gnd0": "eth1"})
+    link = _link("Sat1", "Gnd0", src_pid=1111)
+    link.source.container = _tracked_container(1111, running=False)
+    teardown_bridge = MagicMock()
+    delete_veth = MagicMock()
+    monkeypatch.setattr(manager, "_teardown_bridge", teardown_bridge)
+    monkeypatch.setattr(manager, "_delete_sat_veth", delete_veth)
+    caplog.set_level(logging.ERROR)
+
+    manager.teardown_link(link)
+
+    teardown_bridge.assert_called_once_with("Gnd0")
+    delete_veth.assert_not_called()
+    assert "HIL: container for Sat1 is not running" in caplog.text
 
 
 # update_link success / missing pid

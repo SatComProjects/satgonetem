@@ -14,18 +14,24 @@ def _yaml_scalar(value: object) -> str:
     """Return *value* as a single-line, YAML-safe scalar.
 
     Plain values stay unquoted so the generated document keeps the shape the
-    GoNetEm server expects. Anything that YAML would reinterpret (newlines,
-    comments, mapping separators, anchor/alias indicators, type coercion) is
-    emitted as a JSON-quoted scalar, which is also valid YAML.
+    GoNetEm server expects. The value is validated in a flow mapping because
+    peers are emitted inside ``{peer1: ..., peer2: ...}``. Anything YAML would
+    reinterpret there (newlines, comments, mapping separators, flow
+    indicators, anchor/alias indicators, type coercion) is emitted as a
+    JSON-quoted scalar, which is also valid YAML.
+
+    ``ensure_ascii=False`` keeps non-BMP characters literal: Go's yaml.v2/v3
+    rejects the UTF-16 surrogate-pair escapes that ``json.dumps`` produces by
+    default.
     """
     text = str(value)
     try:
-        parsed = yaml.safe_load(f"value: {text}")
+        parsed = yaml.safe_load(f"{{value: {text}}}")
     except yaml.YAMLError:
         parsed = None
     if parsed == {"value": text}:
         return text
-    return json.dumps(text)
+    return json.dumps(text, ensure_ascii=False)
 
 
 def _tbf_qos(rate_kbps: int, delay_ms: int) -> tuple[int, float]:

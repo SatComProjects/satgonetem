@@ -31,7 +31,10 @@ hardware interface enslaved to the new satellite's veth.
 PID resolution: satellite container PIDs are resolved from node.container
 at call time and refreshed into node.container_pid. When no container is
 attached, node.container_pid (set during start_containers) is used as a
-fallback. HILManager does not depend on any launcher class internally.
+fallback. If Docker cannot refresh the attached container's state, the
+cached PID is used as a last resort so teardown can still remove the veth;
+the cached PID may be stale (a PID-reuse race at namespace entry).
+HILManager does not depend on any launcher class internally.
 
 Privileges required:
   CAP_SYS_ADMIN (setns into container namespaces, nsenter)
@@ -117,7 +120,9 @@ class HILManager:
     Satellite container PIDs are resolved from node.container at call time
     and refreshed into node.container_pid, so a restarted container is not
     mistaken for a stale PID. Without an attached container, the
-    launcher-populated node.container_pid is used. No launcher reference is
+    launcher-populated node.container_pid is used. If the attached container
+    cannot be refreshed, the cached PID is used as a bounded-cleanup
+    fallback, accepting a residual PID-reuse race. No launcher reference is
     held internally.
 
     Attributes:
@@ -260,6 +265,11 @@ class HILManager:
 
         return self._gnd_capacity_kbps
 
+    @staticmethod
+    def _cached_sat_pid(sat) -> int | None:
+        """Return the launcher-cached container PID, or None when unusable."""
+        return HILManager._positive_int(getattr(sat, "container_pid", 0)) or None
+
     def _resolve_sat_pid(self, sat) -> int | None:
         """Return the satellite container's current network-namespace PID.
 
@@ -269,12 +279,19 @@ class HILManager:
         attached container, the launcher-populated ``container_pid`` is used
         as a fallback.
 
+        When Docker cannot refresh the container state, the cached
+        ``container_pid`` is used if it is a positive int. This keeps teardown
+        able to remove the veth after the container state became unavailable,
+        but accepts a residual TOCTOU risk: the cached PID may have been
+        recycled by an unrelated process before ``nsenter`` runs. A container
+        reported as stopped is never used.
+
         Args:
             sat: Satellite node endpoint of the HIL link.
 
         Returns:
-            The current PID, or None when the container is missing, stopped,
-            or its state cannot be refreshed.
+            The current PID, or None when the container is known stopped, its
+            refreshed state is unusable, or no cached PID is available.
         """
         container = getattr(sat, "container", None)
         attrs = getattr(container, "attrs", None) if container is not None else None
@@ -284,12 +301,23 @@ class HILManager:
                 try:
                     reload()
                 except Exception as exc:
-                    logging.error(
-                        "HIL: could not refresh container state for %s: %s",
+                    cached_pid = self._cached_sat_pid(sat)
+                    if cached_pid is None:
+                        logging.error(
+                            "HIL: could not refresh container state for %s: %s; "
+                            "no cached container_pid available",
+                            sat.name,
+                            exc,
+                        )
+                        return None
+                    logging.warning(
+                        "HIL: could not refresh container state for %s: %s; "
+                        "falling back to cached container_pid %d",
                         sat.name,
                         exc,
+                        cached_pid,
                     )
-                    return None
+                    return cached_pid
                 attrs = getattr(container, "attrs", None)
                 if not isinstance(attrs, dict):
                     logging.error(
@@ -309,8 +337,7 @@ class HILManager:
             sat.container_pid = pid
             return pid
 
-        pid = self._positive_int(getattr(sat, "container_pid", 0))
-        return pid or None
+        return self._cached_sat_pid(sat)
 
     def _create_veth(self, sat_name: str, sat_pid: int, gnd_id: int) -> bool:
         """
