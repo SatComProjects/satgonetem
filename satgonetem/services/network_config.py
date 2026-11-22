@@ -9,6 +9,7 @@ facade.
 from __future__ import annotations
 
 import math
+import re
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass, fields
@@ -299,10 +300,13 @@ def apply_config(instance: Any, config: NetworkConfig) -> None:
             If config.project_name is None, falls back to the instance's
             simulation manager project_name attribute, or "Constellation".
     """
-    base_name = config.project_name or getattr(
-        instance.simulation_manager, "project_name", "Constellation"
+    base_name = str(
+        config.project_name
+        or getattr(instance.simulation_manager, "project_name", "Constellation")
     )
-    instance.project_name = f"{base_name}_{int(time.time())}"
+    if not re.search(r"_\d{10}$", base_name):
+        base_name = f"{base_name}_{int(time.time())}"
+    instance.project_name = base_name
     for field in fields(NetworkConfig):
         if field.name != "project_name":
             setattr(instance, field.name, getattr(config, field.name))

@@ -193,6 +193,18 @@ class TestNetworkConfigHelpers:
         # Missing attributes fall back to the dataclass defaults.
         assert config.gnd_link_capacity == 100_000
 
+    def test_apply_config_does_not_restamp_an_already_stamped_name(self):
+        from types import SimpleNamespace
+
+        manager = SimpleNamespace(
+            simulation_manager=SimpleNamespace(project_name="Fleet_1700000000")
+        )
+        config = NetworkConfig(project_name="Fleet_1700000000")
+
+        apply_config(manager, config)
+
+        assert manager.project_name == "Fleet_1700000000"
+
     def test_apply_config_copies_every_field_and_names_the_project(self):
         from types import SimpleNamespace
 
