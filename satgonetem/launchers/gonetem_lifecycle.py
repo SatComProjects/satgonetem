@@ -315,18 +315,17 @@ class GoNetEmLifecycleMixin(GoNetEmClientMixin):
         return merged
 
     def add_link(self, link) -> None:
+        """Create *link* on the emulator, raising when the backend fails."""
         if self._client is None or self._request is None:
             logging.warning("GoNetEmLauncher: add_link called before project is open")
             return
         try:
             self._client.LinkAdd(self._link_request(link))
         except Exception as exc:
-            logging.error(
-                "GoNetEmLauncher: LinkAdd failed for %s<->%s: %s",
-                link.source.name,
-                link.target.name,
-                exc,
-            )
+            raise RuntimeError(
+                "GoNetEmLauncher: LinkAdd failed for "
+                f"{link.source.name}<->{link.target.name}: {exc}"
+            ) from exc
 
     def delete_link(self, link) -> None:
         """Delete *link* on the emulator, raising when the backend fails."""

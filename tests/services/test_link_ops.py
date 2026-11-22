@@ -563,3 +563,86 @@ def test_successful_backend_delete_releases_link_and_address_slot():
         for interface in target_interfaces
         if interface not in link.peer_interfaces
     ]
+
+
+def _run_add_operations(link, launcher, **kwargs):
+    fake = _FakeTopology(
+        {frozenset((link.source.name, link.target.name)): link},
+        launcher=launcher,
+        **kwargs,
+    )
+    stats = LinkOpsMixin.bulk_link_operations(
+        fake,
+        to_del=False,
+        to_update=False,
+        links_to_add=[link],
+        links_to_update=[],
+        links_to_remove=[],
+    )
+    LinkOpsMixin._perform_local_link_operations(
+        fake,
+        to_del=False,
+        to_update=False,
+        links_to_add=[link],
+        links_to_update=[],
+        links_to_remove=[],
+    )
+    return fake, stats
+
+
+def test_failed_backend_add_keeps_link_retryable(caplog):
+    link = make_link(make_satellite("Sat2"), make_satellite("Sat3"))
+    link.to_add = True
+    key = frozenset((link.source.name, link.target.name))
+    launcher = MagicMock()
+    launcher.add_link.side_effect = RuntimeError("LinkAdd failed")
+    build_interfaces = MagicMock()
+
+    with caplog.at_level(logging.ERROR):
+        fake, stats = _run_add_operations(
+            link, launcher, _build_interfaces_from_link=build_interfaces
+        )
+
+    # Spec 0006: added_count reports attempts, not successes.
+    assert stats["added_count"] == 1
+    assert fake.links == {key: link}
+    assert link.to_add is True
+    assert link.peer_interfaces == []
+    build_interfaces.assert_not_called()
+    assert "Unable to add link Sat2--Sat3" in caplog.text
+
+
+def test_add_retry_builds_interfaces_once_backend_recovers():
+    link = make_link(make_satellite("Sat4"), make_satellite("Sat5"))
+    link.to_add = True
+    launcher = MagicMock()
+    launcher.add_link.side_effect = [RuntimeError("LinkAdd failed"), None]
+    build_interfaces = MagicMock()
+
+    fake, _ = _run_add_operations(
+        link, launcher, _build_interfaces_from_link=build_interfaces
+    )
+    assert fake.links
+    assert link.to_add is True
+    build_interfaces.assert_not_called()
+
+    fake, _ = _run_add_operations(
+        link, launcher, _build_interfaces_from_link=build_interfaces
+    )
+
+    assert launcher.add_link.call_count == 2
+    assert link.to_add is False
+    build_interfaces.assert_called_once_with(link, set_ip=True, sync_to_node=True)
+
+
+def test_successful_backend_add_builds_interfaces_and_clears_flag():
+    link = make_link(make_satellite("Sat6"), make_satellite("Sat7"))
+    link.to_add = True
+    launcher = MagicMock()
+    build_interfaces = MagicMock()
+
+    _run_add_operations(link, launcher, _build_interfaces_from_link=build_interfaces)
+
+    launcher.add_link.assert_called_once_with(link)
+    build_interfaces.assert_called_once_with(link, set_ip=True, sync_to_node=True)
+    assert link.to_add is False

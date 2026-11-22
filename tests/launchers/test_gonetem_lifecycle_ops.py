@@ -373,16 +373,20 @@ def test_link_mutation_forwards_link_request(method_name, rpc_name):
     assert request.link.peer2 == "Sat1.0"
 
 
-def test_add_link_logs_rpc_failure_without_raising(caplog):
+def test_add_link_raises_runtime_error_on_rpc_failure():
+    cause = RuntimeError("rpc failed")
     launcher = _new_launcher()
     launcher._client = MagicMock()
     launcher._request = netem_pb2.ProjectRequest(id="prj-1")
-    launcher._client.LinkAdd.side_effect = RuntimeError("rpc failed")
+    launcher._client.LinkAdd.side_effect = cause
 
-    with caplog.at_level(logging.ERROR):
+    with pytest.raises(RuntimeError) as excinfo:
         launcher.add_link(_link())
 
-    assert "LinkAdd failed for Sat0<->Sat1: rpc failed" in caplog.text
+    assert str(excinfo.value) == (
+        "GoNetEmLauncher: LinkAdd failed for Sat0<->Sat1: rpc failed"
+    )
+    assert excinfo.value.__cause__ is cause
 
 
 def test_delete_link_raises_runtime_error_on_rpc_failure():
