@@ -66,9 +66,11 @@ class TrafficTestingMixin:
         for src in sources:
             for dst in destinations:
                 f = Hping3Flow(src, dst, config)
+                # Register before starting so a later failure cannot orphan an
+                # already-running flow from stop_gonetem()'s cleanup.
+                self._active_flows.append(f)
                 f.start()
                 flows.append(f)
-        self._active_flows.extend(flows)
         return flows
 
     def run_iperf3(
@@ -122,9 +124,11 @@ class TrafficTestingMixin:
         for src in sources:
             for dst in destinations:
                 f = Iperf3Flow(src, dst, config)
+                # Register before starting so a later failure cannot orphan an
+                # already-running flow from stop_gonetem()'s cleanup.
+                self._active_flows.append(f)
                 f.start()
                 flows.append(f)
-        self._active_flows.extend(flows)
         return flows
 
     def ping(
@@ -169,7 +173,9 @@ class TrafficTestingMixin:
         for src in sources:
             for dst in destinations:
                 f = PingFlow(src, dst, resolved_config)
+                # Register before starting so a later failure cannot orphan an
+                # already-running flow from stop_gonetem()'s cleanup.
+                self._active_flows.append(f)
                 f.start()
                 flows.append(f)
-        self._active_flows.extend(flows)
         return flows
