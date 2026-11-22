@@ -80,11 +80,12 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
-addopts = "-ra --strict-markers -m 'not slow and not benchmark' -p tests._cov_preload"
+addopts = "-ra --strict-markers -m 'not slow and not benchmark and not integration' -p tests._cov_preload"
 pythonpath = ["."]
 markers = [
     "unit: fast, deterministic unit tests",
     "integration: requires Docker, root, network, or another external service",
+    "root: requires root or effective CAP_NET_ADMIN and CAP_SYS_ADMIN; also marked integration",
     "slow: takes substantially longer than a unit test",
     "benchmark: performance or scale benchmark",
 ]

@@ -1,6 +1,6 @@
 # TopologyManager Internals
 
-`TopologyManager` is assembled from nine mixins, each owning one concern. The
+`TopologyManager` is assembled from ten mixins, each owning one concern. The
 public API is listed in [TopologyManager public API](topology_manager_api.md);
 this document explains how the pieces fit together, the order in which they
 run, and where to hook in.
@@ -15,6 +15,15 @@ Use this page when you need to:
 Link identity/diff planning lives in `services.topology_link_plan`; simulation
 tick timing lives in `services.simulation_timing`; the `LinkBackend` protocol
 in `services.link_backend` lets tests replace the launcher.
+
+`topology_satcom.py` is the public facade. Its leaf collaborators are
+`services.network_config` (`NetworkConfig` and config copy helpers),
+`services.topology_persistence` (runtime-state/file codec),
+`services.satcom_project` (simulation loading and tick validation),
+`services.satcom_link_factory` (SatCom/test link construction), and
+`services.topology_graph` (graph view and change hashes). Import
+`TopologyManager` and `NetworkConfig` from `satgonetem.services.topology_satcom`
+as before; the old private method names remain as delegators for compatibility.
 
 ## Composition
 

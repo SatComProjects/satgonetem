@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from satgonetem.addressing import AddressPlanConfigurationError
+from satgonetem.services.network_config import apply_config, config_from_instance
 from satgonetem.services.topology_satcom import (
     MAX_LINK_QUEUE_PACKETS,
     NetworkConfig,
@@ -106,6 +107,47 @@ class TestApplyNetworkConfig:
 
         assert manager.link_netem_limit == 1000
         assert manager.link_txqueuelen == 1000
+
+
+class TestNetworkConfigHelpers:
+    """Direct contracts of the extracted config helpers."""
+
+    def test_config_from_instance_reads_matching_fields(self):
+        manager = TopologyManager.__new__(TopologyManager)
+        manager.update_time = 1
+        manager.link_netem_limit = 2048
+        manager.link_txqueuelen = 4096
+
+        config = config_from_instance(manager)
+
+        assert config.update_time == 1
+        assert config.link_netem_limit == 2048
+        assert config.link_txqueuelen == 4096
+        # Missing attributes fall back to the dataclass defaults.
+        assert config.gnd_link_capacity == 100_000
+
+    def test_apply_config_copies_every_field_and_names_the_project(self):
+        from types import SimpleNamespace
+
+        manager = SimpleNamespace(
+            simulation_manager=SimpleNamespace(project_name="Fleet")
+        )
+        config = NetworkConfig(
+            project_name="Custom",
+            update_time=2,
+            link_netem_limit=2048,
+            link_txqueuelen=4096,
+            controller_veth_host="mgmt0",
+        )
+
+        apply_config(manager, config)
+
+        assert manager.project_name.startswith("Custom_")
+        assert manager.project_name.split("_")[0] == "Custom"
+        assert manager.update_time == 2
+        assert manager.link_netem_limit == 2048
+        assert manager.link_txqueuelen == 4096
+        assert manager.controller_veth_host == "mgmt0"
 
 
 class TestPersistence:
