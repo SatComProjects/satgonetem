@@ -80,6 +80,8 @@ class NodeTerminal:
             self._response_queue.put(None)
 
     def __enter__(self) -> NodeTerminal:
+        if self._closed:
+            raise RuntimeError("Terminal is closed")
         self._stream = self._client.NodeExec(self._request_generator())
         self._recv_thread = threading.Thread(target=self._recv_loop, daemon=True)
         self._recv_thread.start()

@@ -52,9 +52,11 @@ class FakeClient:
     def __init__(self, stream):
         self.stream = stream
         self.requests = None
+        self.node_exec_calls = 0
 
     def NodeExec(self, requests):
         self.requests = requests
+        self.node_exec_calls += 1
         return self.stream
 
 
@@ -105,6 +107,24 @@ def test_close_cancels_the_stream_and_stops_the_receiver():
     assert stream.cancel_calls == 1
     assert terminal.closed is True
     assert not terminal._recv_thread.is_alive()
+
+
+def test_reentry_after_natural_eof_is_rejected_without_opening_a_stream():
+    stream = ScriptedStream()
+    terminal, client = make_terminal(stream)
+
+    with terminal:
+        terminal._recv_thread.join(timeout=2)
+        assert terminal.closed is True
+
+    calls_after_eof = client.node_exec_calls
+
+    with pytest.raises(RuntimeError, match="closed"):
+        terminal.__enter__()
+
+    assert client.node_exec_calls == calls_after_eof
+    assert terminal._stream is stream
+    assert stream.cancel_calls == 0
 
 
 def test_close_works_for_a_client_stream_without_cancel():
