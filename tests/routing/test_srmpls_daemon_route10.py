@@ -193,7 +193,7 @@ def _delete_lines(kernel: _FakeKernel, prefix: str) -> list[str]:
         line
         for batch in kernel.batches
         for line in batch.split("; ")
-        if line == f"ip route del {prefix}"
+        if line.startswith(f"ip route del {prefix}")
     ]
 
 
@@ -219,9 +219,9 @@ def test_removed_destination_is_deleted_once_and_caches_commit():
     batches_before = len(sat.kernel.batches)
     assert daemon._rebuild_sr_mpls_routing(init_flag=False) == 0
     assert sat.kernel.failures == []
-    assert _delete_lines(sat.kernel, "10.0.0.2/32") == ["ip route del 10.0.0.2/32"], (
-        "the prefix must be deleted exactly once"
-    )
+    assert _delete_lines(sat.kernel, "10.0.0.2/32") == [
+        "ip route del 10.0.0.2/32 2>/dev/null || true"
+    ], "the prefix must be deleted exactly once"
     assert daemon._prev_sr_sat_routes[sat.id] == []
     assert daemon._prev_sr_node_sid_routes[sat.id] == [
         "ip -f mpls route replace 16001 dev lo"

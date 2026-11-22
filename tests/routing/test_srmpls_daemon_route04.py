@@ -73,8 +73,11 @@ def test_node_sid_removed_entry_emits_mpls_delete():
 
     daemon._apply_sr_node_sids_to_satellites()
 
-    # Delete keeps only the label; next-hop attributes are dropped.
-    assert sat.commands == [["sh", "-lc", "set -e; ip -f mpls route del 16009"]]
+    # Delete keeps only the label; next-hop attributes are dropped. It is
+    # tolerant so an already-absent stale label cannot abort the batch.
+    assert sat.commands == [
+        ["sh", "-lc", "set -e; ip -f mpls route del 16009 2>/dev/null || true"]
+    ]
     assert daemon._prev_sr_node_sid_routes[1] == [own]
 
 
@@ -118,7 +121,7 @@ def test_returning_route_is_reemitted_after_removal():
     assert sat.commands[-1] == [
         "sh",
         "-lc",
-        "set -e; ip route del 10.30.0.1/32",
+        "set -e; ip route del 10.30.0.1/32 2>/dev/null || true",
     ]
     assert daemon._prev_sr_sat_routes[30] == []
 
