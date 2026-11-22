@@ -11,6 +11,7 @@ import logging
 import os
 import subprocess
 import threading
+from multiprocessing import shared_memory
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 from uuid import uuid4
@@ -342,6 +343,33 @@ def test_init_returns_false_when_controller_fails(daemon, monkeypatch):
     graph.close.assert_called_once_with()
     graph.unlink.assert_called_once_with()
     assert daemon.graph_shared_memory is None
+
+
+def test_init_releases_everything_when_readiness_probe_raises(
+    topology, tmp_path, monkeypatch, caplog
+):
+    name = f"satgonetem-test-p4-{os.getpid()}-{uuid4().hex}"
+    probe = MagicMock(side_effect=RuntimeError("probe exploded"))
+    daemon = P4Daemon(
+        topology,
+        str(tmp_path / "controller"),
+        shared_memory_name=name,
+        readiness_probe=probe,
+    )
+    _patch_os(monkeypatch, exists=True, executable=True)
+    process = FakeProcess(returncode=None)
+    _patch_popen(monkeypatch, process=process)
+    _patch_sleep(monkeypatch)
+
+    with caplog.at_level(logging.ERROR):
+        assert daemon.init() is False
+
+    assert "probe exploded" in caplog.text
+    assert process.terminate_calls == 1
+    assert daemon.p4_controller_process is None
+    assert daemon.graph_shared_memory is None
+    with pytest.raises(FileNotFoundError):
+        shared_memory.SharedMemory(name=name)
 
 
 def test_init_returns_true_when_controller_starts(daemon, monkeypatch):

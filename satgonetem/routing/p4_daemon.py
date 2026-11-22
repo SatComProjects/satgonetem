@@ -200,8 +200,9 @@ class P4Daemon(RoutingDaemon):
         opens a TCP connection to ``controller_host:controller_port``; pass
         ``readiness_probe`` to the constructor for a different health check.
         Returns False when the script is missing or not executable, the process
-        exits, or the endpoint does not become ready before the deadline. Any
-        started process is stopped on failure.
+        exits, the endpoint does not become ready before the deadline, or the
+        readiness probe raises. Any started process is stopped and its output
+        readers are joined on failure.
         """
         script_path = os.path.join(self.p4_controller_path, "run_controller.sh")
 
@@ -267,31 +268,37 @@ class P4Daemon(RoutingDaemon):
 
         deadline = time.monotonic() + timeout
         probe = self._readiness_probe or self._probe_controller_port
-        while True:
-            if proc.poll() is not None:
-                self.logger.error(
-                    f"P4 controller process exited during startup "
-                    f"with code {proc.returncode}"
-                )
-                self.stop_p4_controller()
-                self._drain_controller_output((t_out, t_err), stderr_lines)
-                return False
+        try:
+            while True:
+                if proc.poll() is not None:
+                    self.logger.error(
+                        f"P4 controller process exited during startup "
+                        f"with code {proc.returncode}"
+                    )
+                    self.stop_p4_controller()
+                    self._drain_controller_output((t_out, t_err), stderr_lines)
+                    return False
 
-            if probe():
-                return True
+                if probe():
+                    return True
 
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                self.logger.error(
-                    f"P4 controller endpoint "
-                    f"{self.controller_host}:{self.controller_port} did not become "
-                    f"ready within {timeout} seconds"
-                )
-                self.stop_p4_controller()
-                self._drain_controller_output((t_out, t_err), stderr_lines)
-                return False
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    self.logger.error(
+                        f"P4 controller endpoint "
+                        f"{self.controller_host}:{self.controller_port} did not become "
+                        f"ready within {timeout} seconds"
+                    )
+                    self.stop_p4_controller()
+                    self._drain_controller_output((t_out, t_err), stderr_lines)
+                    return False
 
-            time.sleep(min(_READINESS_POLL_INTERVAL, remaining))
+                time.sleep(min(_READINESS_POLL_INTERVAL, remaining))
+        except Exception:
+            self.logger.exception("P4 controller readiness check failed")
+            self.stop_p4_controller()
+            self._drain_controller_output((t_out, t_err), stderr_lines)
+            return False
 
     def is_p4_controller_running(self) -> bool:
         return (
