@@ -128,7 +128,8 @@ manager, which immediately runs the initial sync. `from_file()` also restores
 embedded ground-object CSV files into a temporary directory and rewrites the
 `data_file` paths before building the project. Files produced from a live
 `SimulationManager` include a `runtime_state` section so programmatically
-added satellites and links survive a round trip.
+added satellites, ground stations, user terminals, points of presence and
+their links survive a round trip.
 
 ### Registering a routing daemon
 
