@@ -21,6 +21,9 @@ from sgp4.api import WGS72, Satrec, jday
 from sklearn.metrics.pairwise import haversine_distances
 
 from satgonetem.utils.satcom_fix import (
+    WGS84_A,
+    WGS84_B,
+    WGS84_E2,
     PyOrbitalModel,
     apply_satcom_fix,
     teme_to_geodetic,
@@ -119,6 +122,52 @@ def test_non_utc_aware_time_matches_utc_instant():
     assert local_reference.latitude == pytest.approx(utc_reference.latitude, abs=1e-9)
     assert local_reference.longitude == pytest.approx(utc_reference.longitude, abs=1e-9)
     assert local_reference.altitude == pytest.approx(utc_reference.altitude, abs=1e-6)
+
+
+def test_teme_to_geodetic_polar_altitude_is_physical():
+    """Exact-polar input must report its true WGS-84 altitude (H12).
+
+    ``(0, 0, 6921)`` lies on the spin axis, so the geodetic latitude is 90 deg
+    and the altitude is the distance above the polar radius: 6921 - b.
+    """
+    lat, _lon, alt = teme_to_geodetic((0.0, 0.0, 6921.0), 2451545.0, 0.0)
+
+    assert lat == pytest.approx(90.0, abs=1e-9)
+    assert alt == pytest.approx((6921.0 - WGS84_B) * 1000.0, abs=1.0)
+
+
+def test_teme_to_geodetic_near_pole_is_continuous():
+    """A point 1e-10 km off-axis must report the same altitude as the pole (H12)."""
+    _, _, polar_alt = teme_to_geodetic((0.0, 0.0, 6921.0), 2451545.0, 0.0)
+    lat, _, near_pole_alt = teme_to_geodetic((1e-10, 0.0, 6921.0), 2451545.0, 0.0)
+
+    assert lat == pytest.approx(90.0, abs=1e-9)
+    assert near_pole_alt == pytest.approx(polar_alt, abs=1e-3)
+    assert near_pole_alt == pytest.approx((6921.0 - WGS84_B) * 1000.0, abs=1.0)
+
+
+@pytest.mark.parametrize("lat_deg", [0.0, 30.0, 45.0, 60.0, 75.0, -45.0])
+def test_teme_to_geodetic_non_polar_roundtrip(lat_deg):
+    """Non-polar results must stay faithful to the WGS-84 ellipsoid (H12).
+
+    A geodetic point built from WGS-84 constants is rotated into TEME; rotation
+    about the z-axis preserves latitude and altitude, so the conversion must
+    recover the input. The altitude tolerance covers the Bowring latitude
+    residual (~3 mm at mid latitudes).
+    """
+    altitude_km = 550.0
+    lat = math.radians(lat_deg)
+    n = WGS84_A / math.sqrt(1.0 - WGS84_E2 * math.sin(lat) ** 2)
+    r_teme = (
+        (n + altitude_km) * math.cos(lat),
+        0.0,
+        (n * (1.0 - WGS84_E2) + altitude_km) * math.sin(lat),
+    )
+
+    out_lat, _lon, alt_m = teme_to_geodetic(r_teme, 2451545.0, 0.0)
+
+    assert out_lat == pytest.approx(lat_deg, abs=1e-6)
+    assert alt_m == pytest.approx(altitude_km * 1000.0, abs=0.01)
 
 
 def test_distance_model_patch_matches_sklearn():
