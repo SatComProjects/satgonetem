@@ -222,7 +222,34 @@ class LinkBudgetCalculator:
 
         Returns:
             A :class:`LinkBudgetResult` with the computed budget.
+
+        Raises:
+            ValueError: If a required numeric input is not finite and positive,
+                a node lacks its position, or an antenna/EIRP value is missing.
         """
+        for name, value in (
+            ("distance_km", distance_km),
+            ("frequency_ghz_downlink", self.frequency_ghz_downlink),
+            ("bandwidth_hz_downlink", self.bandwidth_hz_downlink),
+            ("gs_diameter", gs_diameter),
+        ):
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(float(value))
+                or float(value) <= 0
+            ):
+                raise ValueError(f"{name} must be positive and finite, got {value!r}")
+        if (
+            isinstance(self.rolloff_factor, bool)
+            or not isinstance(self.rolloff_factor, (int, float))
+            or not math.isfinite(float(self.rolloff_factor))
+            or float(self.rolloff_factor) <= -1.0
+        ):
+            raise ValueError(
+                "rolloff_factor must be finite and greater than -1, "
+                f"got {self.rolloff_factor!r}"
+            )
 
         sat_position = getattr(sat_node, "position", None)
         gnd_position = getattr(gnd_node, "position", None)
@@ -269,7 +296,10 @@ class LinkBudgetCalculator:
             antenna: Antenna | None = getattr(gnd_node, "antenna", None)
             if antenna is None:
                 raise ValueError("Ground station antenna is not available")
-            rx_gain_db = antenna.calculate_gain_db(self.frequency_ghz_downlink)
+            try:
+                rx_gain_db = antenna.calculate_gain_db(self.frequency_ghz_downlink)
+            except (AttributeError, TypeError, ValueError) as exc:
+                raise ValueError("Ground station antenna is not available") from exc
             g_over_t_db = rx_gain_db - linear_to_db(self.rx_tsys_k)
 
         fsl_db = calculate_free_space_loss_db(self.frequency_ghz_downlink, distance_km)

@@ -310,6 +310,12 @@ print(result.atmospheric_attenuation_db)  # float
 
 `LinkBudgetResult` exposes every intermediate value so you can inspect the budget step by step.
 
+`compute_downlink_modcod()` raises `ValueError` for non-finite or non-positive
+distance, downlink frequency, downlink bandwidth, antenna diameter or roll-off
+factor, and for missing node positions, antennas or EIRP. The
+`LinkBudgetService.compute_one_way()` wrapper returns `0` for the same invalid
+inputs instead of raising.
+
 ---
 
 ## Fallback behaviour
