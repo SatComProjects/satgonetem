@@ -3,6 +3,8 @@
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+import pytest
+
 from satgonetem.services.mixins.topology_sync import TopologySyncMixin
 
 
@@ -94,3 +96,16 @@ def test_update_simulation_deletes_before_adding_links():
         ),
     ]
     topology._update_routing_after_link_changes.assert_called_once()
+
+
+def test_step_counter_is_not_advanced_when_time_tick_raises():
+    """A failed tick must leave the loop's step counter at its prior value."""
+    topology = MagicMock()
+    topology.simulation_manager = object()
+    topology.current_time_step = 3
+    topology._update_simulation_manager_time.side_effect = RuntimeError("tick failed")
+
+    with pytest.raises(RuntimeError, match="tick failed"):
+        TopologySyncMixin.update_simulation(topology)
+
+    assert topology.current_time_step == 3
