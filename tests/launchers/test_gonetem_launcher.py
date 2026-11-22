@@ -132,11 +132,48 @@ def test_force_close_skips_docker_when_project_id_is_empty(launcher):
     channel = launcher._channel
 
     mock_run = launcher._command_runner.run
-    launcher.force_close_project()
+    assert launcher.force_close_project() is False
 
     mock_run.assert_not_called()
     client.ProjectClose.assert_not_called()
     channel.close.assert_called_once()
+
+
+def test_force_close_cleans_containers_without_a_client(launcher):
+    """A raised ProjectClose leaves no client; Docker cleanup must still run."""
+    launcher._client = None
+    launcher._request = SimpleNamespace(id="abc123")
+    ps_result = _completed(["docker", "ps"], stdout="id1\tntmabc123.Sat0\n")
+    docker_calls = []
+
+    def fake_run(command, **kwargs):
+        if command[:3] == ["docker", "ps", "-a"]:
+            return ps_result
+        docker_calls.append(command)
+        return _completed(command)
+
+    launcher._command_runner.run.side_effect = fake_run
+    connection = launcher._connection = MagicMock()
+
+    assert launcher.force_close_project() is True
+
+    assert ["docker", "stop", "-t", "0", "id1"] in docker_calls
+    assert ["docker", "rm", "id1"] in docker_calls
+    connection.close.assert_called_once()
+    assert launcher._connection is None
+    assert launcher._client is None
+
+
+def test_force_close_reports_true_when_there_is_nothing_to_clean(launcher):
+    launcher._client = None
+    launcher._request = None
+    launcher._command_runner = MagicMock()
+    connection = launcher._connection = MagicMock()
+
+    assert launcher.force_close_project() is True
+
+    launcher._command_runner.run.assert_not_called()
+    connection.close.assert_called_once()
 
 
 def test_force_close_still_closes_project_when_docker_ps_fails(launcher):
@@ -146,7 +183,7 @@ def test_force_close_still_closes_project_when_docker_ps_fails(launcher):
 
     mock_run = launcher._command_runner.run
     mock_run.return_value = ps_result
-    launcher.force_close_project()
+    assert launcher.force_close_project() is False
 
     assert mock_run.call_count == 1
     client.ProjectClose.assert_called_once_with(
@@ -231,7 +268,7 @@ def test_force_close_attempts_remove_even_when_stop_fails(launcher):
         return _completed(command)
 
     launcher._command_runner.run.side_effect = fake_run
-    launcher.force_close_project()
+    assert launcher.force_close_project() is False
 
     assert ["docker", "stop", "-t", "0", "id1"] in docker_calls
     assert ["docker", "rm", "id1"] in docker_calls

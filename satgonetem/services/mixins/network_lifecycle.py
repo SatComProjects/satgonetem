@@ -35,6 +35,13 @@ class NetworkLifecycleMixin:
         if self.get_gonetem_status():
             return None
 
+        retained_launcher = getattr(self, "launcher", None)
+        if retained_launcher is not None:
+            raise RuntimeError(
+                "A GoNetEm project is still retained from a failed stop; "
+                "call stop_gonetem() to retry before starting again."
+            )
+
         from satgonetem.launchers.registry import create_launcher
 
         launcher = create_launcher(
@@ -217,15 +224,19 @@ class NetworkLifecycleMixin:
             close_error = exc
             logging.error("Failed to close GoNetEm project during stop: %s", exc)
             force_close = getattr(launcher, "force_close_project", None)
+            fallback_succeeded = False
             if callable(force_close):
                 try:
-                    force_close()
+                    fallback_succeeded = force_close() is True
                 except Exception as force_exc:
                     logging.error(
                         "Force-close fallback failed during stop: %s", force_exc
                     )
-                    launcher_retained = True
-            else:
+            if not fallback_succeeded:
+                logging.error(
+                    "Force-close fallback did not confirm cleanup during stop; "
+                    "retaining project handles for a retry"
+                )
                 launcher_retained = True
 
         # A failed stop must not leave the manager in a state where

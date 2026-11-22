@@ -141,6 +141,21 @@ def test_retry_after_failure_opens_one_fresh_launcher():
     assert live_launchers == [fresh_launcher]
 
 
+def test_start_refuses_to_overwrite_a_retained_launcher():
+    topology = DummyTopology()
+    retained = MagicMock()
+    topology.launcher = retained
+
+    with patch(LAUNCHER_PATH) as launcher_cls:
+        with pytest.raises(RuntimeError, match="retained"):
+            topology.start_gonetem()
+
+    launcher_cls.assert_not_called()
+    assert topology.launcher is retained
+    assert topology.status is False
+    assert topology.gonetem_status is False
+
+
 def test_force_close_failure_does_not_mask_startup_error():
     topology = DummyTopology()
     launcher = make_launcher()

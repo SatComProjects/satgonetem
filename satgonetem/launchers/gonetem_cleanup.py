@@ -56,8 +56,12 @@ class GoNetEmCleanupMixin:
             return False
         return True
 
-    def _list_project_containers(self, project_id: str) -> list[str]:
-        """List Docker containers scoped to *project_id*."""
+    def _list_project_containers(self, project_id: str) -> list[str] | None:
+        """List Docker containers scoped to *project_id*.
+
+        Returns ``None`` when Docker could not be queried, so callers can
+        distinguish a failed cleanup from an empty project.
+        """
         try:
             result = self._command_runner.run(
                 ["docker", "ps", "-a", "--format", "{{.ID}}\t{{.Names}}"],
@@ -66,45 +70,65 @@ class GoNetEmCleanupMixin:
             )
         except OSError as exc:
             logging.error("GoNetEmLauncher: could not list Docker containers: %s", exc)
-            return []
+            return None
         if result.returncode != 0:
             logging.error(
                 "GoNetEmLauncher: docker ps failed (exit %s): %s",
                 result.returncode,
                 (result.stderr or "").strip(),
             )
-            return []
+            return None
         return self._parse_project_containers(result.stdout, project_id)
 
-    def force_close_project(self) -> None:
+    def force_close_project(self) -> bool:
         """Forcefully close the project without waiting for progress messages.
 
-        Only containers whose names belong to this project are stopped and
-        removed. If the project id is unavailable, container cleanup is
-        skipped rather than falling back to a host-wide match.
+        Docker cleanup only needs the project request, so it still runs after
+        a failed ``close_project()`` has already closed the gRPC transport and
+        cleared ``_client``. ``ProjectClose`` is sent only when a client is
+        still available.
+
+        Returns:
+            True when cleanup completed (or there was nothing to clean),
+            False when the project id is missing, a Docker command failed, or
+            ``ProjectClose`` raised. The caller can use this to decide whether
+            to retain project handles for a retry.
         """
-        if self._client is None or self._request is None:
-            return
-        project_id = str(getattr(self._request, "id", "") or "")
+        succeeded = True
         try:
+            request = self._request
+            if request is None:
+                return True
+
+            project_id = str(getattr(request, "id", "") or "")
             if not project_id:
                 logging.warning(
                     "GoNetEmLauncher: project id is empty; skipping Docker cleanup"
                 )
-            else:
-                container_ids = self._list_project_containers(project_id)
-                for cid in container_ids:
-                    self._run_docker_command(["docker", "stop", "-t", "0", cid])
-                for cid in container_ids:
-                    self._run_docker_command(["docker", "rm", cid])
+                return False
+
+            container_ids = self._list_project_containers(project_id)
+            if container_ids is None:
+                succeeded = False
+                container_ids = []
+            for cid in container_ids:
+                if not self._run_docker_command(["docker", "stop", "-t", "0", cid]):
+                    succeeded = False
+            for cid in container_ids:
+                if not self._run_docker_command(["docker", "rm", cid]):
+                    succeeded = False
+
+            if self._client is not None:
                 response = self._client.ProjectClose(
-                    self._request, timeout=FORCE_CLOSE_TIMEOUT_SECONDS
+                    request, timeout=FORCE_CLOSE_TIMEOUT_SECONDS
                 )
                 # ProjectClose is server-streaming: consume the stream so the
                 # server can process the request before the transport closes.
                 for _ in response:
                     pass
+            return succeeded
         except Exception as exc:
             logging.error("GoNetEmLauncher: force_close_project failed: %s", exc)
+            return False
         finally:
             self._close_transport()
