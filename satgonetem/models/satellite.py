@@ -67,18 +67,33 @@ class Satellite(Node, QoSCapableMixin):
         """
         self.addressable = status
 
-    def sync_position_from_satcom(self) -> None:
+    def sync_position_from_satcom(self, altitude_unit: str = "m") -> None:
         """
         Update the satellite's geographic position from the sat_com_model object.
 
+        Args:
+            altitude_unit: Unit of the altitude reported by
+                ``to_latitude_longitude_altitude``. ``"m"`` (default) matches
+                the movement-model contract and is converted to kilometres;
+                ``"km"`` is stored as-is.  The unit must be explicit because a
+                magnitude heuristic cannot distinguish a 50 km altitude in
+                metres from a 50,000 km altitude in kilometres.
+
         Raises:
-            ValueError: If satcom_object has not been assigned.
+            ValueError: If satcom_object has not been assigned or
+                altitude_unit is not ``"m"`` or ``"km"``.
 
         Returns:
             None
         """
         if self.satcom_object is None:
             raise ValueError("Satcom object is not set for satellite " + self.name)
+
+        unit = altitude_unit.lower()
+        if unit not in ("m", "km"):
+            raise ValueError(
+                f"Unsupported altitude_unit {altitude_unit!r}; expected 'm' or 'km'"
+            )
 
         lat, lon, alt = (
             self.satcom_object.spatial_position.to_latitude_longitude_altitude()
@@ -91,9 +106,7 @@ class Satellite(Node, QoSCapableMixin):
             return
         self.position["latitude"] = lat
         self.position["longitude"] = lon
-        self.position["altitude"] = alt / 1000
-        if self.position["altitude"] < 100:
-            self.position["altitude"] *= 1000
+        self.position["altitude"] = alt / 1000.0 if unit == "m" else float(alt)
 
     def start_net_logger(self, path: str) -> None:
         """
