@@ -304,7 +304,12 @@ def generate_iperf2_plots(
             total_retransmits = df["retransmits"].sum()
             print(f"Total Retransmits:       {total_retransmits}")
     else:
-        if summary_data:
+        # Sender-side UDP totals carry no jitter/loss columns, so a summary
+        # dict can exist with throughput only. Use it only when it actually
+        # holds the receiver statistics.
+        if summary_data and {"lost_packets", "lost_percent", "jitter_ms"}.issubset(
+            summary_data
+        ):
             loss_stats = (
                 summary_data["lost_packets"],
                 summary_data["lost_percent"],

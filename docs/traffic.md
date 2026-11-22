@@ -222,7 +222,9 @@ paths = results.plot_all(output_dir="/tmp/results")
 
 `generate_iperf2_plots()` parses saved iperf2 output and writes throughput,
 transfer-size, and cumulative plots, plus retransmit plots for TCP or
-jitter/loss plots for UDP. It also prints a summary to stdout.
+jitter/loss plots for UDP when the log carries those columns. Sender-side UDP
+logs have no jitter/loss columns, so those plots are skipped instead of
+failing. It also prints a summary to stdout.
 
 ```python
 from satgonetem.traffic.iperf2_utils import generate_iperf2_plots

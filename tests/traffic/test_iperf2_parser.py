@@ -219,6 +219,96 @@ UDP buffer size:  208 KByte (default)
     assert not any("_tcp_" in path for path in saved)
 
 
+def test_sender_udp_summary_without_loss_fields_plots(tmp_path, capsys) -> None:
+    """Sender UDP total rows carry no jitter/loss; plotting must not raise.
+
+    iperf2 prints the sender-side final total in the interval format without
+    the receiver's jitter/loss columns. It is still detected as the summary,
+    but its loss statistics do not exist.
+    """
+    log = _write_log(
+        tmp_path,
+        """\
+Client connecting to 10.0.0.2, UDP port 5001
+UDP buffer size:  208 KByte (default)
+[ ID] Interval       Transfer     Bandwidth       Total Datagrams
+[  3]  0.00-1.00  sec  1.25 MBytes  10.50 Mbits/sec  10
+[  3]  1.00-2.00  sec  1.25 MBytes  10.50 Mbits/sec  10
+[  3]  0.00-2.00  sec  2.50 MBytes  10.50 Mbits/sec  20
+""",
+    )
+
+    _protocol, rows, summary = _parse(log.read_text().splitlines())
+    saved = generate_iperf2_plots(str(log), use_tmp_dir=False)
+
+    assert len(rows) == 2
+    assert summary is not None
+    assert "lost_packets" not in summary
+    assert any("_udp_throughput.png" in path for path in saved)
+    assert not any("_udp_loss.png" in path for path in saved)
+    assert not any("_udp_jitter.png" in path for path in saved)
+    out = capsys.readouterr().out
+    assert "Total Data Transferred:" in out
+    assert "Total Lost Packets:" not in out
+
+
+def test_sender_udp_multistream_sum_row_without_loss_fields_plots(
+    tmp_path, capsys
+) -> None:
+    """A labelled ``[SUM]`` sender row also has no jitter/loss columns."""
+    log = _write_log(
+        tmp_path,
+        """\
+Client connecting to 10.0.0.2, UDP port 5001
+UDP buffer size:  208 KByte (default)
+[ ID] Interval       Transfer     Bandwidth       Total Datagrams
+[  3]  0.00-1.00  sec  0.62 MBytes   5.25 Mbits/sec   5
+[  4]  0.00-1.00  sec  0.62 MBytes   5.25 Mbits/sec   5
+[  3]  1.00-2.00  sec  0.62 MBytes   5.25 Mbits/sec   5
+[  4]  1.00-2.00  sec  0.62 MBytes   5.25 Mbits/sec   5
+[SUM]  0.00-2.00  sec  2.50 MBytes  10.50 Mbits/sec  20
+""",
+    )
+
+    _protocol, rows, summary = _parse(log.read_text().splitlines())
+    saved = generate_iperf2_plots(str(log), use_tmp_dir=False)
+
+    assert len(rows) == 4
+    assert {row["_label"] for row in rows} == {"Socket 3", "Socket 4"}
+    assert summary is not None
+    assert any("_udp_throughput.png" in path for path in saved)
+    assert not any("_udp_loss.png" in path for path in saved)
+    assert "Total Lost Packets:" not in capsys.readouterr().out
+
+
+def test_receiver_udp_summary_keeps_loss_and_jitter(tmp_path, capsys) -> None:
+    """Receiver-side rows and total carry jitter/loss and must still plot them."""
+    log = _write_log(
+        tmp_path,
+        """\
+Client connecting to 10.0.0.2, UDP port 5001
+UDP buffer size:  208 KByte (default)
+[ ID] Interval       Transfer     Bandwidth        Jitter   Lost/Total Datagrams
+[  3]  0.00-1.00  sec  1.25 MBytes  10.50 Mbits/sec  0.015 ms  0/10 (0%)
+[  3]  1.00-2.00  sec  1.25 MBytes  10.50 Mbits/sec  0.020 ms  1/10 (10%)
+[  3]  0.00-2.00  sec  2.50 MBytes  10.50 Mbits/sec  0.018 ms  1/20 (5%)
+""",
+    )
+
+    _protocol, rows, summary = _parse(log.read_text().splitlines())
+    saved = generate_iperf2_plots(str(log), use_tmp_dir=False)
+
+    assert len(rows) == 2
+    assert summary is not None
+    assert summary["lost_packets"] == 1
+    assert any("_udp_jitter.png" in path for path in saved)
+    assert any("_udp_loss.png" in path for path in saved)
+    out = capsys.readouterr().out
+    assert "Total Lost Packets:      1" in out
+    assert "Packet Loss %:           5.00%" in out
+    assert "Average Jitter:          0.02 ms" in out
+
+
 def test_bare_retr_column_is_parsed(tmp_path, capsys) -> None:
     log = _write_log(
         tmp_path,

@@ -804,7 +804,9 @@ class SRMPLSDaemon(RoutingDaemon):
             stale, changed = _route_changes(prev, route_commands, foreign_keys)
 
             if stale or changed:
-                batch_lines = [_route_delete_command(line) for line in stale] + changed
+                batch_lines = [
+                    _tolerant_route_delete_command(line) for line in stale
+                ] + changed
                 batch_cmd = "set -e; " + "; ".join(batch_lines)
                 try:
                     sat.execute_command(["sh", "-lc", batch_cmd])
@@ -947,7 +949,9 @@ class SRMPLSDaemon(RoutingDaemon):
             stale, changed = _route_changes(prev, route_commands, foreign_keys)
 
             if stale or changed:
-                batch_lines = [_route_delete_command(line) for line in stale] + changed
+                batch_lines = [
+                    _tolerant_route_delete_command(line) for line in stale
+                ] + changed
                 batch_cmd = "set -e; " + "; ".join(batch_lines)
                 try:
                     sat.execute_command(["sh", "-lc", batch_cmd])
