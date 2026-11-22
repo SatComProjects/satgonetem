@@ -354,7 +354,13 @@ class LinkOpsMixin:
             )
 
     def _execute_link_delete(self, link: Link) -> float:
-        """Delete a link's veth pair directly via nsenter+ip."""
+        """Delete a link's veth pair directly via nsenter+ip.
+
+        ``link.to_delete`` stays set until the backend confirms the deletion.
+        A failed attempt keeps the flag so local interfaces and manager state
+        are retained for the next sync instead of being forgotten while the
+        emulator still holds the veth pair.
+        """
         start = time.perf_counter()
         if self.hil_manager is not None and self.hil_manager.is_hil_link(link):
             self.hil_manager.teardown_link(link)
@@ -364,14 +370,16 @@ class LinkOpsMixin:
         if launcher is None:
             logging.warning("launcher not set, skipping link delete")
             return 0.0
+        link.to_delete = True
         try:
             launcher.delete_link(link)
-            link.to_delete = False
-            logging.debug("Deleted link %s -- %s", link.source.name, link.target.name)
         except (RuntimeError, OSError) as err:
             logging.error(
                 f"Unable to delete link {link.source.name}--{link.target.name}: {err}"
             )
+            return time.perf_counter() - start
+        link.to_delete = False
+        logging.debug("Deleted link %s -- %s", link.source.name, link.target.name)
         return time.perf_counter() - start
 
     def _execute_link_update(self, link) -> float:
@@ -492,9 +500,16 @@ class LinkOpsMixin:
         """
         Perform local link operations in parallel where thread-safe.
         """
+        # A failed backend delete leaves ``to_delete`` set on the link. Keep
+        # its interfaces and manager state intact so the next sync can retry
+        # instead of forgetting a link the emulator still holds.
+        confirmed_removals = [
+            link for link in links_to_remove if not getattr(link, "to_delete", False)
+        ]
+
         # Interface removals mutate shared node.interfaces lists. Run them
         # sequentially; concurrent scans/removals can skip entries.
-        for link in links_to_remove:
+        for link in confirmed_removals:
             self._remove_link_interfaces(link)
 
         # Thread-safe operations that can be parallelized
@@ -519,7 +534,7 @@ class LinkOpsMixin:
                     logging.error(f"Local link operation failed: {e}")
 
         # Sequential operations that require thread safety (modifying shared collections)
-        self._cleanup_removed_links_sequential(links_to_remove)
+        self._cleanup_removed_links_sequential(confirmed_removals)
 
     def _remove_link_interfaces(self, link: Link) -> None:
         """Remove interfaces from nodes for a single link."""
