@@ -767,15 +767,31 @@ class StaticRoutingDaemon(RoutingDaemon):
         Returns:
             One ``(dst_id, destination, gateway, next_hop)`` tuple per
             destination, in ``dst_array`` order.
+
+        Raises:
+            ValueError: If a reachable destination's next hop has no entry in
+                *src_ifaces* or that interface has no peer. Silently falling
+                back to an on-link route would install a route the topology
+                cannot use.
         """
         signature: list[tuple[int, str, str, int | None]] = []
         for dst in dst_array:
             next_hop = next_hops[dst.id].get(src_id)
             gateway = ""
             if next_hop is not None:
-                interface = src_ifaces.get(int(next_hop))
-                if interface is not None and interface.peer is not None:
-                    gateway = interface.peer.ipv4
+                iface_map = src_ifaces or {}
+                interface = iface_map.get(int(next_hop))
+                if interface is None:
+                    raise ValueError(
+                        f"Source {src_id} has no interface to next hop {next_hop} "
+                        f"for destination {dst.id}"
+                    )
+                if interface.peer is None:
+                    raise ValueError(
+                        f"Source {src_id} interface {interface.name!r} to next hop "
+                        f"{next_hop} for destination {dst.id} has no peer"
+                    )
+                gateway = interface.peer.ipv4
             signature.append((dst.id, loopback_ips[dst.id], gateway, next_hop))
         return signature
 
