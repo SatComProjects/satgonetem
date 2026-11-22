@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Iterable
 
 import igraph as ig
 import networkx as nx
@@ -31,6 +32,10 @@ class StaticRoutePlanner:
         # route did not move instead of rebuilding all tables from scratch.
         self._source_signatures: dict[int, list] = {}
         self._entry_cache: dict[int, dict[int, RoutingEntry]] = {}
+        # Source names whose last route install failed. Their unchanged
+        # signatures must not be served from the cache, otherwise the diff
+        # would emit zero operations and the failed install would never retry.
+        self._failed_source_names: set[str] = set()
 
     @property
     def source_signatures(self) -> dict[int, list]:
@@ -41,6 +46,10 @@ class StaticRoutePlanner:
     def entry_cache(self) -> dict[int, dict[int, RoutingEntry]]:
         """Per-source cached RoutingEntry objects from the last population."""
         return self._entry_cache
+
+    def set_failed_sources(self, names: Iterable[str]) -> None:
+        """Record the source names whose last route install failed."""
+        self._failed_source_names = set(names)
 
     def clear_reuse_cache(self) -> None:
         """Drop every cached signature and route entry."""
@@ -201,9 +210,15 @@ class StaticRoutePlanner:
 
         When the signature is unchanged the previous table is kept as both the
         previous and current table; otherwise only changed entries are rebuilt.
+        A source whose last install failed always rebuilds its table so the
+        next diff re-emits every route.
         """
         old_entries = self._entry_cache.get(src_id)
-        if signature == self._source_signatures.get(src_id) and old_entries is not None:
+        if (
+            signature == self._source_signatures.get(src_id)
+            and old_entries is not None
+            and src_name not in self._failed_source_names
+        ):
             cached_table = [
                 old_entries[dst_id] for dst_id in dst_ids if dst_id in old_entries
             ]

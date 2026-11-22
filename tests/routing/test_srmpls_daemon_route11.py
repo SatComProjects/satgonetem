@@ -14,12 +14,19 @@ from satgonetem.routing.srmpls_daemon import SRMPLSDaemon
 
 
 class _Kernel:
-    """Route table that fails like iproute2, including ``|| true`` handling."""
+    """Route table that fails like iproute2 for a present but undeletable route.
+
+    Tolerant deletes are modelled as generated: the daemon emits an existence
+    check (``route show``) followed by the delete, so an absent route is
+    skipped while any failure on a present route propagates.
+    """
 
     def __init__(self) -> None:
         self.routes: dict[tuple[str, str], str] = {}
         self.batches: list[str] = []
         self.fail_next_install = False
+        self.delete_error: Exception | None = None
+        self._delete_allowed = False
 
     def execute(self, argv: list[str]) -> str:
         assert argv[:2] == ["sh", "-lc"], argv
@@ -29,22 +36,44 @@ class _Kernel:
             command = command.strip()
             if not command or command == "set -e":
                 continue
-            if command.startswith("ip route del "):
-                self._delete(("ip", command.split()[3]), command)
-            elif command.startswith("ip -f mpls route del "):
-                self._delete(("mpls", command.split()[5]), command)
-            elif command.startswith("ip route replace "):
-                self._install(("ip", command.split()[3]), command)
-            elif command.startswith("ip -f mpls route replace "):
-                self._install(("mpls", command.split()[5]), command)
-            else:
-                raise AssertionError(f"unexpected command: {command}")
+            if command.startswith("if "):
+                self._delete_allowed = self._route_present(command[3:])
+                continue
+            if command == "fi":
+                self._delete_allowed = False
+                continue
+            if command.startswith("then "):
+                if self._delete_allowed:
+                    self._run(command[len("then ") :])
+                continue
+            self._run(command)
         return ""
 
-    def _delete(self, key: tuple[str, str], command: str) -> None:
+    def _route_present(self, condition: str) -> bool:
+        show = condition.removesuffix(" 2>&1 | grep -q .")
+        parts = show.split()
+        if parts[:5] == ["ip", "-f", "mpls", "route", "show"]:
+            return ("mpls", parts[6]) in self.routes
+        if parts[:4] == ["ip", "route", "show", "exact"]:
+            return ("ip", parts[4]) in self.routes
+        raise AssertionError(f"unexpected condition: {condition!r}")
+
+    def _run(self, command: str) -> None:
+        if command.startswith("ip route del "):
+            self._delete(("ip", command.split()[3]))
+        elif command.startswith("ip -f mpls route del "):
+            self._delete(("mpls", command.split()[5]))
+        elif command.startswith("ip route replace "):
+            self._install(("ip", command.split()[3]), command)
+        elif command.startswith("ip -f mpls route replace "):
+            self._install(("mpls", command.split()[5]), command)
+        else:
+            raise AssertionError(f"unexpected command: {command}")
+
+    def _delete(self, key: tuple[str, str]) -> None:
+        if self.delete_error is not None:
+            raise self.delete_error
         if key not in self.routes:
-            if "2>/dev/null || true" in command:
-                return
             raise RuntimeError("RTNETLINK answers: No such process")
         del self.routes[key]
 
@@ -117,7 +146,10 @@ def test_absent_stale_route_does_not_wedge_satellite_stack_pass() -> None:
     assert daemon._apply_sr_routes_to_satellites() == 0
 
     batch = sat.kernel.batches[-1]
-    assert "ip route del 10.30.0.9/32 2>/dev/null || true" in batch
+    assert (
+        "if ip route show exact 10.30.0.9/32 2>&1 | grep -q .; "
+        "then ip route del 10.30.0.9/32; fi"
+    ) in batch
     assert sat.kernel.routes[("ip", "10.30.0.1/32")] == route
     assert daemon._prev_sr_sat_routes[30] == [route]
 
@@ -133,9 +165,32 @@ def test_absent_stale_route_does_not_wedge_node_sid_pass() -> None:
     assert daemon._apply_sr_node_sids_to_satellites() == 0
 
     batch = sat.kernel.batches[-1]
-    assert "ip -f mpls route del 16009 2>/dev/null || true" in batch
+    assert (
+        "if ip -f mpls route show exact 16009 2>&1 | grep -q .; "
+        "then ip -f mpls route del 16009; fi"
+    ) in batch
     assert sat.kernel.routes[("mpls", "16030")] == own
     assert daemon._prev_sr_node_sid_routes[30] == [own]
+
+
+def test_permission_failure_on_a_present_delete_is_not_swallowed() -> None:
+    """Only an absent route is tolerated; a real delete failure must retry."""
+    sat = _Node(30, "Sat30")
+    daemon = _make_daemon([sat], sids={30: 16030})
+    stale = "ip -f mpls route replace 16009 via inet 10.0.0.9 dev Sat30.9"
+    sat.kernel.routes[("mpls", "16009")] = stale
+    daemon._prev_sr_node_sid_routes[30] = [stale]
+    sat.kernel.delete_error = PermissionError(
+        "RTNETLINK answers: Operation not permitted"
+    )
+
+    assert daemon._apply_sr_node_sids_to_satellites() == 1
+
+    # The failed delete stays cached and is retried on the next update, and
+    # the batch aborted before installing the new SID.
+    assert daemon._prev_sr_node_sid_routes[30] == [stale]
+    assert sat.kernel.routes[("mpls", "16009")] == stale
+    assert ("mpls", "16030") not in sat.kernel.routes
 
 
 def test_satellite_stack_pass_install_failure_still_aborts() -> None:

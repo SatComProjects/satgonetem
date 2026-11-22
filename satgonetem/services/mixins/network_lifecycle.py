@@ -97,6 +97,9 @@ class NetworkLifecycleMixin:
             try:
                 cleanup_confirmed = launcher.force_close_project() is True
             except Exception as cleanup_exc:
+                # An exception is not a confirmed cleanup: keep the launcher
+                # so stop_gonetem() can retry the forced close.
+                cleanup_failed = True
                 logging.error(
                     "Failed to force-close GoNetEm project after startup failure: %s",
                     cleanup_exc,

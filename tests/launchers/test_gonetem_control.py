@@ -227,6 +227,37 @@ def test_capture_interface_returns_partial_data_on_deadline():
     assert launcher.capture_interface("Sat0", 1, timeout_s=0.1) == b"pcap"
 
 
+def test_capture_interface_raises_for_empty_clean_stream():
+    launcher = _open_launcher()
+    launcher._client.NodeCapture.return_value = [
+        netem_pb2.CaptureSrvMsg(code=netem_pb2.CaptureSrvMsg.STDERR, data=b"warn"),
+        netem_pb2.CaptureSrvMsg(code=netem_pb2.CaptureSrvMsg.OK),
+    ]
+
+    with pytest.raises(RuntimeError, match="no capture data"):
+        launcher.capture_interface("Sat0", 1)
+
+
+def test_capture_interface_raises_for_truncated_clean_stream():
+    launcher = _open_launcher()
+    launcher._client.NodeCapture.return_value = [
+        netem_pb2.CaptureSrvMsg(code=netem_pb2.CaptureSrvMsg.STDOUT, data=b"pcap"),
+    ]
+
+    with pytest.raises(RuntimeError, match="without a completion marker"):
+        launcher.capture_interface("Sat0", 1)
+
+
+def test_capture_interface_accepts_complete_pcap_without_ok_marker():
+    launcher = _open_launcher()
+    pcap = b"\xd4\xc3\xb2\xa1" + b"\x00" * 20
+    launcher._client.NodeCapture.return_value = [
+        netem_pb2.CaptureSrvMsg(code=netem_pb2.CaptureSrvMsg.STDOUT, data=pcap),
+    ]
+
+    assert launcher.capture_interface("Sat0", 1) == pcap
+
+
 def test_capture_interface_raises_on_error_message():
     launcher = _open_launcher()
     launcher._client.NodeCapture.return_value = [

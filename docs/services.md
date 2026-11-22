@@ -477,7 +477,9 @@ the stop event is set.
 
 `simulate_link_failure()` accepts only sat_com link types
 `InterSatelliteLink`, `GroundStationLink`, and `UserTerminalLink`; other
-types raise `AttributeError`.
+types raise `AttributeError`. It is transactional: if a removal or the
+follow-up update fails, already-removed links are recreated in reverse order
+and a compensating topology update is attempted before the error is re-raised.
 
 ## RoutingManagerMixin
 
@@ -588,9 +590,12 @@ capability.
 | `save_snapshot(path)` | Atomic project archive snapshot |
 | `set_link_impairment(link, loss_percent=None, jitter_ms=None)` | Update loss/jitter and push a verified link update |
 
-`restart_node`, `stop_all_nodes`, and `start_all_nodes` are raw controls. A
-restarted or restarted-after-stop container returns without addresses, routes,
-or qdiscs; reapply them before resuming traffic. `capture_interface` assumes
+`restart_node`, `stop_all_nodes`, `start_all_nodes`, `set_interface_state`,
+`set_link_state` and `set_link_impairment` serialize their state/backend
+mutation with `_simulation_lock`; `stop_all_nodes` deliberately releases the
+lock while the loop thread is joined and reacquires it only for the backend
+call. A restarted or restarted-after-stop container returns without addresses,
+routes, or qdiscs; reapply them before resuming traffic. `capture_interface` assumes
 GoNetEm frames pcap bytes in `CaptureSrvMsg.STDOUT` and always applies a
 deadline. See [Network Launchers](launchers.md#backend-controls) for the
 backend-level contract and unverified server semantics.

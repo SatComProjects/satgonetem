@@ -226,6 +226,67 @@ def test_runtime_state_roundtrip_preserves_user_terminals_and_pops(
         assert ground_object.ground_object_domain.type == "ground_station"
 
 
+def test_runtime_state_roundtrip_preserves_link_impairments_and_addressability(
+    tmp_path,
+):
+    """Per-link impairment/admin/capacity-mode and addressability survive reload."""
+    project = create_empty_project(
+        simulation_name="RuntimeLinkState",
+        start_date=START_DATE.strftime("%d/%m/%Y %H:%M:%S"),
+        end_date=END_DATE.strftime("%d/%m/%Y %H:%M:%S"),
+    )
+    sim_manager = create_and_load_simulation(
+        project.model_dump(), project.simulation_name
+    )
+    create_custom_satellite(_CUSTOM_SATELLITE, sim_manager, object_id=7)
+    ground_station = create_custom_ground_station(
+        "AuditGS", 48.0, 2.0, 0.0, object_id=9
+    )
+    add_custom_ground_station(ground_station, sim_manager)
+    satellite = sim_manager.get_satellites()[0]
+    sim_manager.create_and_add_ground_station_link_connection(satellite, ground_station)
+
+    topology = TopologyManager.from_simulation_manager(sim_manager)
+    link = next(
+        candidate
+        for candidate in topology.get_links()
+        if candidate.type == "GroundStationLink"
+    )
+    link.loss = 12.5
+    link.jitter = 7
+    link.admin_up = False
+    link.use_budget = True
+    topology.get_satellites()[0].set_addressable(True)
+
+    path = tmp_path / "runtime_link_state.json"
+    topology.to_file(str(path))
+    payload = json.loads(path.read_text())
+
+    satellite_record = payload["runtime_state"]["satellites"][0]
+    link_record = payload["runtime_state"]["links"]["ground_station"][0]
+    assert satellite_record["addressable"] is True
+    assert link_record["loss"] == 12.5
+    assert link_record["jitter"] == 7
+    assert link_record["admin_up"] is False
+    assert link_record["use_budget"] is True
+
+    reloaded = TopologyManager.from_file(str(path))
+    restored_link = next(
+        candidate
+        for candidate in reloaded.get_links()
+        if candidate.type == "GroundStationLink"
+    )
+
+    assert reloaded.simulation_manager.time_manager.start_date == START_DATE
+    assert reloaded.get_satellites()[0].is_addressable() is True
+    assert restored_link.loss == 12.5
+    assert restored_link.jitter == 7
+    assert restored_link.admin_up is False
+    assert restored_link.use_budget is True
+    assert restored_link.peer_interfaces
+    assert all(not interface.is_active for interface in restored_link.peer_interfaces)
+
+
 def test_runtime_state_roundtrip_keeps_ipv6_enabled(tmp_path, runtime_topology):
     """A topology saved with IPv6 enabled reloads with the plan rebuilt."""
     path = tmp_path / "runtime_ipv6.json"

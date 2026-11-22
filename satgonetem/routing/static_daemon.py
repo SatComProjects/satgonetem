@@ -118,8 +118,8 @@ class StaticRoutingDaemon(RoutingDaemon):
         """
         self._route_planner.clear_reuse_cache()
         self._failed_nodes.clear()
-        self._populate_routing_tables()
         try:
+            self._populate_routing_tables()
             for node in list(self.topology.get_satellites()) + list(
                 self.topology.get_ground_stations()
             ):
@@ -209,6 +209,7 @@ class StaticRoutingDaemon(RoutingDaemon):
     def _populate_routing_tables(self) -> None:
         """Populate IPv4 routing tables for all ground stations and satellites."""
         self._equalize_routing_tables()
+        self._route_planner.set_failed_sources(self._failed_nodes)
         self._route_planner.populate_tables(_gc_disabled, self._load_routes_from_file)
 
     def _apply_all_routes(self, max_workers: int = 128) -> _BatchOutcome:
@@ -280,7 +281,14 @@ class StaticRoutingDaemon(RoutingDaemon):
             logging.info(f"No {label} route changes needed.")
             return _BatchOutcome()
 
-        outcome = self._install_route_batches(batches, max_workers=max_workers)
+        try:
+            outcome = self._install_route_batches(batches, max_workers=max_workers)
+        except Exception:
+            # A batch-level failure (for example the RouteInstall RPC raising
+            # before any per-node result) leaves every node in the batch
+            # uninstalled; mark them so the next update re-emits their routes.
+            self._failed_nodes.update(node.name for node in batches)
+            raise
         for node in batches:
             if node.name in outcome.error_nodes:
                 self._failed_nodes.add(node.name)

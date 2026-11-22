@@ -100,16 +100,18 @@ def test_total_bytes_prefers_receiver_then_sender_then_sum() -> None:
     assert aggregate.total_bytes == 300
 
 
-def test_udp_packets_use_receiver_pair_for_bidir() -> None:
+def test_udp_packets_use_sender_totals_for_bidir() -> None:
     summary = _summary(
         {
             "sum": {"packets": 1786},
-            "sum_received": {"packets": 1700},
-            "sum_received_bidir_reverse": {"packets": 3400},
+            "sum_received": {"packets": 1700, "lost_packets": 20},
+            "sum_received_bidir_reverse": {"packets": 3400, "lost_packets": 10},
         }
     )
 
-    assert summary.total_packets == 5100
+    # iperf3's receiver summaries count received packets; the transmitted
+    # total is received + lost (5130), which is also the loss denominator.
+    assert summary.total_packets == 5130
 
 
 def test_udp_packets_fall_back_to_sum_when_receiver_pair_is_zero() -> None:
@@ -157,16 +159,34 @@ def test_udp_losses_and_percent_recombine_for_bidir() -> None:
         }
     )
 
+    # iperf3 defines lost_percent over transmitted packets:
+    # 100 * lost / (received + lost), here 100 * 30 / 5130.
     assert summary.total_lost_packets == 30
-    assert summary.avg_loss_percent == pytest.approx(30 / 5100 * 100)
+    assert summary.total_packets == 5130
+    assert summary.avg_loss_percent == pytest.approx(30 / 5130 * 100)
 
 
-def test_udp_losses_fall_back_to_sum_without_received_packets() -> None:
+def test_all_received_packets_lost_reports_full_loss() -> None:
+    """Received == 0 does not fall back when lost packets were counted."""
     summary = _summary(
         {
             "sum": {"lost_packets": 7, "lost_percent": 1.5},
-            "sum_received": {"packets": 0, "lost_packets": 20},
-            "sum_received_bidir_reverse": {"packets": 0, "lost_packets": 10},
+            "sum_received": {"packets": 0, "lost_packets": 100},
+            "sum_received_bidir_reverse": {"packets": 0, "lost_packets": 100},
+        }
+    )
+
+    assert summary.total_lost_packets == 200
+    assert summary.total_packets == 200
+    assert summary.avg_loss_percent == pytest.approx(100.0)
+
+
+def test_udp_losses_fall_back_to_sum_when_receiver_summaries_are_empty() -> None:
+    summary = _summary(
+        {
+            "sum": {"lost_packets": 7, "lost_percent": 1.5},
+            "sum_received": {"packets": 0, "lost_packets": 0},
+            "sum_received_bidir_reverse": {"packets": 0, "lost_packets": 0},
         }
     )
 

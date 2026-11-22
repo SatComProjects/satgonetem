@@ -40,6 +40,28 @@ def _link_values(samples: list[dict[str, Any]], key: str) -> list[float]:
     return values
 
 
+def _topology_counts(sample: dict[str, Any] | None) -> dict[str, Any]:
+    if not sample:
+        return {}
+    topology = sample.get("topology")
+    return dict(topology) if isinstance(topology, dict) else {}
+
+
+def _read_run_errors(root: Path) -> list[str]:
+    path = root / "errors.json"
+    if not path.is_file():
+        return []
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return [f"errors.json could not be read: {exc}"]
+    if isinstance(payload, dict):
+        payload = payload.get("errors", [])
+    if not isinstance(payload, list):
+        return ["errors.json must contain a list of errors"]
+    return [str(item) for item in payload if item]
+
+
 def build_report(run_dir: str | Path) -> dict[str, Any]:
     """Summarize a run directory and write ``summary.json`` and ``report.md``.
 
@@ -68,26 +90,42 @@ def build_report(run_dir: str | Path) -> dict[str, Any]:
     samples = _read_jsonl(root / "metrics.jsonl")
     flows_path = root / "flows.json"
     flows: list[dict[str, Any]] = []
+    flow_read_error: str | None = None
     if flows_path.is_file():
-        payload = json.loads(flows_path.read_text(encoding="utf-8"))
-        if isinstance(payload, list):
-            flows = [item for item in payload if isinstance(item, dict)]
+        try:
+            payload = json.loads(flows_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            flow_read_error = f"flows.json could not be read: {exc}"
+        else:
+            if isinstance(payload, list):
+                flows = [item for item in payload if isinstance(item, dict)]
+            else:
+                flow_read_error = "flows.json must contain a list"
 
     tx = _link_values(samples, "tx_bps")
     rx = _link_values(samples, "rx_bps")
-    errors = sorted(
+    simulator_errors = sorted(
         {
             str(sample.get("last_error"))
             for sample in samples
             if sample.get("last_error")
         }
     )
+    run_errors = _read_run_errors(root)
+    if flow_read_error:
+        run_errors.append(flow_read_error)
     flow_errors = [flow for flow in flows if flow.get("error")]
+    first_topology = _topology_counts(samples[0] if samples else None)
+    last_topology = _topology_counts(samples[-1] if samples else None)
 
     summary: dict[str, Any] = {
         "name": manifest.get("name", root.name),
         "run_dir": str(root),
         "scenario": manifest,
+        "topology": {
+            "first": first_topology,
+            "last": last_topology,
+        },
         "metrics": {
             "samples": len(samples),
             "first_step": samples[0].get("step") if samples else None,
@@ -97,13 +135,15 @@ def build_report(run_dir: str | Path) -> dict[str, Any]:
             "avg_tx_bps": round(mean(tx), 3) if tx else 0,
             "max_rx_bps": max(rx) if rx else 0,
             "avg_rx_bps": round(mean(rx), 3) if rx else 0,
-            "last_errors": errors,
+            "last_errors": simulator_errors,
         },
         "flows": {
             "count": len(flows),
             "errors": len(flow_errors),
             "results": flows,
+            "read_error": flow_read_error,
         },
+        "errors": run_errors,
     }
 
     write_json(root / "summary.json", summary)
@@ -124,6 +164,21 @@ def _render_markdown(summary: dict[str, Any]) -> str:
     for key in ("topology", "duration_s", "tick_s", "routing", "ipv6"):
         if key in scenario:
             lines.append(f"- **{key}:** `{scenario[key]}`")
+    topology = summary.get("topology") or {}
+    first = topology.get("first") or {}
+    last = topology.get("last") or {}
+    lines.extend(
+        [
+            "",
+            "## Topology",
+            "",
+            f"- Satellites: {first.get('satellites', 0)} to "
+            f"{last.get('satellites', 0)}",
+            f"- Ground stations: {first.get('ground_stations', 0)} to "
+            f"{last.get('ground_stations', 0)}",
+            f"- Links: {first.get('links', 0)} to {last.get('links', 0)}",
+        ]
+    )
     lines.extend(
         [
             "",
@@ -144,6 +199,13 @@ def _render_markdown(summary: dict[str, Any]) -> str:
             "",
         ]
     )
+    if flows.get("read_error"):
+        lines.extend(
+            [
+                f"- **Artifact warning:** {flows['read_error']}",
+                "",
+            ]
+        )
     if flows.get("results"):
         lines.extend(["| Source | Destination | Tool | Error |", "|---|---|---|---|"])
         for flow in flows["results"]:
@@ -155,6 +217,11 @@ def _render_markdown(summary: dict[str, Any]) -> str:
                     error=flow.get("error") or "",
                 )
             )
+        lines.append("")
+    run_errors = summary.get("errors") or []
+    if run_errors:
+        lines.extend(["## Run errors", ""])
+        lines.extend(f"- `{error}`" for error in run_errors)
         lines.append("")
     errors = metrics.get("last_errors") or []
     if errors:

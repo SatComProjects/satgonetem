@@ -290,9 +290,16 @@ def add_mesh_links(
             n = len(sorted_plane)
             if n < 2:
                 continue
+            seen_edges: set[frozenset[object]] = set()
             for i in range(n):
                 sat_a = sorted_plane[i][0]
                 sat_b = sorted_plane[(i + 1) % n][0]
+                edge = frozenset((sat_a, sat_b))
+                if edge in seen_edges:
+                    # A two-satellite "ring" wraps back onto the same pair;
+                    # do not emit the reverse ISL as a second link.
+                    continue
+                seen_edges.add(edge)
                 link = (
                     simulation_manager.create_and_add_inter_satellite_link_connection(
                         sat_a, sat_b

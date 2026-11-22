@@ -513,7 +513,7 @@ class HILManager:
 
     def _apply_qos(
         self, sat_name: str, sat_pid: int, gnd_id: int, delay_ms: int, rate_kbps: int
-    ) -> None:
+    ) -> bool:
         """
         Apply netem+TBF qdiscs to the SAT-side interface of a HIL link.
 
@@ -527,12 +527,16 @@ class HILManager:
                 SAT-side interface name (eth{gnd_id}).
             delay_ms: Propagation delay in milliseconds.
             rate_kbps: Link capacity in kbps.
+
+        Returns:
+            True when every requested qdisc/txqueuelen command succeeded.
         """
         sat_iface = f"eth{gnd_id}"
         delay_ms = max(delay_ms, 1)
         rate_mbit = max(rate_kbps / 1000, 0.001)
         burst_bytes = max(rate_kbps * delay_ms // 8, 1500)
         netem_limit = f" limit {self._netem_limit}" if self._netem_limit > 0 else ""
+        success = True
 
         if self._txqueuelen > 0:
             try:
@@ -542,6 +546,7 @@ class HILManager:
                     runner=self._command_runner,
                 )
             except RuntimeError as exc:
+                success = False
                 logging.warning(
                     "HIL: txqueuelen setup failed on %s in %s: %s",
                     sat_iface,
@@ -561,11 +566,14 @@ class HILManager:
                 runner=self._command_runner,
             )
         except RuntimeError as exc:
+            success = False
             logging.warning(
                 "HIL: qdisc setup failed on %s in %s: %s", sat_iface, sat_name, exc
             )
 
-    def _teardown_bridge(self, gnd_name: str) -> None:
+        return success
+
+    def _teardown_bridge(self, gnd_name: str) -> bool:
         """
         Delete the Linux bridge for a HIL ground station.
 
@@ -576,12 +584,15 @@ class HILManager:
 
         Args:
             gnd_name: Ground station node name (e.g. "Gnd0").
+
+        Returns:
+            True when the bridge is gone (or was never tracked).
         """
         br_name = self._hil_bridges.get(gnd_name)
 
         if not br_name:
             self._hil_veths.pop(gnd_name, None)
-            return
+            return True
 
         try:
             with IPRoute() as ipr:
@@ -592,12 +603,13 @@ class HILManager:
         except Exception as exc:
             # Keep the tracking entry: a failed delete must be retryable.
             logging.error("HIL: failed to teardown bridge %s: %s", br_name, exc)
-            return
+            return False
 
         self._hil_bridges.pop(gnd_name, None)
         self._hil_veths.pop(gnd_name, None)
+        return True
 
-    def _delete_sat_veth(self, sat_name: str, sat_pid: int, gnd_id: int) -> None:
+    def _delete_sat_veth(self, sat_name: str, sat_pid: int, gnd_id: int) -> bool:
         """
         Delete the SAT-side veth interface.
 
@@ -608,6 +620,9 @@ class HILManager:
             sat_name: Satellite node name, used for logging.
             sat_pid: Kernel PID of the satellite container process.
             gnd_id: Numeric ID of the ground station node.
+
+        Returns:
+            True when the SAT-side veth was deleted.
         """
         sat_iface = f"eth{gnd_id}"
         r = self._command_runner.run(
@@ -630,10 +645,11 @@ class HILManager:
                 sat_name,
                 r.stderr.strip(),
             )
-        else:
-            logging.debug("HIL: deleted veth %s in %s", sat_iface, sat_name)
+            return False
+        logging.debug("HIL: deleted veth %s in %s", sat_iface, sat_name)
+        return True
 
-    def setup_link(self, link) -> None:
+    def setup_link(self, link) -> bool:
         """
         Set up a HIL link: create veth, bridge, and SAT-side qdiscs.
 
@@ -647,6 +663,10 @@ class HILManager:
         Args:
             link: A GroundStationLink whose ground station endpoint is
                 listed in gnd_hardware_map.
+
+        Returns:
+            True only when the veth, bridge and SAT-side QoS are all in place.
+            Callers must keep the link pending when this returns False.
         """
         gnd = self._get_hil_gnd(link)
         sat = self._get_sat(link)
@@ -658,21 +678,28 @@ class HILManager:
                 sat.name,
                 gnd.name,
             )
-            return
+            return False
 
         if not self._create_veth(sat.name, sat_pid, gnd.id):
-            return
+            return False
         if not self._create_bridge(gnd.name, gnd.id):
             # The bridge failed; remove the veth pair created above rather
             # than leaking it until container teardown.
             self._delete_sat_veth(sat.name, sat_pid, gnd.id)
-            return
+            return False
 
         delay_ms = max(int(link.delay), 1)
         rate_kbps = self._link_capacity_kbps(link)
-        self._apply_qos(sat.name, sat_pid, gnd.id, delay_ms, rate_kbps)
+        if not self._apply_qos(sat.name, sat_pid, gnd.id, delay_ms, rate_kbps):
+            # A partially configured QoS path is not a working link. Tear the
+            # pair and bridge down so a retry does not hit EEXIST, and report
+            # failure so the caller keeps the link pending.
+            self._teardown_bridge(gnd.name)
+            self._delete_sat_veth(sat.name, sat_pid, gnd.id)
+            return False
+        return True
 
-    def teardown_link(self, link) -> None:
+    def teardown_link(self, link) -> bool:
         """
         Tear down a HIL link: delete bridge and SAT-side veth.
 
@@ -683,12 +710,19 @@ class HILManager:
         Args:
             link: A GroundStationLink whose ground station endpoint is
                 listed in gnd_hardware_map.
+
+        Returns:
+            True only when the bridge and SAT-side veth are both gone.
         """
         gnd = self._get_hil_gnd(link)
         sat = self._get_sat(link)
         sat_pid = self._resolve_sat_pid(sat)
 
-        self._teardown_bridge(gnd.name)
+        if not self._teardown_bridge(gnd.name):
+            # Keep the veth pair intact: deleting it would leave the tracked
+            # bridge pointing at a vanished host-side peer and make the next
+            # handover fail with EEXIST.
+            return False
 
         if not sat_pid:
             logging.error(
@@ -696,11 +730,11 @@ class HILManager:
                 sat.name,
                 gnd.name,
             )
-            return
+            return False
 
-        self._delete_sat_veth(sat.name, sat_pid, gnd.id)
+        return self._delete_sat_veth(sat.name, sat_pid, gnd.id)
 
-    def update_link(self, link) -> None:
+    def update_link(self, link) -> bool:
         """
         Update SAT-side QoS for a HIL link.
 
@@ -710,6 +744,10 @@ class HILManager:
 
         Args:
             link: A GroundStationLink with updated delay and capacity values.
+
+        Returns:
+            True when the SAT-side qdiscs were updated. Callers keep the link
+            pending on False so the transient failure is retried.
         """
         gnd = self._get_hil_gnd(link)
         sat = self._get_sat(link)
@@ -722,7 +760,7 @@ class HILManager:
                 sat.name,
                 sat_iface,
             )
-            return
+            return False
 
         delay_ms = max(int(link.delay), 1)
         rate_kbps = self._link_capacity_kbps(link)
@@ -755,6 +793,8 @@ class HILManager:
                 sat_pid,
                 exc,
             )
+            return False
+        return True
 
     def wire_links(self, links: list) -> None:
         """
@@ -765,9 +805,17 @@ class HILManager:
 
         Args:
             links: HIL GroundStationLink objects that are currently active.
+
+        Raises:
+            RuntimeError: If any link cannot be fully set up, so a failed
+                initial wiring is not reported as a successful start.
         """
         for link in links:
-            self.setup_link(link)
+            if not self.setup_link(link):
+                raise RuntimeError(
+                    "HIL: failed to set up link "
+                    f"{link.source.name}<->{link.target.name}"
+                )
 
     def teardown_all(self) -> None:
         """

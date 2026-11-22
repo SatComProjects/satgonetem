@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import subprocess
 
 import pytest
 
@@ -92,8 +93,61 @@ def test_enable_mpls_executes_joined_command():
     enable_mpls(node, load_modules=False)
 
     assert len(node.commands) == 1
+    assert node.commands[0].startswith("set -e; ")
     assert "net.mpls.platform_labels" in node.commands[0]
     assert "modprobe" not in node.commands[0]
+    assert "sysctl -w net.mpls.conf.eth1.input=1 && " in node.commands[0]
+    assert " && sysctl -w net.mpls.conf.eth2.input=1" in node.commands[0]
+
+
+def test_enable_mpls_fails_when_one_interface_sysctl_fails(tmp_path):
+    """A per-interface sysctl failure must not be hidden by later commands."""
+    node = _node_with_ips()
+    enable_mpls(node, load_modules=False)
+    command = node.commands[0]
+
+    sysctl = tmp_path / "sysctl"
+    sysctl.write_text(
+        "#!/bin/sh\n"
+        'case "$*" in\n'
+        "  *net.mpls.conf.eth2.input*)\n"
+        "    echo 'sysctl: permission denied' >&2\n"
+        "    exit 1\n"
+        "    ;;\n"
+        "esac\n"
+        "exit 0\n"
+    )
+    sysctl.chmod(0o755)
+
+    result = subprocess.run(
+        ["/bin/sh", "-c", command],
+        env={"PATH": str(tmp_path)},
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "permission denied" in result.stderr
+
+
+def test_enable_mpls_keeps_modprobe_tolerance(tmp_path):
+    """Loading modules is best-effort; the sysctl batch still runs and succeeds."""
+    node = _node_with_ips()
+    enable_mpls(node, load_modules=True)
+    command = node.commands[0]
+
+    sysctl = tmp_path / "sysctl"
+    sysctl.write_text("#!/bin/sh\nexit 0\n")
+    sysctl.chmod(0o755)
+
+    result = subprocess.run(
+        ["/bin/sh", "-c", command],
+        env={"PATH": str(tmp_path)},
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0
 
 
 @pytest.mark.parametrize(

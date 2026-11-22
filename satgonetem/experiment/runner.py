@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
+import os
+import tempfile
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -24,6 +27,23 @@ from satgonetem.telemetry import (
 from .scenario import EventSpec, Scenario, TrafficSpec
 
 __all__ = ["ExperimentRunner", "RunResult"]
+
+
+def _write_text_atomic(path: str | Path, text: str) -> Path:
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary = tempfile.mkstemp(
+        prefix=f".{target.name}.", dir=str(target.parent)
+    )
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(text)
+        os.replace(temporary, target)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(temporary)
+        raise
+    return target
 
 
 @dataclass
@@ -252,6 +272,10 @@ class ExperimentRunner:
             )
         )
 
+    def _record_error(self, message: str) -> None:
+        logging.error(message)
+        self._errors.append(message)
+
     def _collect_flows(self, timeout_s: float = 300.0) -> list[dict[str, Any]]:
         collected: list[dict[str, Any]] = []
         for flow in self._flows:
@@ -263,14 +287,22 @@ class ExperimentRunner:
                 "tool": type(flow).__name__,
                 "error": None,
             }
+            stop = getattr(flow, "stop", None)
+            stopped = False
+
+            def stop_flow(stop: Any = stop) -> None:
+                nonlocal stopped
+                if stopped or not callable(stop):
+                    return
+                stopped = True
+                stop()
+
             try:
                 join = getattr(flow, "join", None)
                 if callable(join):
                     join(timeout=timeout_s)
                 if getattr(flow, "is_alive", lambda: False)():
-                    stop = getattr(flow, "stop", None)
-                    if callable(stop):
-                        stop()
+                    stop_flow()
                     entry["error"] = "flow did not finish before the timeout"
                 else:
                     result = flow.results()
@@ -278,8 +310,19 @@ class ExperimentRunner:
                     entry["result"] = to_json() if callable(to_json) else repr(result)
             except Exception as exc:  # noqa: BLE001 - one flow must not abort
                 entry["error"] = str(exc)
+            finally:
+                # A failed join still leaves a command/thread that must be
+                # stopped before the backend goes away.
+                if entry["error"] is not None:
+                    try:
+                        stop_flow()
+                    except Exception as exc:  # noqa: BLE001 - record and continue
+                        stop_error = f"stopping flow failed: {exc}"
+                        logging.warning(stop_error)
+                        entry["stop_error"] = stop_error
+                        entry["error"] = f"{entry['error']}; {stop_error}"
             if entry["error"]:
-                self._errors.append(
+                self._record_error(
                     f"flow {entry['source']}->{entry['destination']}: {entry['error']}"
                 )
             collected.append(entry)
@@ -288,16 +331,77 @@ class ExperimentRunner:
     def _stop_backend(self, topology: Any) -> None:
         if not self._started_backend:
             return
+        self._started_backend = False
         try:
             stop = getattr(topology, "stop", None)
             if callable(stop):
                 stop()
         except Exception as exc:  # noqa: BLE001 - best-effort cleanup
-            logging.warning("Stopping the simulation loop failed: %s", exc)
+            message = f"stopping the simulation loop failed: {exc}"
+            logging.warning(message)
+            self._errors.append(message)
         try:
             topology.stop_gonetem()
         except Exception as exc:  # noqa: BLE001 - preserve primary error
-            logging.warning("Stopping GoNetEm failed: %s", exc)
+            message = f"stopping GoNetEm failed: {exc}"
+            logging.warning(message)
+            self._errors.append(message)
+
+    def _sample(
+        self,
+        collector: Any,
+        writer: JsonlMetricsWriter,
+        samples: list[dict[str, Any]],
+    ) -> None:
+        try:
+            sample = collector.sample()
+        except Exception as exc:  # noqa: BLE001 - sampling must not lose artifacts
+            self._record_error(f"metrics sampling failed: {exc}")
+            return
+        samples.append(sample)
+        writer.write(sample)
+
+    def _finalize_run(
+        self,
+        run_dir: Path,
+        topology: Any,
+        live: bool,
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        try:
+            flows = self._collect_flows()
+        except Exception as exc:  # noqa: BLE001 - artifacts must still be written
+            self._record_error(f"collecting flow results failed: {exc}")
+            flows = []
+        try:
+            write_json(run_dir / "flows.json", flows)
+        except Exception as exc:  # noqa: BLE001 - report what can be written
+            self._record_error(f"writing flows.json failed: {exc}")
+        if live and self.scenario.connectivity:
+            try:
+                matrix = topology.connectivity_matrix()
+                write_json(run_dir / "connectivity.json", matrix.to_dict())
+            except Exception as exc:  # noqa: BLE001 - report and continue
+                self._record_error(f"connectivity matrix failed: {exc}")
+        self._stop_backend(topology)
+        try:
+            write_json(run_dir / "errors.json", self._errors)
+        except Exception as exc:  # noqa: BLE001 - report cannot always be written
+            logging.error("Writing errors.json failed: %s", exc)
+        try:
+            summary = build_report(run_dir)
+        except Exception as exc:  # noqa: BLE001 - keep the run result useful
+            message = f"building the run report failed: {exc}"
+            logging.error(message)
+            self._errors.append(message)
+            summary = {
+                "errors": list(self._errors),
+                "flows": {
+                    "count": len(flows),
+                    "errors": len([flow for flow in flows if flow.get("error")]),
+                    "results": flows,
+                },
+            }
+        return flows, summary
 
     # ------------------------------------------------------------------
     # Main entry point
@@ -326,19 +430,41 @@ class ExperimentRunner:
         """
         if realtime is None:
             realtime = bool(live and self.scenario.traffic)
+
+        # A runner instance may be reused; per-run state must not leak into
+        # the next run.
+        self._events = self._expand_events(self.scenario.events)
+        self._event_index = 0
+        self._started_traffic.clear()
+        self._flows = []
+        self._errors = []
+        self._started_backend = False
+
         run_dir = self._output_dir(output_dir)
         manifest = self.scenario.to_dict()
+        topology_value = manifest.get("topology")
+        if topology_value:
+            topology_path = Path(str(topology_value))
+            if not topology_path.is_absolute():
+                topology_path = (Path(self.scenario.base_dir) / topology_path).resolve()
+            manifest["topology"] = str(topology_path)
         manifest["run_dir"] = str(run_dir)
         manifest["started_at"] = self._now().isoformat()
-        (run_dir / "manifest.yaml").write_text(
-            yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8"
+        _write_text_atomic(
+            run_dir / "manifest.yaml",
+            yaml.safe_dump(manifest, sort_keys=False),
         )
 
         if dry_run:
             (run_dir / "metrics.jsonl").write_text("", encoding="utf-8")
             write_json(run_dir / "flows.json", [])
+            write_json(run_dir / "errors.json", self._errors)
             summary = build_report(run_dir)
-            return RunResult(run_dir=run_dir, summary=summary, errors=[])
+            return RunResult(
+                run_dir=run_dir,
+                summary=summary,
+                errors=list(self._errors),
+            )
 
         topology = self._load_topology()
         topology.update_time = self.scenario.tick_s
@@ -362,9 +488,7 @@ class ExperimentRunner:
                         )
 
             with JsonlMetricsWriter(run_dir / "metrics.jsonl") as writer:
-                sample = collector.sample()
-                samples.append(sample)
-                writer.write(sample)
+                self._sample(collector, writer, samples)
                 last_sample_s = 0.0
 
                 self._start_traffic(topology, 0.0, live)
@@ -384,30 +508,17 @@ class ExperimentRunner:
                         self._apply_events(topology, sim_s)
                     self._start_traffic(topology, sim_s, live)
                     if sim_s - last_sample_s >= self.scenario.metrics_interval_s:
-                        sample = collector.sample()
-                        samples.append(sample)
-                        writer.write(sample)
+                        self._sample(collector, writer, samples)
                         last_sample_s = sim_s
                     if realtime:
                         target = t0 + steps * self.scenario.tick_s
                         delay = target - time.monotonic()
                         if delay > 0:
                             time.sleep(delay)
+        except Exception as exc:  # noqa: BLE001 - finalize artifacts first
+            self._record_error(f"simulation failed: {exc}")
 
-            flows = self._collect_flows()
-            write_json(run_dir / "flows.json", flows)
-            if live and self.scenario.connectivity:
-                try:
-                    matrix = topology.connectivity_matrix()
-                    write_json(run_dir / "connectivity.json", matrix.to_dict())
-                except Exception as exc:  # noqa: BLE001 - report and continue
-                    message = f"connectivity matrix failed: {exc}"
-                    logging.error(message)
-                    self._errors.append(message)
-        finally:
-            self._stop_backend(topology)
-
-        summary = build_report(run_dir)
+        flows, summary = self._finalize_run(run_dir, topology, live)
         return RunResult(
             run_dir=run_dir,
             summary=summary,

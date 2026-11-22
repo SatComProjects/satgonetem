@@ -385,6 +385,110 @@ def test_build_interfaces_syncs_batched_address_commands_when_running(
     )
 
 
+def test_build_interfaces_rolls_back_when_address_push_fails(
+    manager: _InterfaceMgrHost,
+) -> None:
+    satellite_0 = manager.add_satellite("Sat0")
+    satellite_1 = manager.add_satellite("Sat1")
+    satellite_0.set_ipv4_to_containers = MagicMock(
+        side_effect=RuntimeError("transport down")
+    )
+    satellite_1.set_ipv4_to_containers = MagicMock()
+    manager.status = True
+    manager._initialize_address_plan()
+    link = manager.add_link(satellite_0, satellite_1)
+    key = frozenset((satellite_0.name, satellite_1.name))
+
+    with pytest.raises(RuntimeError, match="transport down"):
+        manager._build_interfaces_from_link(link)
+
+    # A failed push must look like any other construction failure: no local
+    # interfaces, no occupied link slot, and no version bump.
+    assert link.peer_interfaces == []
+    assert manager.interfaces == []
+    assert satellite_0.interfaces == []
+    assert satellite_1.interfaces == []
+    assert manager.interface_version == 0
+    assert manager.address_plan.link_address(key) is None
+
+    # A retry rebuilds the interfaces and pushes both sides.
+    satellite_0.set_ipv4_to_containers = MagicMock()
+    manager._build_interfaces_from_link(link)
+
+    assert len(link.peer_interfaces) == 2
+    satellite_0.set_ipv4_to_containers.assert_called_once()
+    satellite_1.set_ipv4_to_containers.assert_called_once()
+    assert manager.address_plan.link_address(key) is not None
+
+
+def test_add_link_interfaces_retries_push_and_only_then_clears_to_add(
+    manager: _InterfaceMgrHost,
+) -> None:
+    satellite_0 = manager.add_satellite("Sat0")
+    satellite_1 = manager.add_satellite("Sat1")
+    manager.status = True
+    manager._initialize_address_plan()
+    link = manager.add_link(satellite_0, satellite_1)
+    link.to_add = True
+    push_v4 = MagicMock(side_effect=RuntimeError("transport down"))
+    satellite_0.set_ipv4_to_containers = push_v4
+    satellite_1.set_ipv4_to_containers = MagicMock()
+
+    manager._add_link_interfaces(link)
+
+    assert link.to_add is True
+    assert link.peer_interfaces == []
+    assert manager.interfaces == []
+
+    satellite_0.set_ipv4_to_containers = MagicMock()
+    manager._add_link_interfaces(link)
+
+    assert link.to_add is False
+    assert len(link.peer_interfaces) == 2
+    satellite_0.set_ipv4_to_containers.assert_called_once()
+    satellite_1.set_ipv4_to_containers.assert_called_once()
+
+
+def test_build_interfaces_rolls_back_when_ipv6_push_fails(
+    manager: _InterfaceMgrHost,
+) -> None:
+    satellite_0 = manager.add_satellite("Sat0")
+    satellite_1 = manager.add_satellite("Sat1")
+    manager.ipv6_enabled = True
+    manager.ipv6_ground_station_pool = "fd00:1::/40"
+    manager.ipv6_satellite_pool = "fd00:2::/40"
+    manager.ipv6_user_terminal_pool = "fd00:3::/40"
+    manager.ipv6_ground_station_prefix_len = 64
+    manager.ipv6_satellite_prefix_len = 64
+    manager.ipv6_user_terminal_prefix_len = 64
+    satellite_0.set_ipv4_to_containers = MagicMock()
+    satellite_1.set_ipv4_to_containers = MagicMock()
+    satellite_0.set_ipv6_to_containers = MagicMock(
+        side_effect=RuntimeError("v6 transport down")
+    )
+    satellite_1.set_ipv6_to_containers = MagicMock()
+    manager.status = True
+    manager._initialize_address_plan()
+    link = manager.add_link(satellite_0, satellite_1)
+    key = frozenset((satellite_0.name, satellite_1.name))
+
+    with pytest.raises(RuntimeError, match="v6 transport down"):
+        manager._build_interfaces_from_link(link)
+
+    assert link.peer_interfaces == []
+    assert manager.interfaces == []
+    assert manager.interface_version == 0
+    assert manager.address_plan.link_address(key) is None
+    assert manager.address_plan_v6.link_address(key) is None
+
+    satellite_0.set_ipv6_to_containers = MagicMock()
+    manager._build_interfaces_from_link(link)
+
+    assert len(link.peer_interfaces) == 2
+    satellite_0.set_ipv6_to_containers.assert_called_once()
+    satellite_1.set_ipv6_to_containers.assert_called_once()
+
+
 # ----------------------------------------------------------------------
 # Bulk address push
 # ----------------------------------------------------------------------

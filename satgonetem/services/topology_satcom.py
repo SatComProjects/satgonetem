@@ -59,6 +59,7 @@ from satgonetem.services.topology_graph import (
 )
 from satgonetem.services.topology_persistence import (
     RUNTIME_DATE_FORMAT,
+    apply_runtime_state,
     ground_file_restore_path,
     restore_runtime_state,
     restore_simulation_property,
@@ -228,7 +229,9 @@ class TopologyManager(
             A fully initialised TopologyManager.
         """
         sim_manager = restore_runtime_state(runtime_state, network_config)
-        return cls.from_simulation_manager(sim_manager, network_config)
+        instance = cls.from_simulation_manager(sim_manager, network_config)
+        apply_runtime_state(instance, runtime_state)
+        return instance
 
     @classmethod
     def from_file(
@@ -572,7 +575,7 @@ class TopologyManager(
         nodes: list[Any] | None = None,
         *,
         max_workers: int = 128,
-        max_pairs: int = 10_000,
+        max_pairs: int | None = 10_000,
         config: Any = None,
     ) -> Any:
         """Ping every ordered pair and return a typed matrix.
@@ -580,9 +583,12 @@ class TopologyManager(
         Args:
             nodes: Nodes to test. Defaults to every ground station plus every
                 addressable satellite, matching :meth:`test_connectivity`.
+                Duplicate node names are ignored before the pair count is
+                checked and before any flow is scheduled.
             max_workers: Maximum concurrent ping flows.
             max_pairs: Safety bound for the all-pairs expansion. Raise before
-                scheduling when ``len(nodes) * (len(nodes) - 1)`` exceeds it.
+                scheduling when the deduplicated pair count exceeds it. Pass
+                ``None`` to disable the bound.
             config: Optional ``PingConfig``; the connectivity helper supplies
                 a fast ten-ping default when omitted.
 
@@ -599,8 +605,20 @@ class TopologyManager(
         else:
             nodes = list(nodes)
 
-        pair_count = len(nodes) * (len(nodes) - 1)
-        if pair_count > max_pairs:
+        # Deduplicate before counting: the builder ignores repeated names, so
+        # counting raw entries could reject a topology that schedules no extra
+        # pairs (and >100 unique nodes is a supported legacy topology).
+        unique_nodes = []
+        seen: set[str] = set()
+        for node in nodes:
+            name = str(getattr(node, "name", node))
+            if name in seen:
+                continue
+            seen.add(name)
+            unique_nodes.append(node)
+
+        pair_count = len(unique_nodes) * (len(unique_nodes) - 1)
+        if max_pairs is not None and pair_count > max_pairs:
             raise ValueError(
                 f"Connectivity matrix would schedule {pair_count} pairs, "
                 f"exceeding max_pairs={max_pairs}; pass an explicit node subset "
@@ -608,19 +626,29 @@ class TopologyManager(
             )
 
         return build_connectivity_matrix(
-            nodes,
+            unique_nodes,
             config=config,
             max_workers=max_workers,
         )
 
-    def test_connectivity(self, max_workers: int = 128) -> dict:
+    def test_connectivity(
+        self,
+        max_workers: int = 128,
+        *,
+        max_pairs: int | None = None,
+    ) -> dict:
         """Ping every ground station and addressable satellite and print a summary.
 
-        Kept for compatibility with the original convenience helper. The full
-        typed result is available from :meth:`connectivity_matrix` and is also
-        returned here as a dictionary.
+        Kept for compatibility with the original convenience helper. The legacy
+        API accepted any number of nodes, so the default is unbounded; pass
+        ``max_pairs`` to opt into the :meth:`connectivity_matrix` safety bound.
+        The full typed result is available from :meth:`connectivity_matrix` and
+        is also returned here as a dictionary.
         """
-        matrix = self.connectivity_matrix(max_workers=max_workers)
+        matrix = self.connectivity_matrix(
+            max_workers=max_workers,
+            max_pairs=max_pairs,
+        )
         matrix.print_summary()
         return matrix.to_dict()
 

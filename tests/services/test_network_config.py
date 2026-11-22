@@ -1,6 +1,7 @@
 """Tests for the link queue-length settings of NetworkConfig."""
 
 import json
+import math
 from dataclasses import fields
 from pathlib import Path
 
@@ -83,8 +84,54 @@ class TestUpdateTime:
         with pytest.raises(ValueError, match="update_time"):
             NetworkConfig(update_time=value)
 
+    @pytest.mark.parametrize("value", [math.nan, math.inf, -math.inf])
+    def test_rejects_non_finite_update_time(self, value):
+        with pytest.raises(ValueError, match="update_time"):
+            NetworkConfig(update_time=value)
+
+    @pytest.mark.parametrize("value", ["5", None, True])
+    def test_rejects_non_numeric_update_time(self, value):
+        with pytest.raises(TypeError, match="update_time"):
+            NetworkConfig(update_time=value)
+
     def test_accepts_positive_update_time(self):
         assert NetworkConfig(update_time=1).update_time == 1
+
+
+class TestIpv4AddressingConfig:
+    """IPv4 pools and prefix lengths are validated at construction time."""
+
+    def test_defaults_form_a_valid_plan(self):
+        config = NetworkConfig()
+
+        assert config.ground_station_pool == "10.0.0.0/10"
+        assert config.satellite_pool == "10.128.0.0/9"
+        assert config.user_terminal_pool == "10.64.0.0/10"
+
+    def test_from_mapping_rejects_globally_routable_pool(self):
+        # ``run --dry-run`` parses scenarios without building a topology; the
+        # invalid pool must still be rejected here.
+        with pytest.raises(AddressPlanConfigurationError, match="globally routable"):
+            NetworkConfig.from_mapping({"satellite_pool": "8.8.8.0/24"})
+
+    def test_rejects_pool_with_host_bits(self):
+        with pytest.raises(AddressPlanConfigurationError, match="host bits"):
+            NetworkConfig(satellite_pool="10.128.0.1/9")
+
+    def test_rejects_prefix_length_that_does_not_fit_the_pool(self):
+        with pytest.raises(AddressPlanConfigurationError, match="does not fit"):
+            NetworkConfig(satellite_prefix_len=9)
+
+    def test_rejects_overlapping_pools(self):
+        with pytest.raises(AddressPlanConfigurationError, match="overlaps"):
+            NetworkConfig(
+                ground_station_pool="10.128.0.0/10",
+                satellite_pool="10.128.0.0/9",
+            )
+
+    def test_rejects_ipv6_pool_for_ipv4_addressing(self):
+        with pytest.raises(AddressPlanConfigurationError):
+            NetworkConfig(user_terminal_pool="fd00:3::/40")
 
 
 class TestApplyNetworkConfig:

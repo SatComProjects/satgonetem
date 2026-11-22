@@ -251,10 +251,12 @@ class TestUdpBidirAggregation:
 
         assert res.total_bytes == 7_200_000
 
-    def test_total_packets_aggregates_both_receivers(self):
+    def test_total_packets_counts_transmitted_packets_across_both_receivers(self):
         res = _udp_bidir_results()
 
-        assert res.total_packets == 5100
+        # Received packets (1700 + 3400) plus lost packets (20 + 10): iperf3
+        # counts transmitted packets, which is also the loss denominator.
+        assert res.total_packets == 5130
 
     def test_total_lost_packets_aggregates_both_receivers(self):
         res = _udp_bidir_results()
@@ -264,8 +266,12 @@ class TestUdpBidirAggregation:
     def test_avg_loss_percent_is_recombined_from_both_directions(self):
         res = _udp_bidir_results()
 
-        # 30 lost out of 5100 received, not 1.16 % + 0.29 %.
-        assert res.avg_loss_percent == pytest.approx(30 / 5100 * 100)
+        # iperf3 defines loss over transmitted packets: 30 lost out of
+        # 5100 received + 30 lost, not 1.16 % + 0.29 % and not 30 / 5100.
+        assert res.avg_loss_percent == pytest.approx(30 / 5130 * 100)
+        assert res.avg_loss_percent == pytest.approx(
+            100 * res.total_lost_packets / res.total_packets
+        )
 
     def test_avg_jitter_is_packet_weighted_across_directions(self):
         res = _udp_bidir_results()

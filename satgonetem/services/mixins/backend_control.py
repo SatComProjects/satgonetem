@@ -26,6 +26,7 @@ import grpc
 
 from satgonetem.models.link import validate_admin_up, validate_jitter, validate_loss
 from satgonetem.proto import netem_pb2
+from satgonetem.services.mixins.simulation_loop import ensure_simulation_lock
 
 if TYPE_CHECKING:
     from satgonetem.models.interface import Interface
@@ -190,13 +191,14 @@ class BackendControlMixin:
         back without addresses, routes, or qdiscs, so the caller must reapply
         them before traffic flows again.
         """
-        restart = self._control_backend("restart_node")
-        node = self._find_node(node_name)
-        try:
-            restart(node_name)
-        finally:
-            node.container = None
-            node.container_pid = None
+        with ensure_simulation_lock(self):
+            restart = self._control_backend("restart_node")
+            node = self._find_node(node_name)
+            try:
+                restart(node_name)
+            finally:
+                node.container = None
+                node.container_pid = None
 
     def stop_all_nodes(self) -> None:
         """Stop the simulation loop, then stop every node container.
@@ -211,15 +213,19 @@ class BackendControlMixin:
             if stop_loop is None:
                 raise RuntimeError("Simulation loop is running but cannot be stopped")
             stop_loop()
-        stop_backend()
+        # The loop has already joined; serialize the backend call itself
+        # without holding the lock across stop()/join().
+        with ensure_simulation_lock(self):
+            stop_backend()
 
     def start_all_nodes(self) -> None:
         """Start every node container.
 
         Addresses, routes, and qdiscs must be reapplied afterwards.
         """
-        start_backend = self._control_backend("start_all_nodes")
-        start_backend()
+        with ensure_simulation_lock(self):
+            start_backend = self._control_backend("start_all_nodes")
+            start_backend()
 
     # ------------------------------------------------------------------
     # Interface and link state
@@ -235,11 +241,12 @@ class BackendControlMixin:
         """
         if not isinstance(up, bool):
             raise TypeError(f"set_interface_state up must be a bool, got {up!r}")
-        node = self._find_node(node_name)
-        resolved = self._resolve_interface(node, interface)
-        if_index = self._interface_index(resolved)
-        set_state = self._control_backend("set_interface_state")
-        set_state(node_name, if_index, up)
+        with ensure_simulation_lock(self):
+            node = self._find_node(node_name)
+            resolved = self._resolve_interface(node, interface)
+            if_index = self._interface_index(resolved)
+            set_state = self._control_backend("set_interface_state")
+            set_state(node_name, if_index, up)
 
     def set_link_state(self, link: Link, up: bool) -> None:
         """Bring both endpoints of *link* up or down and pin the admin state.
@@ -247,15 +254,33 @@ class BackendControlMixin:
         ``Link.admin_up`` keeps the next topology tick from overwriting the
         interface state; ``Link.update_interfaces_state()`` ANDs it with the
         satcom-derived ``is_active`` value.
+
+        The backend calls are made before any local state is committed. If
+        either endpoint RPC fails, the previous ``admin_up``/interface state is
+        left untouched and the exception is re-raised.
         """
         up = validate_admin_up(up)
-        pairs = self._endpoint_interfaces(link)
-        set_state = self._control_backend("set_interface_state")
-        link.admin_up = up
-        for node, interface in pairs:
-            if_index = self._interface_index(interface)
-            set_state(node.name, if_index, up)
-            interface.is_active = bool(link.is_active and link.admin_up)
+        with ensure_simulation_lock(self):
+            pairs = self._endpoint_interfaces(link)
+            set_state = self._control_backend("set_interface_state")
+            previous_admin_up = link.admin_up
+            previous_interface_states = [
+                (interface, interface.is_active) for _node, interface in pairs
+            ]
+            try:
+                for node, interface in pairs:
+                    if_index = self._interface_index(interface)
+                    set_state(node.name, if_index, up)
+            except BaseException:
+                link.admin_up = previous_admin_up
+                for interface, previous_state in previous_interface_states:
+                    interface.is_active = previous_state
+                raise
+
+            link.admin_up = up
+            active = bool(link.is_active and link.admin_up)
+            for _node, interface in pairs:
+                interface.is_active = active
 
     # ------------------------------------------------------------------
     # Capture, status, snapshot
@@ -336,53 +361,58 @@ class BackendControlMixin:
         if loss_percent is None and jitter_ms is None:
             raise ValueError("set_link_impairment requires loss_percent or jitter_ms")
 
-        new_loss = (
-            validate_loss(loss_percent)
-            if loss_percent is not None
-            else getattr(link, "loss", 0.0)
-        )
-        new_jitter = (
-            validate_jitter(jitter_ms)
-            if jitter_ms is not None
-            else getattr(link, "jitter", 0)
-        )
-        link.loss = new_loss
-        link.jitter = new_jitter
-        link.to_update = True
-
-        label = self._link_label(link)
-        update_links = self._control_backend("update_links")
-        try:
-            response = update_links([link])
-        except grpc.RpcError as exc:
-            raise RuntimeError(
-                f"Failed to apply link impairment to {label}: {exc}"
-            ) from exc
-
-        response_status = getattr(response, "status", None)
-        if (
-            response_status is not None
-            and response_status.code != netem_pb2.StatusCode.OK
-        ):
-            detail = (
-                getattr(response_status, "error", "")
-                or "server returned a non-OK status"
+        with ensure_simulation_lock(self):
+            new_loss = (
+                validate_loss(loss_percent)
+                if loss_percent is not None
+                else getattr(link, "loss", 0.0)
             )
-            raise RuntimeError(f"Failed to apply link impairment to {label}: {detail}")
+            new_jitter = (
+                validate_jitter(jitter_ms)
+                if jitter_ms is not None
+                else getattr(link, "jitter", 0)
+            )
+            link.loss = new_loss
+            link.jitter = new_jitter
+            link.to_update = True
 
-        results = list(getattr(response, "results", ()))
-        if len(results) != 1:
-            raise RuntimeError(
-                f"update_links returned {len(results)} result(s) for 1 link"
-            )
-        result_status = getattr(results[0], "status", None)
-        if result_status is None or result_status.code != netem_pb2.StatusCode.OK:
-            detail = (
-                getattr(result_status, "error", "") if result_status is not None else ""
-            )
-            raise RuntimeError(
-                f"Failed to apply link impairment to {label}: "
-                f"{detail or 'server returned a non-OK status'}"
-            )
+            label = self._link_label(link)
+            update_links = self._control_backend("update_links")
+            try:
+                response = update_links([link])
+            except grpc.RpcError as exc:
+                raise RuntimeError(
+                    f"Failed to apply link impairment to {label}: {exc}"
+                ) from exc
 
-        link.to_update = False
+            response_status = getattr(response, "status", None)
+            if (
+                response_status is not None
+                and response_status.code != netem_pb2.StatusCode.OK
+            ):
+                detail = (
+                    getattr(response_status, "error", "")
+                    or "server returned a non-OK status"
+                )
+                raise RuntimeError(
+                    f"Failed to apply link impairment to {label}: {detail}"
+                )
+
+            results = list(getattr(response, "results", ()))
+            if len(results) != 1:
+                raise RuntimeError(
+                    f"update_links returned {len(results)} result(s) for 1 link"
+                )
+            result_status = getattr(results[0], "status", None)
+            if result_status is None or result_status.code != netem_pb2.StatusCode.OK:
+                detail = (
+                    getattr(result_status, "error", "")
+                    if result_status is not None
+                    else ""
+                )
+                raise RuntimeError(
+                    f"Failed to apply link impairment to {label}: "
+                    f"{detail or 'server returned a non-OK status'}"
+                )
+
+            link.to_update = False

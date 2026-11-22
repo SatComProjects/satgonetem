@@ -25,12 +25,12 @@ classifiers = [
 ]
 dependencies = [
     "docker>=7.1.0",
-    "grpcio>=1.62.0",
+    "grpcio>=1.80.0",
     "matplotlib>=3.10.0",
     "networkx>=3.4.0",
     "numpy>=2.2.0",
     "Pillow>=11.2.0",
-    "protobuf>=6.31.0",
+    "protobuf>=6.31.1",
     "PyYAML>=6.0.0",
     "sgp4>=2.23",
     "uvicorn[standard]>=0.29.0",

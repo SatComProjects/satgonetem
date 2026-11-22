@@ -290,25 +290,87 @@ class SimulationLoopMixin:
 
             # Mutate only after every link has been validated, so an invalid
             # entry cannot leave a partially applied batch behind.
-            for link_type, satcom_link, source_name, target_name in removals:
-                logging.info(
-                    "Removing %s between %s and %s",
-                    link_type,
-                    source_name,
-                    target_name,
-                )
+            removed: list[tuple[str, object, str, str]] = []
+            try:
+                for link_type, satcom_link, source_name, target_name in removals:
+                    logging.info(
+                        "Removing %s between %s and %s",
+                        link_type,
+                        source_name,
+                        target_name,
+                    )
 
-                if link_type == "InterSatelliteLink":
-                    self.simulation_manager.remove_inter_satellite_link(satcom_link)
-                elif link_type == "GroundStationLink":
-                    self.simulation_manager.remove_ground_station_link(satcom_link)
-                elif link_type == "UserTerminalLink":
-                    self.simulation_manager.remove_user_terminal_link(satcom_link)
+                    if link_type == "InterSatelliteLink":
+                        self.simulation_manager.remove_inter_satellite_link(satcom_link)
+                    elif link_type == "GroundStationLink":
+                        self.simulation_manager.remove_ground_station_link(satcom_link)
+                    elif link_type == "UserTerminalLink":
+                        self.simulation_manager.remove_user_terminal_link(satcom_link)
+                    removed.append((link_type, satcom_link, source_name, target_name))
 
-            self.update_simulation(advance_timestep=False)
+                self.update_simulation(advance_timestep=False)
+            except BaseException:
+                # Compensate in reverse order so a mid-batch failure does not
+                # leave earlier removals applied in the simulation manager.
+                for link_type, satcom_link, source_name, target_name in reversed(
+                    removed
+                ):
+                    try:
+                        self._restore_removed_link(link_type, satcom_link)
+                        logging.warning(
+                            "Rolled back simulated failure of %s between %s and %s",
+                            link_type,
+                            source_name,
+                            target_name,
+                        )
+                    except Exception:
+                        logging.exception(
+                            "Failed to roll back simulated failure of %s between "
+                            "%s and %s",
+                            link_type,
+                            source_name,
+                            target_name,
+                        )
+                # Reflect the rollback (or the remaining partial state) even
+                # though the batch failed.
+                try:
+                    self.update_simulation(advance_timestep=False)
+                except Exception:
+                    logging.exception(
+                        "Failed to update simulation after rolling back a failed "
+                        "link-failure batch"
+                    )
+                raise
 
             logging.info(
                 "Link failure simulation complete for project '%s' (%d link(s) processed)",
                 getattr(self, "project_name", "unknown"),
                 len(links),
             )
+
+    def _restore_removed_link(self, link_type: str, satcom_link: object) -> None:
+        """Re-create a link removed by :meth:`simulate_link_failure`.
+
+        Used as the compensating action for a partially applied batch. The
+        original link object cannot simply be re-inserted: removal unbinds its
+        terminals and clears its flows, so the simulation manager's creation
+        path rebuilds the connection.
+        """
+        manager = self.simulation_manager
+        source = satcom_link.source
+        destination = satcom_link.destination
+
+        if link_type == "InterSatelliteLink":
+            direction = getattr(satcom_link, "inter_satellite_direction", None)
+            keywords = {}
+            if direction is not None:
+                keywords["inter_satellite_link_direction"] = direction
+            manager.create_and_add_inter_satellite_link_connection(
+                source, destination, **keywords
+            )
+        elif link_type == "GroundStationLink":
+            manager.create_and_add_ground_station_link_connection(source, destination)
+        elif link_type == "UserTerminalLink":
+            manager.create_and_add_user_terminal_link_connection(source, destination)
+        else:  # pragma: no cover - validated before mutation
+            raise ValueError(f"Unsupported link type {link_type!r}")

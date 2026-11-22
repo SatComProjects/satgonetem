@@ -14,6 +14,28 @@ import grpc
 
 from satgonetem.proto import netem_pb2
 
+# Global-header prefixes for the capture formats tcpdump can emit. A clean
+# stream EOF without an explicit OK marker is only accepted when the payload
+# still carries a complete-enough header for one of these formats.
+_PCAP_MAGICS = frozenset(
+    {
+        b"\xa1\xb2\xc3\xd4",
+        b"\xd4\xc3\xb2\xa1",
+        b"\xa1\xb2\x3c\x4d",
+        b"\x4d\x3c\xb2\xa1",
+    }
+)
+_PCAP_MIN_LEN = 24
+_PCAPNG_MAGIC = b"\x0a\x0d\x0d\x0a"
+_PCAPNG_MIN_LEN = 28
+
+
+def _is_valid_pcap_prefix(data: bytes) -> bool:
+    """Return True when *data* starts with a complete capture file header."""
+    if len(data) >= _PCAP_MIN_LEN and data[:4] in _PCAP_MAGICS:
+        return True
+    return len(data) >= _PCAPNG_MIN_LEN and data[:4] == _PCAPNG_MAGIC
+
 
 class GoNetEmControlMixin:
     """Node lifecycle, interface state, capture, and snapshot RPCs."""
@@ -126,9 +148,14 @@ class GoNetEmControlMixin:
 
         Framing assumption: ``CaptureSrvMsg`` has no DATA code. The server
         sends capture payload on ``STDOUT``, human-readable diagnostics on
-        ``STDERR``, and only uses ``OK`` as a completion marker. ``STDOUT``
-        chunks are concatenated into a single pcap byte string; ``STDERR`` and
-        ``OK`` are ignored. An ``ERROR`` message aborts the capture.
+        ``STDERR``, and uses ``OK`` as the completion marker. ``STDOUT``
+        chunks are concatenated into a single pcap byte string. An ``ERROR``
+        message aborts the capture.
+
+        A capture is only returned when the server completed the stream
+        (``OK``) or the accumulated bytes form a valid pcap/pcapng prefix; an
+        empty or truncated clean EOF raises. A deadline still returns the
+        non-empty bytes captured so far.
 
         Args:
             node_name: Node whose interface is captured.
@@ -143,17 +170,20 @@ class GoNetEmControlMixin:
             prjId=request.id, node=node_name, ifIndex=if_index
         )
         chunks: list[bytes] = []
+        completed = False
         try:
             for msg in client.NodeCapture(capture_request, timeout=timeout_s):
                 if msg.code == netem_pb2.CaptureSrvMsg.STDOUT:
                     chunks.append(msg.data)
+                elif msg.code == netem_pb2.CaptureSrvMsg.OK:
+                    completed = True
                 elif msg.code == netem_pb2.CaptureSrvMsg.ERROR:
                     detail = msg.data.decode("utf-8", errors="replace").strip()
                     raise RuntimeError(
                         f"GoNetEmLauncher: {action} failed: "
                         f"{detail or 'server reported ERROR'}"
                     )
-                # STDERR is diagnostic and OK only marks completion.
+                # STDERR is diagnostic only.
         except grpc.RpcError as exc:
             # NodeCapture is a live stream: the server keeps capturing until
             # the client stops or the deadline expires. Return the valid pcap
@@ -165,7 +195,18 @@ class GoNetEmControlMixin:
             ):
                 return b"".join(chunks)
             raise RuntimeError(f"GoNetEmLauncher: {action} failed: {exc}") from exc
-        return b"".join(chunks)
+
+        data = b"".join(chunks)
+        if not data:
+            raise RuntimeError(
+                f"GoNetEmLauncher: {action} failed: server returned no capture data"
+            )
+        if not completed and not _is_valid_pcap_prefix(data):
+            raise RuntimeError(
+                f"GoNetEmLauncher: {action} failed: capture stream ended "
+                "without a completion marker or a valid pcap header"
+            )
+        return data
 
     def get_backend_status(self) -> dict:
         """Return a JSON-serializable snapshot of the open project status."""

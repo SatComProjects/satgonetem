@@ -149,6 +149,38 @@ class TestInstallSourceRoutes:
         assert new_b is not old_b
         assert new_b.gateway == "10.9.0.99"
 
+    def test_failed_source_is_rebuilt_instead_of_served_from_cache(self):
+        src = _make_node("Sat0", 1, "10.0.0.1")
+        dst = SimpleNamespace(id=2, name="Gnd0")
+        iface = _make_interface("Sat0", 2, "10.9.0.2")
+        planner = _make_planner()
+        signature = [(2, "10.0.0.2", "10.9.0.2", 2)]
+        kwargs = dict(
+            node=src,
+            src_id=1,
+            src_ifaces={2: iface},
+            src_loopback="10.0.0.1",
+            src_name="Sat0",
+            dst_array=[dst],
+            dst_ids=[2],
+            signature=signature,
+            loopback_ips={2: "10.0.0.2"},
+            prefix=32,
+        )
+
+        planner.install_source_routes(**kwargs)
+        first_table = src.ipv4_routing_table
+
+        # The last install failed, so the unchanged signature must not be
+        # allowed to alias previous and current tables: doing so would emit
+        # zero route operations and never retry the failed install.
+        planner.set_failed_sources({"Sat0"})
+        planner.install_source_routes(**kwargs)
+
+        assert src.ipv4_routing_table is not first_table
+        assert src.ipv4_previous_routing_table is not src.ipv4_routing_table
+        assert src.ipv4_previous_routing_table == []
+
 
 class TestPopulateTables:
     def test_file_mode_delegates_to_file_population(self):

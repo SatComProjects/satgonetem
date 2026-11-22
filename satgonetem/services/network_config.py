@@ -14,7 +14,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, fields
 from typing import Any
 
-from satgonetem.addressing import Ipv6AddressPlan
+from satgonetem.addressing import Ipv4AddressPlan, Ipv6AddressPlan
 
 # Upper bound for the netem queue limit and the interface txqueuelen, in
 # packets. It mirrors the GoNetEm server's maxQueuePackets so a configuration
@@ -118,17 +118,26 @@ class NetworkConfig:
     controller_node_iface_pattern: str = "eth{node_id}"
 
     def __post_init__(self) -> None:
-        """Validate the queue-length fields and the tick interval.
+        """Validate the queue-length fields, the tick interval, and addressing.
 
         Raises:
-            TypeError: If a queue-length field is not an integer.
+            TypeError: If a queue-length field, ``update_time``, or a prefix
+                length is not a number.
             ValueError: If a queue-length field is outside
-                ``[0, MAX_LINK_QUEUE_PACKETS]``, or if ``update_time`` is not
-                positive.
+                ``[0, MAX_LINK_QUEUE_PACKETS]``, if ``update_time`` is not
+                positive and finite, or if a prefix length is out of range.
+            AddressPlanConfigurationError: If the IPv4 (or enabled IPv6)
+                pools/prefix lengths cannot form a valid address plan.
         """
-        if self.update_time <= 0:
+        update_time = self.update_time
+        if isinstance(update_time, bool) or not isinstance(update_time, (int, float)):
+            raise TypeError(
+                f"NetworkConfig.update_time must be a number, got {update_time!r}"
+            )
+        if not math.isfinite(float(update_time)) or float(update_time) <= 0:
             raise ValueError(
-                f"NetworkConfig.update_time must be positive, got {self.update_time}"
+                "NetworkConfig.update_time must be positive and finite, "
+                f"got {update_time!r}"
             )
 
         for name in ("link_netem_limit", "link_txqueuelen"):
@@ -183,6 +192,18 @@ class NetworkConfig:
             raise TypeError(
                 f"NetworkConfig.ipv6_enabled must be a bool, got {self.ipv6_enabled!r}"
             )
+
+        # Constructing the IPv4 plan validates address families, pool/prefix
+        # fit, block size, and overlap even when no topology is built (for
+        # example during ``run --dry-run`` scenario validation).
+        Ipv4AddressPlan(
+            ground_station_pool=self.ground_station_pool,
+            satellite_pool=self.satellite_pool,
+            user_terminal_pool=self.user_terminal_pool,
+            ground_station_prefix_len=self.ground_station_prefix_len,
+            satellite_prefix_len=self.satellite_prefix_len,
+            user_terminal_prefix_len=self.user_terminal_prefix_len,
+        )
 
         for name in (
             "ipv6_ground_station_prefix_len",

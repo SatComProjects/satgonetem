@@ -103,6 +103,28 @@ def test_duplicate_shell_and_station_names_are_rejected():
         )
 
 
+@pytest.mark.parametrize(
+    "section",
+    ["traffic", "events", "shells", "ground_stations"],
+)
+def test_non_mapping_list_items_raise_field_named_errors(tmp_path, section):
+    path = _write(
+        tmp_path,
+        {
+            "name": "bad-list-item",
+            "duration_s": 60,
+            section: [None],
+        },
+    )
+
+    with pytest.raises(ScenarioError) as excinfo:
+        Scenario.from_file(path)
+
+    message = str(excinfo.value)
+    assert f"scenario.{section}[0]" in message
+    assert "must be a mapping" in message
+
+
 def test_runner_passes_none_path_for_generated_scenario(tmp_path):
     scenario = Scenario(
         name="generated",

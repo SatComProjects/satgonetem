@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
+import os
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -30,10 +33,24 @@ class JsonlMetricsWriter:
 
 
 def write_json(path: str | Path, payload: Any) -> Path:
-    """Write *payload* as pretty JSON and return the path."""
+    """Write *payload* as pretty JSON and return the path.
+
+    The payload is serialized before the target is touched and written to a
+    temporary file that replaces the target atomically, so a failure cannot
+    leave a truncated artifact behind.
+    """
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(
-        json.dumps(payload, indent=2, default=str) + "\n", encoding="utf-8"
+    text = json.dumps(payload, indent=2, default=str) + "\n"
+    descriptor, temporary = tempfile.mkstemp(
+        prefix=f".{target.name}.", dir=str(target.parent)
     )
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(text)
+        os.replace(temporary, target)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(temporary)
+        raise
     return target

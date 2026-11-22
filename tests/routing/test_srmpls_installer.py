@@ -132,7 +132,8 @@ def test_ground_station_pass_uses_full_string_set_diff() -> None:
         [
             "sh",
             "-lc",
-            "set -e; ip route del 10.0.0.9/32 2>/dev/null || true; "
+            "set -e; if ip route show exact 10.0.0.9/32 2>&1 | grep -q .; "
+            "then ip route del 10.0.0.9/32; fi; "
             "ip -f mpls route replace 16002 dev lo; " + desired,
         ]
     ]

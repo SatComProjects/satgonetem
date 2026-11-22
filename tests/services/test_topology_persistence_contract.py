@@ -58,6 +58,7 @@ _SATELLITE_RECORD_KEYS = {
     "tle_line2",
     "object_id",
     "domain",
+    "addressable",
 }
 
 _GROUND_OBJECT_RECORD_KEYS = {
@@ -184,7 +185,14 @@ class TestTolerantRestore:
         links = payload["runtime_state"]["links"]
 
         assert links["ground_station"] == [
-            {"source": "ShapeSat-001", "destination": "ShapeGS"}
+            {
+                "source": "ShapeSat-001",
+                "destination": "ShapeGS",
+                "loss": 0.0,
+                "jitter": 0,
+                "admin_up": True,
+                "use_budget": False,
+            }
         ]
         links["inter_satellite"].append(
             {"source": "MissingSat", "destination": "ShapeSat-001"}

@@ -7,9 +7,13 @@ replace the Python API; it is a reproducible wrapper around it.
 
 from __future__ import annotations
 
+import contextlib
+import math
+import os
+import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
 import yaml
@@ -50,12 +54,23 @@ def _non_empty_str(value: Any, label: str) -> str:
     return value
 
 
-def _number(value: Any, label: str, *, minimum: float = 0.0) -> float:
+def _number(
+    value: Any,
+    label: str,
+    *,
+    minimum: float = 0.0,
+    maximum: float | None = None,
+) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ScenarioError(f"{label} must be a number")
-    if value < minimum:
+    number = float(value)
+    if not math.isfinite(number):
+        raise ScenarioError(f"{label} must be finite, got {value!r}")
+    if number < minimum:
         raise ScenarioError(f"{label} must be >= {minimum}, got {value}")
-    return float(value)
+    if maximum is not None and number > maximum:
+        raise ScenarioError(f"{label} must be <= {maximum}, got {value}")
+    return number
 
 
 def _positive_int(value: Any, label: str) -> int:
@@ -72,6 +87,24 @@ def _boolean(value: Any, label: str, default: bool = False) -> bool:
     return value
 
 
+def _scenario_name(value: Any) -> str:
+    """Validate a scenario name that becomes part of the default run path."""
+    name = _non_empty_str(value, "scenario.name")
+    windows_path = PureWindowsPath(name)
+    if (
+        os.path.isabs(name)
+        or PurePosixPath(name).is_absolute()
+        or windows_path.is_absolute()
+        or windows_path.drive
+    ):
+        raise ScenarioError("scenario.name must not be an absolute path")
+    if "/" in name or "\\" in name:
+        raise ScenarioError("scenario.name must not contain path separators")
+    if name in {".", ".."}:
+        raise ScenarioError("scenario.name must not be a path segment")
+    return name
+
+
 @dataclass(frozen=True)
 class TrafficSpec:
     """One traffic flow to launch during an experiment."""
@@ -85,10 +118,28 @@ class TrafficSpec:
     protocol: str = "TCP"
     bandwidth_mbps: float = 0.0
 
+    def __post_init__(self) -> None:
+        _non_empty_str(self.src, "traffic.src")
+        _non_empty_str(self.dst, "traffic.dst")
+        if self.tool not in _TRAFFIC_TOOLS:
+            raise ScenarioError("traffic.tool must be ping or iperf3")
+        if self.protocol not in {"TCP", "UDP"}:
+            raise ScenarioError("traffic.protocol must be 'TCP' or 'UDP'")
+        _number(self.start_s, "traffic.start_s")
+        _number(self.duration_s, "traffic.duration_s", minimum=0.001)
+        _number(self.bandwidth_mbps, "traffic.bandwidth_mbps")
+        if (
+            isinstance(self.count, bool)
+            or not isinstance(self.count, int)
+            or self.count < 1
+        ):
+            raise ScenarioError("traffic.count must be a positive integer")
+
     @classmethod
     def from_mapping(
         cls, data: Mapping[str, Any], label: str = "traffic"
     ) -> TrafficSpec:
+        data = _require_mapping(data, label)
         _reject_unknown(
             data,
             {
@@ -153,8 +204,33 @@ class EventSpec:
     loss_percent: float | None = None
     jitter_ms: int | None = None
 
+    def __post_init__(self) -> None:
+        if self.action not in _EVENT_ACTIONS:
+            raise ScenarioError(
+                f"event.action must be one of {sorted(_EVENT_ACTIONS)}, "
+                f"got {self.action!r}"
+            )
+        if self.action in {"link_down", "link_up", "impairment"}:
+            _non_empty_str(self.src, "event.src")
+            _non_empty_str(self.dst, "event.dst")
+        _number(self.at_s, "event.at_s")
+        _number(self.duration_s, "event.duration_s")
+        if self.loss_percent is not None:
+            _number(
+                self.loss_percent,
+                "event.loss_percent",
+                maximum=100.0,
+            )
+        if self.jitter_ms is not None and (
+            isinstance(self.jitter_ms, bool)
+            or not isinstance(self.jitter_ms, int)
+            or self.jitter_ms < 0
+        ):
+            raise ScenarioError("event.jitter_ms must be a non-negative integer")
+
     @classmethod
     def from_mapping(cls, data: Mapping[str, Any], label: str = "event") -> EventSpec:
+        data = _require_mapping(data, label)
         _reject_unknown(
             data,
             {
@@ -185,7 +261,11 @@ class EventSpec:
         loss = data.get("loss_percent")
         jitter = data.get("jitter_ms")
         if loss is not None:
-            loss = _number(loss, f"{label}.loss_percent")
+            loss = _number(
+                loss,
+                f"{label}.loss_percent",
+                maximum=100.0,
+            )
         if jitter is not None and (
             isinstance(jitter, bool) or not isinstance(jitter, int) or jitter < 0
         ):
@@ -229,17 +309,21 @@ class ShellSpec:
     phase_difference: bool = True
 
     def __post_init__(self) -> None:
+        _non_empty_str(self.identifier, "shell.identifier")
         if self.planes < 1 or self.satellites_per_plane < 1:
             raise ScenarioError("shell planes and satellites_per_plane must be >= 1")
-        if not 0.0 <= self.inclination_deg <= 180.0:
-            raise ScenarioError("shell inclination_deg must be in [0, 180]")
-        if self.revs_per_day <= 0:
-            raise ScenarioError("shell revs_per_day must be > 0")
+        _number(
+            self.inclination_deg,
+            "shell.inclination_deg",
+            maximum=180.0,
+        )
+        _number(self.revs_per_day, "shell.revs_per_day", minimum=0.001)
         if self.pattern not in {"star", "delta"}:
             raise ScenarioError("shell pattern must be star or delta")
 
     @classmethod
     def from_mapping(cls, data: Mapping[str, Any], label: str = "shell") -> ShellSpec:
+        data = _require_mapping(data, label)
         _reject_unknown(
             data,
             {
@@ -303,15 +387,26 @@ class GroundStationSpec:
     elevation_km: float = 0.0
 
     def __post_init__(self) -> None:
-        if not -90.0 <= self.latitude <= 90.0:
-            raise ScenarioError("ground-station latitude must be in [-90, 90]")
-        if not -180.0 <= self.longitude <= 180.0:
-            raise ScenarioError("ground-station longitude must be in [-180, 180]")
+        _non_empty_str(self.name, "ground_station.name")
+        _number(
+            self.latitude,
+            "ground_station.latitude",
+            minimum=-90.0,
+            maximum=90.0,
+        )
+        _number(
+            self.longitude,
+            "ground_station.longitude",
+            minimum=-180.0,
+            maximum=180.0,
+        )
+        _number(self.elevation_km, "ground_station.elevation_km")
 
     @classmethod
     def from_mapping(
         cls, data: Mapping[str, Any], label: str = "ground_station"
     ) -> GroundStationSpec:
+        data = _require_mapping(data, label)
         _reject_unknown(
             data,
             {"name", "latitude", "longitude", "elevation_km"},
@@ -361,6 +456,7 @@ class Scenario:
     base_dir: str = "."
 
     def __post_init__(self) -> None:
+        _scenario_name(self.name)
         if self.topology is not None and (self.shells or self.ground_stations):
             raise ScenarioError(
                 "Use either topology or shells/ground_stations, not both"
@@ -369,17 +465,23 @@ class Scenario:
             raise ScenarioError("Scenario requires topology or at least one shell")
         if self.ground_stations and not self.shells:
             raise ScenarioError("ground_stations require at least one shell")
-        if self.duration_s <= 0:
-            raise ScenarioError("duration_s must be > 0")
-        if self.tick_s < 1:
-            raise ScenarioError("tick_s must be >= 1")
+        _number(self.duration_s, "duration_s", minimum=0.001)
+        if (
+            isinstance(self.tick_s, bool)
+            or not isinstance(self.tick_s, int)
+            or self.tick_s < 1
+        ):
+            raise ScenarioError("tick_s must be a positive integer")
         if self.traffic and self.tick_s != 1:
             raise ScenarioError(
                 "tick_s must be 1 when traffic is present; "
                 "flow durations are wall-clock seconds in this pass"
             )
-        if self.metrics_interval_s <= 0:
-            raise ScenarioError("metrics_interval_s must be > 0")
+        _number(
+            self.metrics_interval_s,
+            "metrics_interval_s",
+            minimum=0.001,
+        )
         shell_ids = [shell.identifier for shell in self.shells]
         if len(shell_ids) != len(set(shell_ids)):
             raise ScenarioError("shell identifiers must be unique")
@@ -416,9 +518,18 @@ class Scenario:
                 "metrics_interval_s",
                 "connectivity",
                 "output_dir",
+                "run_dir",
+                "started_at",
             },
             "scenario",
         )
+        run_dir_value = data.get("run_dir")
+        run_base: Path | None = None
+        if run_dir_value is not None:
+            candidate = Path(str(run_dir_value))
+            if not candidate.is_absolute():
+                candidate = (source.resolve().parent / candidate).resolve()
+            run_base = candidate
         network = _require_mapping(data.get("network", {}), "scenario.network")
         if network:
             try:
@@ -463,6 +574,15 @@ class Scenario:
             if data.get("topology") is not None
             else None
         )
+        if topology is not None and not Path(topology).is_absolute():
+            candidates = []
+            if run_base is not None:
+                candidates.append(run_base / topology)
+            candidates.append(source.resolve().parent / topology)
+            for candidate in candidates:
+                if candidate.is_file():
+                    topology = str(candidate.resolve())
+                    break
 
         return cls(
             name=_non_empty_str(data.get("name"), "scenario.name"),
@@ -519,10 +639,24 @@ class Scenario:
         }
 
     def write_manifest(self, path: str | Path) -> Path:
-        """Write the scenario as YAML and return the path."""
+        """Write the scenario as YAML and return the path.
+
+        The content is written to a temporary file in the target directory and
+        moved into place with :func:`os.replace`, so a crash or serialization
+        error cannot truncate an existing manifest.
+        """
         target = Path(path)
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(
-            yaml.safe_dump(self.to_dict(), sort_keys=False), encoding="utf-8"
+        text = yaml.safe_dump(self.to_dict(), sort_keys=False)
+        fd, temporary = tempfile.mkstemp(
+            prefix=f".{target.name}.", dir=str(target.parent)
         )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(text)
+            os.replace(temporary, target)
+        except BaseException:
+            with contextlib.suppress(OSError):
+                os.unlink(temporary)
+            raise
         return target

@@ -69,11 +69,19 @@ class Iperf3EndSummary:
 
     @property
     def total_packets(self) -> int:
-        """Total UDP packets, preferring receiver summaries for --bidir."""
+        """Total UDP packets transmitted, across both directions for --bidir.
+
+        For ``--bidir`` runs the receiver summaries expose received packets
+        (``packets``) and ``lost_packets``; the transmitted count is their sum,
+        which is also the denominator iperf3 uses for ``lost_percent``. For
+        non-bidirectional output iperf3's ``sum.packets`` already reports the
+        sender's transmitted count when available.
+        """
         if self.is_bidir():
             received = self.pair_value("sum_received", "packets")
-            if received:
-                return int(received)
+            lost = self.pair_value("sum_received", "lost_packets")
+            if received or lost:
+                return int(received + lost)
         return int(self.value("sum", "packets"))
 
     @property
@@ -82,33 +90,41 @@ class Iperf3EndSummary:
         if self.is_bidir():
             forward_packets = self.value("sum_received", "packets")
             reverse_packets = self.value("sum_received_bidir_reverse", "packets")
-            total_packets = forward_packets + reverse_packets
-            if total_packets > 0:
+            weighted_packets = forward_packets + reverse_packets
+            if weighted_packets > 0:
                 weighted = (
                     self.value("sum_received", "jitter_ms") * forward_packets
                     + self.value("sum_received_bidir_reverse", "jitter_ms")
                     * reverse_packets
                 )
-                return weighted / total_packets
+                return weighted / weighted_packets
         return self.value("sum", "jitter_ms")
 
     @property
     def total_lost_packets(self) -> int:
-        """Total lost UDP packets."""
+        """Total lost UDP packets, across both directions for --bidir."""
         if self.is_bidir():
             received = self.pair_value("sum_received", "packets")
-            if received:
-                return int(self.pair_value("sum_received", "lost_packets"))
+            lost = self.pair_value("sum_received", "lost_packets")
+            if received or lost:
+                return int(lost)
         return int(self.value("sum", "lost_packets"))
 
     @property
     def avg_loss_percent(self) -> float:
-        """Average UDP packet loss percentage."""
+        """Average UDP packet loss percentage, iperf3-style.
+
+        iperf3 defines ``lost_percent`` as ``100 * lost / (received + lost)``:
+        the denominator is the number of packets the sender transmitted, not
+        the number the receiver counted. Bidirectional runs recombine the
+        receiver summaries the same way.
+        """
         if self.is_bidir():
             received = self.pair_value("sum_received", "packets")
-            if received > 0:
-                lost = self.pair_value("sum_received", "lost_packets")
-                return 100.0 * lost / received
+            lost = self.pair_value("sum_received", "lost_packets")
+            transmitted = received + lost
+            if transmitted > 0:
+                return 100.0 * lost / transmitted
         return self.value("sum", "lost_percent")
 
     @property
