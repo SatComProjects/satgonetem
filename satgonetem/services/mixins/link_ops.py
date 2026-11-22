@@ -85,6 +85,21 @@ class LinkOpsMixin:
             self._failed_link_updates = failures
         return failures
 
+    def _link_backend_adds(self) -> set[frozenset[str]]:
+        """Return link keys whose add already succeeded on the backend.
+
+        A link can be present in the emulator while its local interfaces or
+        addresses are still being retried. Those retries must not send a second
+        ``LinkAdd``: the server rejects a duplicate and the local build would be
+        blocked by the failure marker forever. Entries are dropped when the
+        backend confirms deletion or the link is cleaned up.
+        """
+        applied = getattr(self, "_backend_link_adds", None)
+        if applied is None:
+            applied = set()
+            self._backend_link_adds = applied
+        return applied
+
     def bulk_link_operations(
         self,
         to_add: bool = True,
@@ -410,10 +425,13 @@ class LinkOpsMixin:
         emulator still holds the veth pair.
         """
         start = time.perf_counter()
+        key = self._build_link_key(link.source, link.target)
+        applied = LinkOpsMixin._link_backend_adds(self)
         if self.hil_manager is not None and self.hil_manager.is_hil_link(link):
             link.to_delete = True
             if self.hil_manager.teardown_link(link):
                 link.to_delete = False
+                applied.discard(key)
             return time.perf_counter() - start
         launcher = LinkOpsMixin._link_backend(self)
         if launcher is None:
@@ -428,6 +446,7 @@ class LinkOpsMixin:
             )
             return time.perf_counter() - start
         link.to_delete = False
+        applied.discard(key)
         logging.debug("Deleted link %s -- %s", link.source.name, link.target.name)
         return time.perf_counter() - start
 
@@ -479,9 +498,16 @@ class LinkOpsMixin:
         start = time.perf_counter()
         failures = self._link_add_failures()
         key = self._build_link_key(link.source, link.target)
+        applied = LinkOpsMixin._link_backend_adds(self)
+        if key in applied:
+            # The emulator already accepted this link; only the local build is
+            # still pending. Re-sending LinkAdd is rejected as a duplicate.
+            failures.discard(key)
+            return time.perf_counter() - start
         if self.hil_manager is not None and self.hil_manager.is_hil_link(link):
             if self.hil_manager.setup_link(link):
                 failures.discard(key)
+                applied.add(key)
             else:
                 failures.add(key)
             return time.perf_counter() - start
@@ -498,6 +524,7 @@ class LinkOpsMixin:
             )
             return time.perf_counter() - start
         failures.discard(key)
+        applied.add(key)
         delay = max(int(link.delay), 1)
         logging.debug(
             "Added link %s -- %s with delay %d ms",
@@ -650,6 +677,7 @@ class LinkOpsMixin:
                 key = self._build_link_key(link.source, link.target)
                 self._link_add_failures().discard(key)
                 self._link_update_failures().discard(key)
+                self._link_backend_adds().discard(key)
                 del self.links[key]
             except (AttributeError, KeyError, TypeError) as e:
                 logging.error(

@@ -303,6 +303,9 @@ class TopologyManager(
         # interfaces are built. Initialised eagerly so the add thread pool
         # cannot race on first use.
         self._failed_link_adds: set[frozenset[str]] = set()
+        # Links whose backend add succeeded while their local interfaces or
+        # addresses are still pending. Retries must not repeat LinkAdd.
+        self._backend_link_adds: set[frozenset[str]] = set()
         self.interfaces: list[Interface] = []  # List of all interfaces in the network
         self.interface_version = 0
 

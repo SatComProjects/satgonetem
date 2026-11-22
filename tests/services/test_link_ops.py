@@ -636,6 +636,53 @@ def test_add_retry_builds_interfaces_once_backend_recovers():
     build_interfaces.assert_called_once_with(link, set_ip=True, sync_to_node=True)
 
 
+def test_local_build_failure_retry_does_not_resend_backend_add(caplog):
+    """The backend add must run once even while the local build is retried."""
+    link = make_link(make_satellite("Sat10"), make_satellite("Sat11"))
+    link.to_add = True
+    key = frozenset((link.source.name, link.target.name))
+    launcher = MagicMock()
+    build_interfaces = MagicMock(
+        side_effect=[RuntimeError("address push failed"), None]
+    )
+    fake = _FakeTopology(
+        {key: link},
+        launcher=launcher,
+        _build_interfaces_from_link=build_interfaces,
+    )
+
+    def run_round():
+        LinkOpsMixin.bulk_link_operations(
+            fake,
+            to_del=False,
+            to_update=False,
+            links_to_add=[link],
+            links_to_update=[],
+            links_to_remove=[],
+        )
+        LinkOpsMixin._perform_local_link_operations(
+            fake,
+            to_del=False,
+            to_update=False,
+            links_to_add=[link],
+            links_to_update=[],
+            links_to_remove=[],
+        )
+
+    with caplog.at_level(logging.ERROR):
+        run_round()
+
+    assert launcher.add_link.call_count == 1
+    assert link.to_add is True
+    assert "address push failed" in caplog.text
+
+    run_round()
+
+    assert launcher.add_link.call_count == 1
+    assert build_interfaces.call_count == 2
+    assert link.to_add is False
+
+
 def test_successful_backend_add_builds_interfaces_and_clears_flag():
     link = make_link(make_satellite("Sat6"), make_satellite("Sat7"))
     link.to_add = True
