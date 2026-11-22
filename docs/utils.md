@@ -350,14 +350,32 @@ the daemon, failing to start the controller, or calling `remove()` without a
 node closes and unlinks the owned segment. `remove(node)` is a documented
 no-op because the controller and graph segment are global to the topology.
 
-`P4Daemon.update()` exports only links that are active and not pending removal.
-It is a logged no-op before initialization (or after a failed initialization
-released the segment) instead of raising. When topology growth exceeds the
-segment capacity, the owner unlinks the old segment and creates a larger one
-under the same name, keeping the header `version` monotonic; consumers must
-reattach after observing the recreation. Calling `ensure_capacity()` on a
-read-only (non-owning) segment raises `ValueError` because a reader cannot
-replace the owner's segment.
+`P4Daemon.update()` exports only links that are active, not pending removal, and
+not disabled. It is a logged no-op before initialization (or after a failed
+initialization released the segment) instead of raising. When topology growth
+exceeds the segment capacity, the owner unlinks the old segment and creates a
+larger one under the same name, keeping the header `version` monotonic.
+Calling `ensure_capacity()` on a read-only (non-owning) segment raises
+`ValueError` because a reader cannot replace the owner's segment.
+
+A consumer that maps the segment once keeps that mapping after a recreation:
+the old object and its data remain valid, but the consumer can never observe
+the new version or data through that mapping. To follow the owner, re-open the
+segment by name for each read (or periodically) instead of holding a mapping:
+
+```python
+snapshot = GraphSharedMemory.read_snapshot("satgraph")
+for edge in snapshot.edges:
+    ...
+```
+
+`read_snapshot()` opens by name, sizes its views from the header's
+`max_edges`, copies the populated records, and closes the mapping. It retries a
+bounded number of times when the name is briefly absent (`FileNotFoundError`) or
+the replacement still reports `version == 0` while the owner is recreating the
+segment; it raises `TimeoutError` if version 0 persists and re-raises
+`FileNotFoundError` if the name does not come back. There is no cross-process
+lock, so poll `version` when a consistent view across multiple writes matters.
 
 ## Interactive terminal bridge
 
