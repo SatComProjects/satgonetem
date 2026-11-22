@@ -5,12 +5,12 @@ from __future__ import annotations
 import logging
 import time
 import warnings
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from satgonetem.utils.constants import MAX_WORKERS
 
 if TYPE_CHECKING:
-    pass
+    from satgonetem.routing.base_daemon import RoutingDaemon
 
 
 # Maximum time to wait for one traffic flow thread during shutdown.
@@ -19,6 +19,11 @@ _FLOW_STOP_TIMEOUT_SEC = 5.0
 
 class NetworkLifecycleMixin:
     """NetworkLifecycle functionality."""
+
+    routing_daemon: RoutingDaemon | None
+    project_id: str | None
+    client: Any
+    request: Any
 
     def start_gonetem(self, controller: bool = False) -> tuple[float, float] | None:
         """Start GoNetEm by launching containers and wiring links.
@@ -106,39 +111,74 @@ class NetworkLifecycleMixin:
     def _stop_active_flows(self) -> None:
         """Stop active traffic flows with a bounded wait.
 
-        A single stuck command must not prevent container/project teardown.
+        A single failing flow must not prevent container/project teardown.
+        Flows whose thread is still alive after the bounded wait are retained
+        in ``_active_flows`` so a later stop attempt can retry them.
         """
         flows = list(getattr(self, "_active_flows", []))
-        try:
-            for flow in flows:
+        stuck: list = []
+        for flow in flows:
+            try:
                 status = getattr(flow, "status", lambda: None)()
-                if status is None or getattr(status, "name", str(status)) not in (
-                    "RUNNING",
-                    "PENDING",
-                ):
-                    continue
+                active = status is not None and getattr(
+                    status, "name", str(status)
+                ) in ("RUNNING", "PENDING")
+            except Exception as exc:
+                logging.warning(
+                    "Failed to inspect traffic flow during shutdown: %s", exc
+                )
+                # The flow may still be running; attempt to stop it below.
+                active = True
+            if not active:
+                continue
 
-                stop = getattr(flow, "stop", None)
-                if callable(stop):
-                    try:
-                        stop()
-                    except Exception as exc:
-                        logging.warning(
-                            "Failed to stop traffic flow during shutdown: %s", exc
-                        )
+            stop = getattr(flow, "stop", None)
+            if callable(stop):
+                try:
+                    stop()
+                except Exception as exc:
+                    logging.warning(
+                        "Failed to stop traffic flow during shutdown: %s", exc
+                    )
 
-                thread = getattr(flow, "_thread", None)
+            thread = getattr(flow, "_thread", None)
+            try:
                 if thread is not None and thread.is_alive():
                     thread.join(timeout=_FLOW_STOP_TIMEOUT_SEC)
                     if thread.is_alive():
                         logging.warning(
                             "Traffic flow thread did not stop within %.1fs; "
-                            "continuing shutdown",
+                            "retaining it for a later stop attempt",
                             _FLOW_STOP_TIMEOUT_SEC,
                         )
-        finally:
-            if hasattr(self, "_active_flows"):
-                self._active_flows.clear()
+                        stuck.append(flow)
+            except Exception as exc:
+                logging.warning(
+                    "Failed to inspect traffic flow thread during shutdown: %s", exc
+                )
+                # Without a liveness answer, keep the flow tracked so it can be
+                # retried instead of silently leaking a running command.
+                stuck.append(flow)
+
+        if hasattr(self, "_active_flows"):
+            self._active_flows[:] = stuck
+
+    def _stop_routing_daemon(self) -> None:
+        """Best-effort routing teardown before the project is closed.
+
+        Routes live inside the project containers, so the daemon is removed
+        while the containers still exist and then dropped regardless of the
+        removal outcome.
+        """
+        daemon = getattr(self, "routing_daemon", None)
+        if daemon is not None:
+            try:
+                daemon.remove(max_workers=MAX_WORKERS)
+            except Exception as exc:
+                logging.error("Failed to remove routing daemon during stop: %s", exc)
+            finally:
+                self.routing_daemon = None
+        self.set_routing_initiated(False)
 
     def stop_gonetem(self) -> float:
         """Stop GoNetEm and clean up resources.
@@ -158,6 +198,10 @@ class NetworkLifecycleMixin:
 
         launcher = getattr(self, "launcher", None)
         teardown_error: Exception | None = None
+        close_error: Exception | None = None
+        launcher_retained = False
+
+        self._stop_routing_daemon()
 
         try:
             if self.hil_manager is not None:
@@ -169,16 +213,38 @@ class NetworkLifecycleMixin:
         try:
             if launcher is not None:
                 launcher.close_project()
-        finally:
-            # A failed stop must not leave the manager in a state where
-            # start_gonetem() silently refuses to run (CORE-07).
+        except Exception as exc:
+            close_error = exc
+            logging.error("Failed to close GoNetEm project during stop: %s", exc)
+            force_close = getattr(launcher, "force_close_project", None)
+            if callable(force_close):
+                try:
+                    force_close()
+                except Exception as force_exc:
+                    logging.error(
+                        "Force-close fallback failed during stop: %s", force_exc
+                    )
+                    launcher_retained = True
+            else:
+                launcher_retained = True
+
+        # A failed stop must not leave the manager in a state where
+        # start_gonetem() silently refuses to run (CORE-07). Keep the launcher
+        # itself only when neither graceful nor forced cleanup succeeded so a
+        # retry can target the same project.
+        self.set_gonetem_status(False)
+        self.set_routing_initiated(False)
+        self.routing_method = None
+        if not launcher_retained:
             self.launcher = None
-            self.set_gonetem_status(False)
-            self.set_routing_initiated(False)
-            self.routing_method = None
+            self.project_id = None
+            self.client = None
+            self.request = None
 
         if teardown_error is not None:
             raise teardown_error
+        if launcher_retained and close_error is not None:
+            raise close_error
 
         return time.perf_counter() - tic
 

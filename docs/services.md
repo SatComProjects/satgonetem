@@ -199,8 +199,10 @@ later.
 | `_lifecycle_lock` | `Lock` serializing start/stop |
 
 Status flags are not independent: `stop_gonetem()` clears `status`,
-`gonetem_is_on`, and `routing_initiated`, and resets `routing_method` and
-`launcher`.
+`gonetem_is_on`, and `routing_initiated`, resets `routing_method`, and removes
+the routing daemon. `launcher`, `project_id`, `client`, and `request` are
+cleared only when project teardown succeeds; if both the graceful and forced
+close paths fail they are retained so a retry can target the same project.
 
 ## Locking model
 
@@ -279,15 +281,28 @@ flags, and re-raises.
 `stop_gonetem()`:
 
 - stops the loop if running;
-- stops active traffic flows with a bounded wait (5 s per live thread);
+- stops active traffic flows with a bounded wait (5 s per live thread). Each
+  flow is isolated, so one status or stop error does not abort the rest of
+  teardown; flows whose thread is still alive after the wait (or whose
+  liveness cannot be checked) stay in `_active_flows` for a later retry;
+- removes the routing daemon with `remove()` while the project containers
+  still exist, logs a removal error without aborting, then clears
+  `routing_daemon` and `routing_initiated`;
 - tears down HIL links;
-- closes the launcher project;
-- clears `launcher`, `status`, `gonetem_is_on`, `routing_initiated`, and
-  `routing_method`.
+- closes the launcher project. If `close_project()` fails, it logs the error
+  and calls `force_close_project()` as a fallback;
+- sets `status`, `gonetem_is_on`, and `routing_initiated` to false and clears
+  `routing_method`; clears `launcher`, `project_id`, `client`, and `request`
+  only when project close succeeded.
 
-It may raise a HIL teardown error after the rest of the teardown has
-completed. `force_stop_gonetem()` follows the same sequence with
-`force_close_project()`, emits a `ResourceWarning`, and is meant for recovery.
+It may raise a HIL teardown error after the rest of the teardown has completed,
+even when the project close also failed. If both `close_project()` and the
+force-close fallback fail, `launcher` and the project handles are retained and
+the close error is raised after cleanup so the caller can retry
+`stop_gonetem()`. `force_stop_gonetem()` performs the loop/flow/HIL teardown
+with `force_close_project()`, emits a `ResourceWarning`, and always clears the
+launcher and status flags without the close-retry retention. It is meant for
+recovery.
 
 `set_ip_addresses(satellites=True, ground_stations=True)` requires
 `address_plan` to exist. It calls `set_ipv4s_for_all_nodes()` and returns the
@@ -408,12 +423,17 @@ types raise `AttributeError`.
 - `init_routing(routing_method="", max_workers=MAX_WORKERS)` tears down any
   existing daemon, instantiates the requested one (built-in or registered),
   calls `init()`, and stores it on `routing_daemon`. It returns elapsed
-  seconds or `-1.0` on failure. A failed init never leaves a half-initialized
-  daemon installed.
-- `delete_routing()` calls `remove()` and clears the daemon and flags; returns
-  `-1.0` if routing was not initialized.
+  seconds or `-1.0` on failure. Unknown methods and daemon construction or
+  initialization errors are reported as `-1.0` and never leave a
+  half-initialized daemon installed.
+- `delete_routing()` calls `remove()` and clears the daemon and flags even when
+  `remove()` raises; returns `-1.0` if routing was not initialized.
+- Both lifecycle methods hold the simulation lock, so they serialize with the
+  simulation loop tick and API-driven topology mutations.
 - `get_path_between_nodes(source, target)` runs `networkx.shortest_path()` on
-  `get_current_graph()` using the `weight` attribute. It is a diagnostic
+  `get_current_graph()` using the `weight` attribute. Endpoints must be
+  `GroundStation` or `Satellite` instances (subclasses included); nodes missing
+  from the graph or disconnected return an empty path. It is a diagnostic
   helper, not the active daemon's forwarding table.
 - `get_allowed_routing_methods()` returns the built-ins plus registered names.
 
@@ -522,8 +542,11 @@ privileges. See
 
 - A failed `start_gonetem()` force-closes the project and resets all startup
   flags.
-- A failed `stop_gonetem()` still clears the launcher and flags; it re-raises
-  the HIL teardown error after cleanup.
+- A failed `stop_gonetem()` still resets the status flags and clears
+  `routing_method`; it re-raises the HIL teardown error after cleanup. The
+  launcher and project handles are cleared when project close succeeds
+  (including through the force-close fallback) and retained only when both
+  close paths fail, so the stop can be retried.
 - A failed routing init removes the partially initialized daemon and returns
   `-1.0`.
 - A failed tick is recorded and retried; it does not stop the loop.
