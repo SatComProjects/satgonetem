@@ -20,6 +20,7 @@ if TYPE_CHECKING:
 import contextlib
 
 from satgonetem.traffic import iperf3_ports
+from satgonetem.traffic.flow import ThreadedFlow
 from satgonetem.traffic.iperf3_config import Iperf3Config
 from satgonetem.traffic.iperf3_io import (
     _extract_iperf3_json,
@@ -49,10 +50,12 @@ class FlowStatus(enum.Enum):
     ERROR = "error"
 
 
-class Iperf3Flow:
+class Iperf3Flow(ThreadedFlow):
     """Non-blocking iperf3 flow between two nodes.
 
     Wraps run_iperf3_flow in a daemon thread so the caller is not blocked.
+    The thread/status/error lifecycle is inherited from ThreadedFlow, so the
+    flow can be scheduled by FlowScheduler like every other traffic flow.
     All state transitions are protected by an internal lock, making status
     and results safe to poll from any thread.
 
@@ -74,6 +77,8 @@ class Iperf3Flow:
         config: Iperf3Config for this flow.
     """
 
+    STATUS = FlowStatus
+
     def __init__(
         self,
         source: Node,
@@ -90,27 +95,19 @@ class Iperf3Flow:
                 executing the flow. The flow status is RUNNING during
                 this wait period.
         """
-        self.source = source
-        self.destination = destination
-        self.config = config
-        self.delay = delay
+        super().__init__(source, destination, config, delay)
         # Reserved on start so flows constructed up-front (for a scheduler
         # with hundreds of entries) do not exhaust the port pool. config.port
         # is left untouched so shared configs remain safe to reuse.
         self._port: int | None = None
-
-        self._status = FlowStatus.IDLE
-        self._result: Iperf3Results | None = None
-        self._error: Exception | None = None
-        self._thread: threading.Thread | None = None
-        self._lock = threading.Lock()
-        self._stop_event = threading.Event()
+        self._port_lock = threading.Lock()
 
     def _reserve_port(self) -> int:
         """Reserve this flow's exclusive server port on first use."""
-        if self._port is None:
-            self._port = iperf3_ports._IPERF3_PORT_ALLOCATOR.allocate()
-        return self._port
+        with self._port_lock:
+            if self._port is None:
+                self._port = iperf3_ports._IPERF3_PORT_ALLOCATOR.allocate()
+            return self._port
 
     def start(self) -> None:
         """Start the iperf3 flow in a background daemon thread.
@@ -120,65 +117,15 @@ class Iperf3Flow:
         Raises:
             RuntimeError: If the flow has already been started.
         """
-        with self._lock:
-            if self._status != FlowStatus.IDLE:
-                raise RuntimeError(
-                    f"Flow has already been started (status={self._status.value})"
-                )
-            self._reserve_port()
-            self._status = FlowStatus.RUNNING
-            self._thread = threading.Thread(target=self._run, daemon=True)
-            self._thread.start()
+        self._reserve_port()
+        super().start()
 
-    def stop(self) -> None:
-        """Send SIGTERM to the running iperf3 client and server and wait for the thread.
-
-        Any partial JSON output retrieved from the output file is printed to stdout.
-        Both client and server processes are terminated. No-op if not running.
-        """
-        with self._lock:
-            if self._status != FlowStatus.RUNNING:
-                return
-        self._stop_event.set()
-
+    def _stop_process(self) -> None:
+        """Send SIGTERM to the running iperf3 client and server."""
         port = self._port if self._port is not None else self.config.port
         kill_cmd = f"pkill -f 'iperf3 .*-p {port} ' 2>/dev/null; true"
         self.source.execute_command(kill_cmd, detach=True)
         self.destination.execute_command(kill_cmd, detach=True)
-        if self._thread is not None:
-            self._thread.join(timeout=5.0)
-
-    def status(self) -> FlowStatus:
-        """Return the current lifecycle state of the flow.
-
-        Returns:
-            The current FlowStatus value.
-        """
-        with self._lock:
-            return self._status
-
-    def results(self) -> Iperf3Results:
-        """Return the parsed results once the flow has completed.
-
-        Returns:
-            Iperf3Results from the completed flow.
-
-        Raises:
-            RuntimeError: If the flow has not been started, is still running,
-                or completed with an error.
-        """
-        with self._lock:
-            match self._status:
-                case FlowStatus.IDLE:
-                    raise RuntimeError("Flow has not been started yet")
-                case FlowStatus.RUNNING:
-                    raise RuntimeError("Flow is still running")
-                case FlowStatus.ERROR:
-                    raise RuntimeError(f"Flow failed: {self._error}") from self._error
-                case FlowStatus.DONE:
-                    return self._result  # type: ignore[return-value]
-                case _ as unexpected:
-                    raise TypeError(f"Unexpected FlowStatus: {unexpected!r}")
 
     def _json_side(self, client_json: str, server_json: str):
         """Return the preferred and fallback JSON locations.
@@ -298,26 +245,18 @@ class Iperf3Flow:
                 )
         return diagnostics
 
-    def _run(self) -> None:
-        """Execute the iperf3 flow and update status on completion.
+    def _execute(self) -> Iperf3Results:
+        """Execute the iperf3 flow and return its parsed results.
 
-        The entire body is guarded so that every exit path lands in a
-        terminal status (``DONE`` or ``ERROR``), including failures while
-        resolving node addresses or building temp paths. The result/status
-        are recorded before best-effort cleanup, and cleanup errors can
-        never discard a valid measurement.
+        The body is guarded so that failures while resolving node addresses
+        or building temp paths still produce a diagnostic error, and
+        best-effort cleanup can never discard a valid measurement.
         """
         client_json: str | None = None
         server_json: str | None = None
         dst_ip: str | None = None
         raw: str | None = None
         try:
-            if self.delay > 0.0 and self._stop_event.wait(self.delay):
-                with self._lock:
-                    self._error = RuntimeError("Flow stopped before it could start")
-                    self._status = FlowStatus.ERROR
-                return
-
             run_id = uuid.uuid4().hex[:8]
             client_json = f"/tmp/iperf3_cli_{self.source.name}_{self.destination.name}_{run_id}.json"
             server_json = f"/tmp/iperf3_srv_{self.source.name}_{self.destination.name}_{run_id}.json"
@@ -353,34 +292,19 @@ class Iperf3Flow:
             result = Iperf3Results(raw_json=raw, config=run_config)
             result.json_side = json_side
             result.client_notes = _text_outside_iperf3_json(client_text)
-            with self._lock:
-                self._result = result
-                self._status = FlowStatus.DONE
+            return result
         except Exception as exc:
             if self._stop_event.is_set() and raw:
                 print(raw)
             self._kill_server(dst_ip)
             diagnostics = self._collect_diagnostics(client_json, server_json)
-
-            final_error = exc
             if diagnostics:
-                final_error = RuntimeError(f"{exc}\n" + "\n".join(diagnostics))
-                final_error.__cause__ = exc  # preserve the original traceback link
-
-            with self._lock:
-                self._error = final_error
-                self._status = FlowStatus.ERROR
+                raise RuntimeError(f"{exc}\n" + "\n".join(diagnostics)) from exc
+            raise
         finally:
-            # Success has already stored its result/status above, so cleanup
-            # failures here cannot discard a valid measurement. The terminal
-            # status check is a last-resort guard for unexpected exit paths.
+            # Cleanup is best-effort and runs on every path so a failed flow
+            # never leaks temp files or keeps a port reserved.
             self._remove_temp_file(self.source, client_json)
             self._remove_temp_file(self.destination, server_json)
             if self._port is not None:
                 iperf3_ports._IPERF3_PORT_ALLOCATOR.release(self._port)
-            with self._lock:
-                if self._status == FlowStatus.RUNNING:
-                    self._error = self._error or RuntimeError(
-                        "iperf3 flow terminated without recording a result"
-                    )
-                    self._status = FlowStatus.ERROR

@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import abc
 import threading
-import time
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
@@ -119,8 +118,13 @@ class ThreadedFlow(abc.ABC):
             self._result = None
 
     def _run(self) -> None:
-        if self.delay > 0.0:
-            time.sleep(self.delay)
+        if self.delay > 0.0 and self._stop_event.wait(self.delay):
+            with self._lock:
+                self._error = RuntimeError(
+                    f"{self.flow_name} stopped before it could start"
+                )
+                self._status = self.STATUS.ERROR
+            return
         try:
             result = self._execute()
             with self._lock:
