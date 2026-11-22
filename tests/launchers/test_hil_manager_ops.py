@@ -554,7 +554,7 @@ def test_teardown_bridge_retry_clears_tracking_after_delete_succeeds(
 # _delete_sat_veth
 
 
-def test_delete_sat_veth_logs_error_when_command_fails(
+def test_delete_sat_veth_treats_absent_device_as_success(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     runner = MagicMock()
@@ -564,18 +564,9 @@ def test_delete_sat_veth_logs_error_when_command_fails(
     manager = HILManager({"Gnd0": "eth1"}, command_runner=runner)
     caplog.set_level(logging.ERROR)
 
-    manager._delete_sat_veth("Sat1", 7777, 2)
+    assert manager._delete_sat_veth("Sat1", 7777, 2) is True
 
-    runner.run.assert_called_once_with(
-        ["nsenter", "--net=/proc/7777/ns/net", "ip", "link", "delete", "eth2"],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-    assert (
-        "HIL: failed to delete veth eth2 in Sat1: Cannot find device eth2"
-        in caplog.text
-    )
+    assert "failed to delete veth" not in caplog.text
 
 
 # setup_link / update_link error paths

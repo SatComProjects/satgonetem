@@ -381,12 +381,28 @@ class HILManager:
                 entered_satellite_ns = True
 
             with IPRoute() as ipr:
-                ipr.link(
-                    "add",
-                    ifname=sat_iface,
-                    kind="veth",
-                    peer={"ifname": host_iface, "net_ns_fd": HOST_NS_PATH},
-                )
+                try:
+                    ipr.link(
+                        "add",
+                        ifname=sat_iface,
+                        kind="veth",
+                        peer={"ifname": host_iface, "net_ns_fd": HOST_NS_PATH},
+                    )
+                except Exception as exc:
+                    if "exist" not in str(exc).lower():
+                        raise
+                    # A previous rollback may have left the SAT-side veth
+                    # behind. Remove it and retry once; deleting the SAT side
+                    # also removes the kernel-created host peer.
+                    stale = ipr.link("get", ifname=sat_iface)
+                    if stale:
+                        ipr.link("del", index=stale[0]["index"])
+                    ipr.link(
+                        "add",
+                        ifname=sat_iface,
+                        kind="veth",
+                        peer={"ifname": host_iface, "net_ns_fd": HOST_NS_PATH},
+                    )
                 veth_created = True
                 lnks = ipr.link("get", ifname=sat_iface)
                 if lnks:
@@ -639,11 +655,18 @@ class HILManager:
             text=True,
         )
         if r.returncode != 0:
+            stderr = (r.stderr or "").strip()
+            lowered = stderr.lower()
+            if "cannot find device" in lowered or "does not exist" in lowered:
+                logging.debug(
+                    "HIL: veth %s in %s is already absent", sat_iface, sat_name
+                )
+                return True
             logging.error(
                 "HIL: failed to delete veth %s in %s: %s",
                 sat_iface,
                 sat_name,
-                r.stderr.strip(),
+                stderr,
             )
             return False
         logging.debug("HIL: deleted veth %s in %s", sat_iface, sat_name)
