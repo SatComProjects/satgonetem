@@ -102,7 +102,6 @@ def _group_satellites_by_orbital_plane(
     satellites,
     time_manager,
     raan_threshold: float = 5.0,
-    min_plane_size: int = 10,
     max_altitude_difference: float = 50.0,
 ) -> list[list[tuple[SatComSatellite, float]]]:
     """Group satellites into orbital planes by RAAN and altitude.
@@ -118,7 +117,6 @@ def _group_satellites_by_orbital_plane(
         satellites: List of Satellite objects.
         time_manager: The simulation's TimeManager.
         raan_threshold: Maximum RAAN difference (degrees) to belong to the same plane.
-        min_plane_size: Minimum number of satellites to consider a valid plane.
         max_altitude_difference: Maximum altitude difference (km) between
             satellites in the same plane.  Satellites whose altitude differs
             by more than this value from the rest of their RAAN cluster are
@@ -250,7 +248,6 @@ def add_mesh_links(
         satellites,
         simulation_manager.time_manager,
         max_altitude_difference=max_altitude_difference,
-        min_plane_size=min_plane_size,
     )
     num_planes = len(planes)
 

@@ -192,15 +192,25 @@ class LongestConnectionTimeStrategy(GroundToSpaceConnectionStrategy):
         # Helper to compute elevation at now + delta_t seconds
         def elev_at(delta_t: float) -> float:
             try:
-                lon, lat, alt = satellite.movement_model.orbital_object.get_lonlatalt(
-                    now + datetime.timedelta(seconds=delta_t)
+                lon, lat, alt_km = (
+                    satellite.movement_model.orbital_object.get_lonlatalt(
+                        now + datetime.timedelta(seconds=delta_t)
+                    )
                 )
+                # pyorbital reports altitude in kilometres; the elevation
+                # helper expects metres.
+                sat_coordinates = (lat, lon, alt_km * 1000.0)
             except Exception:
-                lon, lat, alt = satellite.movement_model.get_position_at(
-                    now + datetime.timedelta(seconds=delta_t)
+                position = satellite.movement_model.get_longitude_latitude_altitude(
+                    delta_t
+                )
+                sat_coordinates = (
+                    position.latitude,
+                    position.longitude,
+                    position.altitude or 0.0,
                 )
             return get_elevation_angle(
-                sat_coordinates=(lat, lon, alt),
+                sat_coordinates=sat_coordinates,
                 gnd_coordinates=(gnd_lat, gnd_lon, gnd_alt),
             )
 
