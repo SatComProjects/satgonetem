@@ -94,6 +94,23 @@ def _route_delete_command(route_command: str) -> str:
     return f"ip route del {target}"
 
 
+def _tolerant_route_delete_command(route_command: str) -> str:
+    """Build a delete that tolerates a route the kernel no longer has.
+
+    A cached route can outlive the kernel entry (container restart, or a
+    partially applied earlier batch).  These batches run with ``set -e``, so
+    an unguarded ``route del`` of an absent prefix would abort the whole batch
+    and leave the stale key in the cache, wedging every later update.
+
+    Args:
+        route_command: Installed route command ending in ``replace``.
+
+    Returns:
+        Matching ``ip ... route del`` command with a ``|| true`` guard.
+    """
+    return f"{_route_delete_command(route_command)} 2>/dev/null || true"
+
+
 def _route_changes(
     previous: list[str],
     desired: list[str],
@@ -858,7 +875,9 @@ class SRMPLSDaemon(RoutingDaemon):
             stale = [line for line in prev if line not in new_set]
 
             if changed or stale:
-                batch_lines = [_route_delete_command(line) for line in stale] + changed
+                batch_lines = [
+                    _tolerant_route_delete_command(line) for line in stale
+                ] + changed
                 batch_cmd = "set -e; " + "; ".join(batch_lines)
                 try:
                     gs.execute_command(["sh", "-lc", batch_cmd])
@@ -1058,7 +1077,9 @@ class SRMPLSDaemon(RoutingDaemon):
         stale, _ = _route_changes(
             self._prev_sr_gs_routes.get(source_id, []), route_commands, set()
         )
-        batch_lines = [_route_delete_command(line) for line in stale] + route_commands
+        batch_lines = [
+            _tolerant_route_delete_command(line) for line in stale
+        ] + route_commands
 
         if batch_lines:
             batch_cmd = "set -e; " + "; ".join(batch_lines)

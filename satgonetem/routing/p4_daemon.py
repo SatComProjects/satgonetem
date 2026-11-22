@@ -200,8 +200,9 @@ class P4Daemon(RoutingDaemon):
         opens a TCP connection to ``controller_host:controller_port``; pass
         ``readiness_probe`` to the constructor for a different health check.
         Returns False when the script is missing or not executable, the process
-        exits, or the endpoint does not become ready before the deadline. Any
-        started process is stopped on failure.
+        exits, the endpoint does not become ready before the deadline, or the
+        readiness probe raises. Any started process is stopped and its output
+        readers are joined on failure.
         """
         script_path = os.path.join(self.p4_controller_path, "run_controller.sh")
 
@@ -239,7 +240,8 @@ class P4Daemon(RoutingDaemon):
         self.p4_controller_process = proc
 
         # Background threads stream stdout/stderr into the logger. stderr is
-        # also buffered so the main thread can report it after joining.
+        # also buffered so the main thread can report it at ERROR after
+        # joining; streaming it at ERROR as well would duplicate the tail.
         stderr_lines: deque[str] = deque(maxlen=_MAX_BUFFERED_STDERR_LINES)
 
         def _stream_reader(stream, log_fn, sink=None):
@@ -259,7 +261,7 @@ class P4Daemon(RoutingDaemon):
         )
         t_err = threading.Thread(
             target=_stream_reader,
-            args=(proc.stderr, self.logger.error, stderr_lines),
+            args=(proc.stderr, self.logger.debug, stderr_lines),
             daemon=True,
         )
         t_out.start()
@@ -267,31 +269,37 @@ class P4Daemon(RoutingDaemon):
 
         deadline = time.monotonic() + timeout
         probe = self._readiness_probe or self._probe_controller_port
-        while True:
-            if proc.poll() is not None:
-                self.logger.error(
-                    f"P4 controller process exited during startup "
-                    f"with code {proc.returncode}"
-                )
-                self.stop_p4_controller()
-                self._drain_controller_output((t_out, t_err), stderr_lines)
-                return False
+        try:
+            while True:
+                if proc.poll() is not None:
+                    self.logger.error(
+                        f"P4 controller process exited during startup "
+                        f"with code {proc.returncode}"
+                    )
+                    self.stop_p4_controller()
+                    self._drain_controller_output((t_out, t_err), stderr_lines)
+                    return False
 
-            if probe():
-                return True
+                if probe():
+                    return True
 
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                self.logger.error(
-                    f"P4 controller endpoint "
-                    f"{self.controller_host}:{self.controller_port} did not become "
-                    f"ready within {timeout} seconds"
-                )
-                self.stop_p4_controller()
-                self._drain_controller_output((t_out, t_err), stderr_lines)
-                return False
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    self.logger.error(
+                        f"P4 controller endpoint "
+                        f"{self.controller_host}:{self.controller_port} did not become "
+                        f"ready within {timeout} seconds"
+                    )
+                    self.stop_p4_controller()
+                    self._drain_controller_output((t_out, t_err), stderr_lines)
+                    return False
 
-            time.sleep(min(_READINESS_POLL_INTERVAL, remaining))
+                time.sleep(min(_READINESS_POLL_INTERVAL, remaining))
+        except Exception:
+            self.logger.exception("P4 controller readiness check failed")
+            self.stop_p4_controller()
+            self._drain_controller_output((t_out, t_err), stderr_lines)
+            return False
 
     def is_p4_controller_running(self) -> bool:
         return (
@@ -323,12 +331,13 @@ class P4Daemon(RoutingDaemon):
     def update(self, new_links: "list[Link]", max_workers: int = 4) -> None:
         """Export a snapshot of the active topology graph to shared memory.
 
-        The snapshot contains only links that are active and not pending
-        removal, matching the graph used for route computation. If the daemon
-        is not initialized, or initialization failed and released the segment,
-        there is nothing to update: the call logs a warning and returns without
-        raising. When topology growth exceeds the segment capacity, the segment
-        is recreated with room for the new edges.
+        The snapshot contains only links that are active, not pending removal,
+        and not disabled (either on the link or on its satcom object), matching
+        the graph used for route computation. If the daemon is not initialized,
+        or initialization failed and released the segment, there is nothing to
+        update: the call logs a warning and returns without raising. When
+        topology growth exceeds the segment capacity, the segment is recreated
+        with room for the new edges.
 
         Args:
             new_links: List of newly added links (unused; the export is a full
@@ -344,7 +353,10 @@ class P4Daemon(RoutingDaemon):
         edges = [
             build_edge_from_link(link)
             for link in self.topology.links.values()
-            if link.is_active and not getattr(link, "to_remove", False)
+            if link.is_active
+            and not getattr(link, "to_remove", False)
+            and not getattr(link, "disabled", False)
+            and not getattr(getattr(link, "satcom_object", None), "disabled", False)
         ]
 
         if self.graph_shared_memory.ensure_capacity(len(edges)):

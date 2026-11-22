@@ -1,6 +1,7 @@
 """Tests for StaticRoutingDaemon."""
 
 import logging
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import grpc
@@ -648,6 +649,37 @@ class TestAddressableSatellites:
                 if r.destination == sat0.loopback.ipv4
             ]
             assert len(routes_to_sat0) == 0
+
+
+class TestRouteCacheSignature:
+    """The cache signature must fail loudly on an unusable outgoing path."""
+
+    def test_missing_peer_raises_value_error_with_source_and_destination(self):
+        daemon = StaticRoutingDaemon(make_topology())
+        dst = SimpleNamespace(id=2)
+        interface = Interface(name="Gnd0.1")  # peer is unset
+
+        with pytest.raises(ValueError, match="Source 1.*destination 2"):
+            daemon._route_cache_signature(
+                src_id=1,
+                src_ifaces={1: interface},
+                dst_array=[dst],
+                next_hops={2: {1: 1}},
+                loopback_ips={2: "10.0.0.2"},
+            )
+
+    def test_missing_interface_raises_value_error_with_source_and_destination(self):
+        daemon = StaticRoutingDaemon(make_topology())
+        dst = SimpleNamespace(id=2)
+
+        with pytest.raises(ValueError, match="Source 1.*next hop 1.*destination 2"):
+            daemon._route_cache_signature(
+                src_id=1,
+                src_ifaces={},
+                dst_array=[dst],
+                next_hops={2: {1: 1}},
+                loopback_ips={2: "10.0.0.2"},
+            )
 
 
 class TestPopulateDijkstraIgraph:

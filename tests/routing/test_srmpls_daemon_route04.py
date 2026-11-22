@@ -92,7 +92,8 @@ def test_ground_station_empty_route_list_deletes_and_clears_cache():
         [
             "sh",
             "-lc",
-            "set -e; ip -f mpls route del 16001; ip route del 10.20.0.1/32",
+            "set -e; ip -f mpls route del 16001 2>/dev/null || true; "
+            "ip route del 10.20.0.1/32 2>/dev/null || true",
         ]
     ]
     # An empty route set must be committed, not leave the old cache behind.

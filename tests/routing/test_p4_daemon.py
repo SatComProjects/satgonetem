@@ -11,6 +11,7 @@ import logging
 import os
 import subprocess
 import threading
+from multiprocessing import shared_memory
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 from uuid import uuid4
@@ -281,6 +282,26 @@ def test_start_preserves_early_exit_stderr_without_concurrent_read(
     assert daemon.p4_controller_process is None
 
 
+def test_controller_stderr_is_logged_once_at_error_on_failure(
+    daemon, monkeypatch, caplog
+):
+    _patch_os(monkeypatch, exists=True, executable=True)
+    process = FakeProcess(returncode=3, stderr="controller boot failure\n")
+    _patch_popen(monkeypatch, process=process)
+    _patch_sleep(monkeypatch)
+
+    with caplog.at_level(logging.ERROR):
+        assert daemon.start_p4_controller() is False
+
+    matches = [
+        record
+        for record in caplog.records
+        if "controller boot failure" in record.getMessage()
+    ]
+    assert len(matches) == 1
+    assert matches[0].levelno == logging.ERROR
+
+
 def test_start_reports_running_process(daemon, monkeypatch):
     _patch_os(monkeypatch, exists=True, executable=True)
     process = FakeProcess(returncode=None)
@@ -342,6 +363,33 @@ def test_init_returns_false_when_controller_fails(daemon, monkeypatch):
     graph.close.assert_called_once_with()
     graph.unlink.assert_called_once_with()
     assert daemon.graph_shared_memory is None
+
+
+def test_init_releases_everything_when_readiness_probe_raises(
+    topology, tmp_path, monkeypatch, caplog
+):
+    name = f"satgonetem-test-p4-{os.getpid()}-{uuid4().hex}"
+    probe = MagicMock(side_effect=RuntimeError("probe exploded"))
+    daemon = P4Daemon(
+        topology,
+        str(tmp_path / "controller"),
+        shared_memory_name=name,
+        readiness_probe=probe,
+    )
+    _patch_os(monkeypatch, exists=True, executable=True)
+    process = FakeProcess(returncode=None)
+    _patch_popen(monkeypatch, process=process)
+    _patch_sleep(monkeypatch)
+
+    with caplog.at_level(logging.ERROR):
+        assert daemon.init() is False
+
+    assert "probe exploded" in caplog.text
+    assert process.terminate_calls == 1
+    assert daemon.p4_controller_process is None
+    assert daemon.graph_shared_memory is None
+    with pytest.raises(FileNotFoundError):
+        shared_memory.SharedMemory(name=name)
 
 
 def test_init_returns_true_when_controller_starts(daemon, monkeypatch):
@@ -542,6 +590,39 @@ def test_update_exports_only_active_links_not_pending_removal(daemon, monkeypatc
     inactive = SimpleNamespace(is_active=False, to_remove=False, tag="inactive")
     pending_removal = SimpleNamespace(is_active=True, to_remove=True, tag="pending")
     daemon.topology.links = {0: active, 1: inactive, 2: pending_removal}
+    monkeypatch.setattr(p4_daemon, "build_edge_from_link", lambda link: link.tag)
+
+    daemon.update([])
+
+    assert graph.write_edges.call_args.args[0] == ["active"]
+
+
+def test_update_excludes_links_disabled_in_the_current_graph(daemon, monkeypatch):
+    graph = MagicMock()
+    daemon.graph_shared_memory = graph
+    active = SimpleNamespace(
+        is_active=True,
+        to_remove=False,
+        satcom_object=SimpleNamespace(disabled=False),
+        tag="active",
+    )
+    satcom_disabled = SimpleNamespace(
+        is_active=True,
+        to_remove=False,
+        satcom_object=SimpleNamespace(disabled=True),
+        tag="satcom-disabled",
+    )
+    link_disabled = SimpleNamespace(
+        is_active=True,
+        to_remove=False,
+        disabled=True,
+        tag="link-disabled",
+    )
+    daemon.topology.links = {
+        0: active,
+        1: satcom_disabled,
+        2: link_disabled,
+    }
     monkeypatch.setattr(p4_daemon, "build_edge_from_link", lambda link: link.tag)
 
     daemon.update([])

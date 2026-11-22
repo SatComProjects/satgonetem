@@ -106,13 +106,17 @@ def test_remaining_nodes_still_receive_updates_after_a_scoped_remove() -> None:
     del daemon.topology.ground_stations[removed.id]
 
     daemon.remove(removed)
+    # Make sure the assertion cannot be satisfied by the cache seeded by the
+    # fixture: a scoped remove must not stop the remaining node from being
+    # rebuilt and re-installed on the next update.
+    daemon._prev_sr_gs_routes.pop(remaining.id, None)
     daemon.update([])
 
     assert daemon.is_initialized
-    assert remaining.id in daemon.sr_lfib
-    assert daemon._prev_sr_gs_routes.get(remaining.id), (
-        "the remaining node must still receive its routes"
-    )
+    assert daemon.sr_lfib[remaining.id] == []
+    assert daemon._prev_sr_gs_routes[remaining.id] == [
+        "ip -f mpls route replace 16001 dev lo"
+    ], "the remaining node must still have its routes rebuilt and installed"
 
 
 def test_remove_without_a_node_still_tears_everything_down() -> None:
