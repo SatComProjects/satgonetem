@@ -201,9 +201,10 @@ later.
 Status flags are not independent: `stop_gonetem()` clears `status`,
 `gonetem_is_on`, and `routing_initiated`, resets `routing_method`, and removes
 the routing daemon. `launcher`, `project_id`, `client`, and `request` are
-cleared only when project teardown succeeds; if the graceful close fails and
-the forced fallback does not report success they are retained so a retry can
-target the same project.
+cleared only when project teardown succeeds. If the graceful close fails and
+the forced fallback does not report success, they are retained and
+`_pending_force_close` is set so the next `stop_gonetem()` retries the forced
+close directly.
 
 ## Locking model
 
@@ -283,8 +284,10 @@ topology.stop_gonetem()         # close the project
 - wires HIL links through `hil_manager.wire_links()`;
 - sets `status` and `gonetem_is_on`, records `start_time_`.
 
-On failure it force-closes the project, clears the launcher, resets the three
-flags, and re-raises.
+On failure it force-closes the project, resets the three flags, and re-raises.
+The launcher is cleared only when the forced close returns `True`; if it
+returns `False`, the launcher is retained, `_pending_force_close` is set, and
+`stop_gonetem()` can retry the cleanup.
 
 `stop_gonetem()`:
 
@@ -300,6 +303,8 @@ flags, and re-raises.
 - closes the launcher project. If `close_project()` fails, it logs the error
   and calls `force_close_project()` as a fallback; the fallback counts as
   successful only when it returns `True`;
+- when a previous stop retained the launcher, skips the graceful close (its
+  client is already gone) and calls `force_close_project()` directly;
 - sets `status`, `gonetem_is_on`, and `routing_initiated` to false and clears
   `routing_method`; clears `launcher`, `project_id`, `client`, and `request`
   only when project close succeeded or the force-close fallback returned
@@ -309,7 +314,9 @@ It may raise a HIL teardown error after the rest of the teardown has completed,
 even when the project close also failed. If both `close_project()` and the
 force-close fallback fail (or the fallback does not report success),
 `launcher` and the project handles are retained and the close error is raised
-after cleanup so the caller can retry `stop_gonetem()`.
+after cleanup so the caller can retry `stop_gonetem()`. On that retry only the
+forced close runs; if it still does not return `True`, the handles stay
+retained, `_pending_force_close` stays set, and a `RuntimeError` is raised.
 
 `force_stop_gonetem()` performs the loop/flow teardown, removes the routing
 daemon best-effort, then runs HIL teardown and
@@ -555,12 +562,16 @@ privileges. See
 ## Failure and cleanup rules
 
 - A failed `start_gonetem()` force-closes the project and resets all startup
-  flags.
+  flags. The launcher is retained when the forced close returns `False`, so
+  `stop_gonetem()` can retry the cleanup instead of silently dropping the
+  handle.
 - A failed `stop_gonetem()` still resets the status flags and clears
   `routing_method`; it re-raises the HIL teardown error after cleanup. The
   launcher and project handles are cleared when project close succeeds or the
   force-close fallback returns `True`, and retained when that fallback fails
-  or does not report success, so the stop can be retried.
+  or does not report success. A retained launcher sets `_pending_force_close`,
+  so the next `stop_gonetem()` retries `force_close_project()` directly and
+  clears the handles only if it returns `True`.
 - `start_gonetem()` refuses to overwrite a launcher retained by a failed stop:
   it raises `RuntimeError` and leaves the retained handles intact. Retry
   `stop_gonetem()` first.

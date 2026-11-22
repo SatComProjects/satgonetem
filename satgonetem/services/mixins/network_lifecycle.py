@@ -25,6 +25,9 @@ class NetworkLifecycleMixin:
     project_id: str | None
     client: Any
     request: Any
+    # A previous stop retained the launcher after a failed forced close; the
+    # next stop must retry the forced path because the graceful client is gone.
+    _pending_force_close: bool
 
     def start_gonetem(self, controller: bool = False) -> tuple[float, float] | None:
         """Start GoNetEm by launching containers and wiring links.
@@ -42,6 +45,8 @@ class NetworkLifecycleMixin:
                 "A GoNetEm project is still retained from a failed stop; "
                 "call stop_gonetem() to retry before starting again."
             )
+        # A fresh start has no retained project to force-close.
+        self._pending_force_close = False
 
         from satgonetem.launchers.registry import create_launcher
 
@@ -88,14 +93,27 @@ class NetworkLifecycleMixin:
         except Exception:
             # Startup failed after the project may have been opened. Close it
             # best-effort and reset state so a retry does not leak a project.
+            cleanup_failed = False
             try:
-                launcher.force_close_project()
+                cleanup_confirmed = launcher.force_close_project() is True
             except Exception as cleanup_exc:
                 logging.error(
                     "Failed to force-close GoNetEm project after startup failure: %s",
                     cleanup_exc,
                 )
-            self.launcher = None
+            else:
+                cleanup_failed = not cleanup_confirmed
+            if cleanup_failed:
+                # Keep the handle so stop_gonetem() can retry the forced close
+                # instead of leaking the project silently.
+                self._pending_force_close = True
+                logging.error(
+                    "Force-close after startup failure did not confirm cleanup; "
+                    "retaining the launcher for stop_gonetem() to retry"
+                )
+            else:
+                self.launcher = None
+                self._pending_force_close = False
             self.set_status(False)
             self.set_gonetem_status(False)
             self.set_routing_initiated(False)
@@ -209,6 +227,7 @@ class NetworkLifecycleMixin:
         self.set_status(False)
 
         launcher = getattr(self, "launcher", None)
+        pending_force_close = bool(getattr(self, "_pending_force_close", False))
         teardown_error: Exception | None = None
         close_error: Exception | None = None
         launcher_retained = False
@@ -222,27 +241,46 @@ class NetworkLifecycleMixin:
             teardown_error = exc
             logging.error("HIL teardown failed during stop: %s", exc)
 
-        try:
-            if launcher is not None:
-                launcher.close_project()
-        except Exception as exc:
-            close_error = exc
-            logging.error("Failed to close GoNetEm project during stop: %s", exc)
-            force_close = getattr(launcher, "force_close_project", None)
-            fallback_succeeded = False
-            if callable(force_close):
-                try:
-                    fallback_succeeded = force_close() is True
-                except Exception as force_exc:
-                    logging.error(
-                        "Force-close fallback failed during stop: %s", force_exc
-                    )
-            if not fallback_succeeded:
+        if pending_force_close and launcher is not None:
+            # The previous stop already attempted the graceful close, which
+            # may have dropped the client. Retry the forced path directly.
+            forced = False
+            try:
+                forced = launcher.force_close_project() is True
+            except Exception as force_exc:
+                logging.error("Retried force-close failed during stop: %s", force_exc)
+            if not forced:
                 logging.error(
-                    "Force-close fallback did not confirm cleanup during stop; "
-                    "retaining project handles for a retry"
+                    "Retried force-close did not confirm cleanup during stop; "
+                    "retaining project handles for another retry"
                 )
                 launcher_retained = True
+                close_error = RuntimeError(
+                    "GoNetEm project force-close did not confirm cleanup; "
+                    "project handles were retained for another stop_gonetem() retry"
+                )
+        else:
+            try:
+                if launcher is not None:
+                    launcher.close_project()
+            except Exception as exc:
+                close_error = exc
+                logging.error("Failed to close GoNetEm project during stop: %s", exc)
+                force_close = getattr(launcher, "force_close_project", None)
+                fallback_succeeded = False
+                if callable(force_close):
+                    try:
+                        fallback_succeeded = force_close() is True
+                    except Exception as force_exc:
+                        logging.error(
+                            "Force-close fallback failed during stop: %s", force_exc
+                        )
+                if not fallback_succeeded:
+                    logging.error(
+                        "Force-close fallback did not confirm cleanup during stop; "
+                        "retaining project handles for a retry"
+                    )
+                    launcher_retained = True
 
         # A failed stop must not leave the manager in a state where
         # start_gonetem() silently refuses to run (CORE-07). Keep the launcher
@@ -251,6 +289,7 @@ class NetworkLifecycleMixin:
         self.set_gonetem_status(False)
         self.set_routing_initiated(False)
         self.routing_method = None
+        self._pending_force_close = launcher_retained
         if not launcher_retained:
             self.launcher = None
             self.project_id = None
@@ -325,6 +364,7 @@ class NetworkLifecycleMixin:
             self.project_id = None
             self.client = None
             self.request = None
+            self._pending_force_close = False
             self.set_status(False)
             self.set_gonetem_status(False)
             self.set_routing_initiated(False)
