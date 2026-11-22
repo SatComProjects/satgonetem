@@ -185,7 +185,9 @@ class SegmentRoutingManager:
         """Drop every cached label stack for a source-destination pair.
 
         The cache is keyed by pair, PHP mode, and path, so removing only one
-        key could leave a stale stack behind.
+        key could leave a stale stack behind.  The key list is snapshotted
+        first because other pair lookups can insert into the cache while the
+        scan runs.
 
         Args:
             source_id: Source node ID.
@@ -193,7 +195,7 @@ class SegmentRoutingManager:
         """
         stale_keys = [
             key
-            for key in self._label_stack_cache
+            for key in list(self._label_stack_cache)
             if key[0] == source_id and key[1] == dest_id
         ]
         for key in stale_keys:
