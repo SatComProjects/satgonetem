@@ -4,6 +4,12 @@ import subprocess
 from satgonetem.ports import default_runner
 from satgonetem.utils.ip_utils import IPUtils
 
+# Failures raised by command execution that must trigger setup rollback.
+_COMMAND_FAILURES = (subprocess.SubprocessError, OSError)
+
+# iproute2 diagnostics meaning the link is already gone (idempotent cleanup).
+_MISSING_LINK_HINTS = ("cannot find device", "does not exist", "no such device")
+
 
 class ControllerMixin:
     def _run_command(self, *args, **kwargs):
@@ -21,33 +27,72 @@ class ControllerMixin:
         veth_peer: str,
         bridge: str,
         ovs_cid: str | None = None,
-    ) -> None:
+    ) -> bool:
         """Idempotently tear down a controller veth pair.
 
         Removes *veth_peer* from the OVS *bridge* inside *ovs_cid* when the
         container ID is known, then deletes *veth_host* (which also destroys
         the peer).
+
+        Returns:
+            True when the host link is gone (including when it was already
+            absent), False when the delete failed.
         """
         if ovs_cid:
-            self._run_command(
-                [
-                    "docker",
-                    "exec",
-                    ovs_cid,
-                    "ovs-vsctl",
-                    "--if-exists",
-                    "del-port",
-                    bridge,
+            try:
+                ovs_result = self._run_command(
+                    [
+                        "docker",
+                        "exec",
+                        ovs_cid,
+                        "ovs-vsctl",
+                        "--if-exists",
+                        "del-port",
+                        bridge,
+                        veth_peer,
+                    ],
+                    capture_output=True,
+                    text=True,
+                )
+            except _COMMAND_FAILURES as exc:
+                logging.warning(
+                    "Failed to remove controller OVS port %s from %s: %s",
                     veth_peer,
-                ],
-                capture_output=True,
-                text=True,
-            )
-        self._run_command(
+                    bridge,
+                    exc,
+                )
+            else:
+                if getattr(ovs_result, "returncode", 0) != 0:
+                    logging.warning(
+                        "Failed to remove controller OVS port %s from %s: %s",
+                        veth_peer,
+                        bridge,
+                        getattr(ovs_result, "stderr", "") or "unknown error",
+                    )
+
+        result = self._run_command(
             ["sudo", "ip", "link", "delete", veth_host],
             capture_output=True,
             text=True,
         )
+        returncode = getattr(result, "returncode", 0)
+        if returncode == 0:
+            return True
+
+        detail = (
+            getattr(result, "stderr", "") or getattr(result, "stdout", "") or ""
+        ).strip()
+        if any(hint in detail.lower() for hint in _MISSING_LINK_HINTS):
+            logging.info("Controller veth %s is already absent", veth_host)
+            return True
+
+        logging.error(
+            "Failed to delete controller veth %s (returncode=%s): %s",
+            veth_host,
+            returncode,
+            detail or "unknown error",
+        )
+        return False
 
     def setup_controller_connection(self) -> None:
         """Create a veth pair linking the host to the Controller OVS switch.
@@ -147,7 +192,15 @@ class ControllerMixin:
             )
 
             self._run_command(
-                ["sudo", "ip", "addr", "add", f"{host_ip}/{prefix}", "dev", veth_host],
+                [
+                    "sudo",
+                    "ip",
+                    "addr",
+                    "replace",
+                    f"{host_ip}/{prefix}",
+                    "dev",
+                    veth_host,
+                ],
                 capture_output=True,
                 text=True,
                 check=True,
@@ -163,12 +216,17 @@ class ControllerMixin:
                 host_ip,
                 prefix,
             )
-        except subprocess.CalledProcessError as exc:
-            stderr = exc.stderr.strip() if exc.stderr else ""
+        except _COMMAND_FAILURES as exc:
+            if isinstance(exc, subprocess.CalledProcessError):
+                step = exc.cmd
+                detail = exc.stderr.strip() if exc.stderr else ""
+            else:
+                step = getattr(exc, "cmd", "<command>")
+                detail = str(exc)
             logging.error(
                 "Controller connection setup failed at step %s: %s",
-                exc.cmd,
-                stderr,
+                step,
+                detail or exc,
             )
             try:
                 self._remove_controller_veth(veth_host, veth_peer, bridge, ovs_cid)
@@ -177,7 +235,7 @@ class ControllerMixin:
                     "Controller connection rollback also failed: %s", rollback_exc
                 )
             raise RuntimeError(
-                f"Failed to set up controller connection: {stderr or exc}"
+                f"Failed to set up controller connection: {detail or exc}"
             ) from exc
 
     def setup_controller_addressing(self) -> dict[str, str]:
@@ -201,7 +259,7 @@ class ControllerMixin:
             try:
                 ip = self.build_controller_ip(node.id)
                 iface = self.get_management_interface(node.id)
-                node.execute_command(f"ip addr add {ip}/{prefix} dev {iface}")
+                node.execute_command(f"ip addr replace {ip}/{prefix} dev {iface}")
                 controller_ips[node.name] = ip
                 logging.debug(
                     "Assigned controller IP %s/%d to %s on %s",
@@ -281,8 +339,12 @@ class ControllerMixin:
                     ovs_cid,
                 )
 
-        self._remove_controller_veth(veth_host, veth_peer, bridge, ovs_cid)
-        logging.info("Controller connection cleaned up (%s)", veth_host)
+        if self._remove_controller_veth(veth_host, veth_peer, bridge, ovs_cid):
+            logging.info("Controller connection cleaned up (%s)", veth_host)
+        else:
+            logging.warning(
+                "Controller connection cleanup for %s may be incomplete", veth_host
+            )
 
     def get_management_ip(self, node_id: int) -> str:
         """Get the management IP address for a given node ID."""
