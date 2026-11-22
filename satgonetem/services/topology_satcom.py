@@ -279,7 +279,10 @@ class TopologyManager(
             )
 
         simulation_property = restore_simulation_property(payload, path)
-        return cls.from_satcom(simulation_property, network_config)
+        instance = cls.from_satcom(simulation_property, network_config)
+        if "runtime_overlay" in payload:
+            apply_runtime_state(instance, payload["runtime_overlay"])
+        return instance
 
     def __init__(
         self,

@@ -293,6 +293,34 @@ def test_runtime_state_roundtrip_preserves_link_impairments_and_addressability(
     assert all(not interface.is_active for interface in restored_link.peer_interfaces)
 
 
+def test_property_backed_topology_saves_link_state_overlay(tmp_path):
+    topology = TopologyManager.from_file(TEST_TOPOLOGY)
+    link = next(candidate for candidate in topology.get_links() if candidate.is_active)
+    link.loss = 9.5
+    link.jitter = 4
+    link.admin_up = False
+    link.use_budget = True
+
+    path = tmp_path / "property_overlay.json"
+    topology.to_file(str(path))
+    payload = json.loads(path.read_text())
+
+    assert "runtime_overlay" in payload
+    assert payload["runtime_overlay"]["links"]
+
+    reloaded = TopologyManager.from_file(str(path))
+    restored = next(
+        candidate
+        for candidate in reloaded.get_links()
+        if candidate.source.name == link.source.name
+        and candidate.target.name == link.target.name
+    )
+    assert restored.loss == 9.5
+    assert restored.jitter == 4
+    assert restored.admin_up is False
+    assert restored.use_budget is True
+
+
 def test_runtime_state_roundtrip_keeps_ipv6_enabled(tmp_path, runtime_topology):
     """A topology saved with IPv6 enabled reloads with the plan rebuilt."""
     path = tmp_path / "runtime_ipv6.json"

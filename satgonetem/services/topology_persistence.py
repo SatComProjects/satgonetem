@@ -423,6 +423,14 @@ def save_to_file(
             if serialize_state is not None
             else serialize_runtime_state(manager)
         )
+    else:
+        # Property-backed managers keep the property as the topology source,
+        # but their live link impairments/addressability still need an overlay.
+        payload["runtime_overlay"] = (
+            serialize_state()
+            if serialize_state is not None
+            else serialize_runtime_state(manager)
+        )
 
     with open(path, "w", encoding="utf-8") as fh:
         json.dump(payload, fh, indent=2)
