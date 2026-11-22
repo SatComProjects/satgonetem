@@ -664,6 +664,10 @@ class TopologyManager(
         self.satellites: dict[int, Satellite] = {}
         self.ground_stations: dict[int, GroundStation] = {}
         self.links: dict[frozenset[(str)], Link] = {}
+        # Link keys whose backend add failed and must be retried before local
+        # interfaces are built. Initialised eagerly so the add thread pool
+        # cannot race on first use.
+        self._failed_link_adds: set[frozenset[str]] = set()
         self.interfaces: list[Interface] = []  # List of all interfaces in the network
         self.interface_version = 0
 
