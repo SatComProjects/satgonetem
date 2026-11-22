@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 
+FORCE_CLOSE_TIMEOUT_SECONDS = 10.0
+
 
 class GoNetEmCleanupMixin:
     """Docker container cleanup and force-close fallback."""
@@ -95,7 +97,13 @@ class GoNetEmCleanupMixin:
                     self._run_docker_command(["docker", "stop", "-t", "0", cid])
                 for cid in container_ids:
                     self._run_docker_command(["docker", "rm", cid])
-                self._client.ProjectClose(self._request)
+                response = self._client.ProjectClose(
+                    self._request, timeout=FORCE_CLOSE_TIMEOUT_SECONDS
+                )
+                # ProjectClose is server-streaming: consume the stream so the
+                # server can process the request before the transport closes.
+                for _ in response:
+                    pass
         except Exception as exc:
             logging.error("GoNetEmLauncher: force_close_project failed: %s", exc)
         finally:

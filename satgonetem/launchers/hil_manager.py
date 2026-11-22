@@ -28,9 +28,10 @@ TopologyManager calls teardown_link on the old link and setup_link on the
 new one. HILManager tears down the bridge, rebuilds it with the same
 hardware interface enslaved to the new satellite's veth.
 
-PID resolution: satellite container PIDs are read from node.container_pid,
-which any launcher sets during start_containers. HILManager does not
-depend on any launcher class internally.
+PID resolution: satellite container PIDs are resolved from node.container
+at call time and refreshed into node.container_pid. When no container is
+attached, node.container_pid (set during start_containers) is used as a
+fallback. HILManager does not depend on any launcher class internally.
 
 Privileges required:
   CAP_SYS_ADMIN (setns into container namespaces, nsenter)
@@ -113,8 +114,10 @@ class HILManager:
       - Calling HILManager.wire_links(), setup_link(), teardown_link(),
         update_link(), and teardown_all() for HIL-managed links.
 
-    Satellite container PIDs are resolved from node.container_pid, which is
-    set by any launcher during start_containers. No launcher reference is
+    Satellite container PIDs are resolved from node.container at call time
+    and refreshed into node.container_pid, so a restarted container is not
+    mistaken for a stale PID. Without an attached container, the
+    launcher-populated node.container_pid is used. No launcher reference is
     held internally.
 
     Attributes:
@@ -220,10 +223,94 @@ class HILManager:
             return link.source
         return link.target
 
+    @staticmethod
+    def _positive_int(value: object) -> int:
+        """Convert a capacity value to a positive int, or 0 when unusable."""
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return 0
+        try:
+            capacity = int(value)
+        except (OverflowError, ValueError):
+            return 0
+        return capacity if capacity > 0 else 0
+
     def _link_capacity_kbps(self, link) -> int:
-        """Return the satellite-side capacity for a link in kbps."""
-        p1 = int(getattr(link, "peer1_capacity", 0) or 0)
-        return p1 or self._gnd_capacity_kbps
+        """Return the satellite-side capacity for a link in kbps.
+
+        Preference order matches the documented QoS model: peer1_capacity,
+        the link's capacity, then the configured ground-station default.
+        """
+        p1 = self._positive_int(getattr(link, "peer1_capacity", 0))
+        if p1:
+            return p1
+
+        capacity = self._positive_int(getattr(link, "capacity", 0))
+        if capacity:
+            return capacity
+
+        get_capacity = getattr(link, "get_capacity", None)
+        if callable(get_capacity):
+            try:
+                modeled = self._positive_int(get_capacity())
+            except Exception as exc:
+                logging.warning("HIL: could not read link capacity: %s", exc)
+            else:
+                if modeled:
+                    return modeled
+
+        return self._gnd_capacity_kbps
+
+    def _resolve_sat_pid(self, sat) -> int | None:
+        """Return the satellite container's current network-namespace PID.
+
+        Reads ``node.container`` at call time and refreshes
+        ``node.container_pid`` so a restarted container (possibly with a
+        recycled PID) is not confused with a stale snapshot. Without an
+        attached container, the launcher-populated ``container_pid`` is used
+        as a fallback.
+
+        Args:
+            sat: Satellite node endpoint of the HIL link.
+
+        Returns:
+            The current PID, or None when the container is missing, stopped,
+            or its state cannot be refreshed.
+        """
+        container = getattr(sat, "container", None)
+        attrs = getattr(container, "attrs", None) if container is not None else None
+        if isinstance(attrs, dict):
+            reload = getattr(container, "reload", None)
+            if callable(reload):
+                try:
+                    reload()
+                except Exception as exc:
+                    logging.error(
+                        "HIL: could not refresh container state for %s: %s",
+                        sat.name,
+                        exc,
+                    )
+                    return None
+                attrs = getattr(container, "attrs", None)
+                if not isinstance(attrs, dict):
+                    logging.error(
+                        "HIL: no container state for %s after refresh", sat.name
+                    )
+                    return None
+
+            state = attrs.get("State") or {}
+            pid = self._positive_int(state.get("Pid"))
+            if state.get("Running") is False or not pid:
+                logging.error(
+                    "HIL: container for %s is not running (pid=%r)",
+                    sat.name,
+                    state.get("Pid"),
+                )
+                return None
+            sat.container_pid = pid
+            return pid
+
+        pid = self._positive_int(getattr(sat, "container_pid", 0))
+        return pid or None
 
     def _create_veth(self, sat_name: str, sat_pid: int, gnd_id: int) -> bool:
         """
@@ -366,6 +453,9 @@ class HILManager:
         try:
             with IPRoute() as ipr:
                 ipr.link("add", ifname=br_name, kind="bridge")
+                # Track the bridge as soon as it exists. A later failure must
+                # be able to delete it, or retry deleting it at teardown.
+                self._hil_bridges[gnd_name] = br_name
                 br_links = ipr.link("get", ifname=br_name)
                 br_idx = br_links[0]["index"]
                 ipr.link("set", index=br_idx, state="up")
@@ -377,7 +467,6 @@ class HILManager:
                 ipr.link("set", index=hw_links[0]["index"], master=br_idx)
                 ipr.link("set", index=hw_links[0]["index"], state="up")
 
-            self._hil_bridges[gnd_name] = br_name
             self._hil_veths[gnd_name] = host_veth
             logging.info(
                 "HIL: bridge %s up for %s (veth=%s hw=%s)",
@@ -390,6 +479,9 @@ class HILManager:
 
         except Exception as exc:
             logging.error("HIL: failed to create bridge for %s: %s", gnd_name, exc)
+            # Delete the partial bridge. If that also fails, _teardown_bridge
+            # keeps it tracked so a later teardown can retry.
+            self._teardown_bridge(gnd_name)
             return False
 
     def _apply_qos(
@@ -458,10 +550,10 @@ class HILManager:
         Args:
             gnd_name: Ground station node name (e.g. "Gnd0").
         """
-        br_name = self._hil_bridges.pop(gnd_name, None)
-        self._hil_veths.pop(gnd_name, None)
+        br_name = self._hil_bridges.get(gnd_name)
 
         if not br_name:
+            self._hil_veths.pop(gnd_name, None)
             return
 
         try:
@@ -471,7 +563,12 @@ class HILManager:
                     ipr.link("del", index=br_links[0]["index"])
             logging.info("HIL: bridge %s torn down for %s", br_name, gnd_name)
         except Exception as exc:
+            # Keep the tracking entry: a failed delete must be retryable.
             logging.error("HIL: failed to teardown bridge %s: %s", br_name, exc)
+            return
+
+        self._hil_bridges.pop(gnd_name, None)
+        self._hil_veths.pop(gnd_name, None)
 
     def _delete_sat_veth(self, sat_name: str, sat_pid: int, gnd_id: int) -> None:
         """
@@ -516,8 +613,9 @@ class HILManager:
         Called by TopologyManager for HIL ground station links during
         initial wiring (wire_links) and on handover arrival (add_link).
 
-        Requires node.container_pid to be set on the satellite node,
-        which any launcher sets during start_containers.
+        Requires a running satellite container: the PID is resolved from
+        node.container at call time (refreshing node.container_pid), or
+        falls back to node.container_pid when no container is attached.
 
         Args:
             link: A GroundStationLink whose ground station endpoint is
@@ -525,7 +623,7 @@ class HILManager:
         """
         gnd = self._get_hil_gnd(link)
         sat = self._get_sat(link)
-        sat_pid = int(getattr(sat, "container_pid", 0) or 0)
+        sat_pid = self._resolve_sat_pid(sat)
 
         if not sat_pid:
             logging.error(
@@ -538,6 +636,9 @@ class HILManager:
         if not self._create_veth(sat.name, sat_pid, gnd.id):
             return
         if not self._create_bridge(gnd.name, gnd.id):
+            # The bridge failed; remove the veth pair created above rather
+            # than leaking it until container teardown.
+            self._delete_sat_veth(sat.name, sat_pid, gnd.id)
             return
 
         delay_ms = max(int(link.delay), 1)
@@ -558,7 +659,7 @@ class HILManager:
         """
         gnd = self._get_hil_gnd(link)
         sat = self._get_sat(link)
-        sat_pid = int(getattr(sat, "container_pid", 0) or 0)
+        sat_pid = self._resolve_sat_pid(sat)
 
         self._teardown_bridge(gnd.name)
 
@@ -585,7 +686,7 @@ class HILManager:
         """
         gnd = self._get_hil_gnd(link)
         sat = self._get_sat(link)
-        sat_pid = int(getattr(sat, "container_pid", 0) or 0)
+        sat_pid = self._resolve_sat_pid(sat)
         sat_iface = f"eth{gnd.id}"
 
         if not sat_pid:

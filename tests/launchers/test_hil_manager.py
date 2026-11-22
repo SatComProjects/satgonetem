@@ -8,6 +8,7 @@ verify routing logic, state tracking, and the public interface used by
 TopologyManager.
 """
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -287,13 +288,32 @@ class TestTeardownBridge:
 
 class TestLinkCapacity:
     def test_uses_peer1_capacity_when_set(self, manager):
-        link = MagicMock()
-        link.peer1_capacity = 30_000
+        link = SimpleNamespace(
+            peer1_capacity=30_000,
+            capacity=40_000,
+            get_capacity=lambda: 45_000,
+        )
         assert manager._link_capacity_kbps(link) == 30_000
 
-    def test_falls_back_to_gnd_capacity_when_peer1_zero(self, manager):
-        link = MagicMock()
-        link.peer1_capacity = 0
+    def test_falls_back_to_capacity_when_peer1_zero(self, manager):
+        link = SimpleNamespace(
+            peer1_capacity=0,
+            capacity=40_000,
+            get_capacity=lambda: 45_000,
+        )
+        assert manager._link_capacity_kbps(link) == 40_000
+
+    def test_falls_back_to_modeled_get_capacity(self, manager):
+        link = SimpleNamespace(peer1_capacity=0, capacity=0)
+        link.get_capacity = lambda: 25_000
+        assert manager._link_capacity_kbps(link) == 25_000
+
+    def test_falls_back_to_gnd_capacity_when_all_link_capacities_zero(self, manager):
+        link = SimpleNamespace(
+            peer1_capacity=0,
+            capacity=0,
+            get_capacity=lambda: 0,
+        )
         assert manager._link_capacity_kbps(link) == manager._gnd_capacity_kbps
 
 

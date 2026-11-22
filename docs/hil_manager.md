@@ -96,9 +96,13 @@ HIL and handles only satellites and non-HIL ground stations.
 
 ## PID Resolution
 
-HILManager reads `node.container_pid` from the satellite node object. This
-attribute is set by any launcher during `start_containers`. HILManager holds
-no reference to the launcher and works with GoNetEmLauncher as long as `container_pid` is populated on satellite nodes.
+HILManager resolves the satellite container PID from `node.container` at call
+time, reloading the container state and refreshing `node.container_pid`. This
+prevents a stale PID (left behind by a container restart or PID reuse) from
+sending `nsenter` into the wrong network namespace. If the container is
+stopped or its state cannot be refreshed, the operation fails with an error
+instead of guessing. When no container object is attached, the
+launcher-populated `node.container_pid` is used as a fallback.
 
 ## Handovers
 

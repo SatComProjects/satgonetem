@@ -7,6 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import yaml
 
 from satgonetem.launchers.gonetem_launcher import GoNetEmLauncher
 
@@ -126,6 +127,56 @@ def test_topology_controller_rejects_non_eth_digit_interface(pattern, iface):
     message = str(excinfo.value)
     assert "must format to 'eth<digits>'" in message
     assert f"got {iface!r}" in message
+
+
+def test_topology_quotes_injected_image_scalars():
+    sat = _satellite(0, "Sat0", image="evil\n  injected: true")
+    gnd = _ground_station(1, "Gnd0", image="evil: image\n  injected: true")
+    link = FakeLink(sat, gnd, capacity=2000)
+    topology_manager = _topology({sat.id: sat}, {gnd.id: gnd}, {"sat-gnd": link})
+    launcher = _launcher(topology_manager)
+
+    document = yaml.safe_load(launcher.get_gonetem_topology())
+
+    assert set(document) == {"nodes", "links"}
+    assert set(document["nodes"]) == {"Sat0", "Gnd1"}
+    assert document["nodes"]["Sat0"]["image"] == "evil\n  injected: true"
+    assert document["nodes"]["Gnd1"]["image"] == "evil: image\n  injected: true"
+    assert len(document["links"]) == 1
+
+
+def test_topology_quotes_injected_link_peer_names():
+    sat = _satellite(0, "Sat0\nevil: true")
+    gnd = _ground_station(1, "Gnd0\n  injected: true")
+    link = FakeLink(sat, gnd, capacity=2000)
+    topology_manager = _topology({sat.id: sat}, {gnd.id: gnd}, {"sat-gnd": link})
+    launcher = _launcher(topology_manager)
+
+    document = yaml.safe_load(launcher.get_gonetem_topology())
+
+    assert set(document) == {"nodes", "links"}
+    assert [link["peer1"] for link in document["links"]] == ["Sat0\nevil: true.1"]
+    assert [link["peer2"] for link in document["links"]] == ["Gnd0\n  injected: true.0"]
+    assert document["links"][0]["peer1qos"]["rate"] == 2000
+    assert document["links"][0]["peer2qos"]["delay"] == 10
+
+
+def test_topology_quotes_injected_names_in_controller_links():
+    sat = _satellite(7, "SatA\ninjected: true")
+    topology_manager = _topology({sat.id: sat}, {}, {})
+    launcher = _launcher(topology_manager)
+
+    document = yaml.safe_load(launcher.get_gonetem_topology(controller=True))
+
+    assert set(document) == {"nodes", "links"}
+    assert set(document["nodes"]) == {"Sat7", "Controller"}
+    assert document["nodes"]["Controller"] == {
+        "type": "ovs",
+        "volumes": ["/tmp:/tmp"],
+    }
+    assert len(document["links"]) == 1
+    assert document["links"][0]["peer1"] == "Controller.7"
+    assert document["links"][0]["peer2"] == "SatA\ninjected: true.50007"
 
 
 def test_generate_project_writes_network_yml_archive(tmp_path):
