@@ -1259,7 +1259,7 @@ def test_apply_qos_returns_false_when_tc_fails(monkeypatch: pytest.MonkeyPatch) 
     assert manager._apply_qos("Sat1", 4321, 0, delay_ms=10, rate_kbps=1000) is False
 
 
-def test_apply_qos_returns_false_when_txqueuelen_fails(
+def test_apply_qos_txqueuelen_failure_still_succeeds(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     manager = HILManager({"Gnd0": "eth1"}, txqueuelen=8000)
@@ -1268,7 +1268,7 @@ def test_apply_qos_returns_false_when_txqueuelen_fails(
     )
     monkeypatch.setattr(hil_manager, "_run_tc_batch", MagicMock(return_value=None))
 
-    assert manager._apply_qos("Sat1", 4321, 0, delay_ms=10, rate_kbps=1000) is False
+    assert manager._apply_qos("Sat1", 4321, 0, delay_ms=10, rate_kbps=1000) is True
 
 
 def test_teardown_bridge_returns_false_when_delete_fails(

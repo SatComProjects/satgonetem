@@ -529,7 +529,8 @@ class HILManager:
             rate_kbps: Link capacity in kbps.
 
         Returns:
-            True when every requested qdisc/txqueuelen command succeeded.
+            True when the qdisc commands succeeded. ``txqueuelen`` is a
+            best-effort kernel tuning hint and does not fail the link.
         """
         sat_iface = f"eth{gnd_id}"
         delay_ms = max(delay_ms, 1)
@@ -546,7 +547,6 @@ class HILManager:
                     runner=self._command_runner,
                 )
             except RuntimeError as exc:
-                success = False
                 logging.warning(
                     "HIL: txqueuelen setup failed on %s in %s: %s",
                     sat_iface,
