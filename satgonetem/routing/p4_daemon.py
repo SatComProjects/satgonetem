@@ -331,12 +331,13 @@ class P4Daemon(RoutingDaemon):
     def update(self, new_links: "list[Link]", max_workers: int = 4) -> None:
         """Export a snapshot of the active topology graph to shared memory.
 
-        The snapshot contains only links that are active and not pending
-        removal, matching the graph used for route computation. If the daemon
-        is not initialized, or initialization failed and released the segment,
-        there is nothing to update: the call logs a warning and returns without
-        raising. When topology growth exceeds the segment capacity, the segment
-        is recreated with room for the new edges.
+        The snapshot contains only links that are active, not pending removal,
+        and not disabled (either on the link or on its satcom object), matching
+        the graph used for route computation. If the daemon is not initialized,
+        or initialization failed and released the segment, there is nothing to
+        update: the call logs a warning and returns without raising. When
+        topology growth exceeds the segment capacity, the segment is recreated
+        with room for the new edges.
 
         Args:
             new_links: List of newly added links (unused; the export is a full
@@ -352,7 +353,10 @@ class P4Daemon(RoutingDaemon):
         edges = [
             build_edge_from_link(link)
             for link in self.topology.links.values()
-            if link.is_active and not getattr(link, "to_remove", False)
+            if link.is_active
+            and not getattr(link, "to_remove", False)
+            and not getattr(link, "disabled", False)
+            and not getattr(getattr(link, "satcom_object", None), "disabled", False)
         ]
 
         if self.graph_shared_memory.ensure_capacity(len(edges)):

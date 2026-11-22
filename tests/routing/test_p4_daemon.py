@@ -597,6 +597,39 @@ def test_update_exports_only_active_links_not_pending_removal(daemon, monkeypatc
     assert graph.write_edges.call_args.args[0] == ["active"]
 
 
+def test_update_excludes_links_disabled_in_the_current_graph(daemon, monkeypatch):
+    graph = MagicMock()
+    daemon.graph_shared_memory = graph
+    active = SimpleNamespace(
+        is_active=True,
+        to_remove=False,
+        satcom_object=SimpleNamespace(disabled=False),
+        tag="active",
+    )
+    satcom_disabled = SimpleNamespace(
+        is_active=True,
+        to_remove=False,
+        satcom_object=SimpleNamespace(disabled=True),
+        tag="satcom-disabled",
+    )
+    link_disabled = SimpleNamespace(
+        is_active=True,
+        to_remove=False,
+        disabled=True,
+        tag="link-disabled",
+    )
+    daemon.topology.links = {
+        0: active,
+        1: satcom_disabled,
+        2: link_disabled,
+    }
+    monkeypatch.setattr(p4_daemon, "build_edge_from_link", lambda link: link.tag)
+
+    daemon.update([])
+
+    assert graph.write_edges.call_args.args[0] == ["active"]
+
+
 def test_update_grows_shared_memory_when_links_exceed_init_capacity(
     topology, tmp_path, monkeypatch
 ):
