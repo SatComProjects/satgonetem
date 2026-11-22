@@ -1,0 +1,81 @@
+name: Live integration
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 3 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  # Serialize live runs on the self-hosted host. Never cancel an in-progress
+  # run: cancelling mid-test can strand GoNetEm containers and projects.
+  group: integration-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  PYTHONUNBUFFERED: "1"
+
+jobs:
+  non-root:
+    name: Non-root live tests
+    runs-on: [self-hosted, linux, x64, gonetem, docker]
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+      - name: Set up uv and Python
+        uses: astral-sh/setup-uv@v10.4.0
+        with:
+          version: "0.13.9"
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - name: Install development environment
+        run: uv sync --frozen --extra dev
+      - name: Run live integration tests
+        run: >-
+          uv run --frozen --extra dev pytest tests/integration -q
+          -m "integration and not root and not slow"
+          --junitxml=integration.xml
+          --log-file=integration.log
+          --log-file-level=INFO
+      - name: Capture Docker and GoNetEm diagnostics
+        if: always()
+        run: |
+          docker ps -a --format '{{.Names}}\t{{.Image}}\t{{.Status}}' | tee docker-ps.txt
+          server_log="${GONETEM_SERVER_LOG:-/var/log/gonetem-server.log}"
+          if [ -r "$server_log" ]; then
+            cp "$server_log" gonetem-server.log
+          fi
+          if command -v journalctl >/dev/null 2>&1; then
+            journalctl -u gonetem-server --no-pager -n 500 \
+              > gonetem-server-journal.log 2>&1 || true
+          fi
+      - name: Upload live integration artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: live-integration
+          path: |
+            integration.xml
+            integration.log
+            docker-ps.txt
+            gonetem-server.log
+            gonetem-server-journal.log
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Clean up leftover GoNetEm containers
+        if: always()
+        run: |
+          # Safe only because this job is serialized: one concurrency group per
+          # ref with cancel-in-progress disabled, on a dedicated runner where no
+          # unrelated GoNetEm project is expected. `ntm` is the GoNetEm container
+          # prefix; the runner contract forbids other workload on this host.
+          mapfile -t leftovers < <(
+            docker ps -a --format '{{.Names}}' | grep -E '^ntm' || true
+          )
+          if [ "${#leftovers[@]}" -gt 0 ]; then
+            docker rm -f "${leftovers[@]}"
+          fi
