@@ -846,6 +846,59 @@ def test_hil_add_failure_keeps_link_pending_and_skips_local_interfaces():
     assert link.to_add is False
 
 
+def test_hil_add_exception_marks_failure_and_skips_local_interfaces(caplog):
+    link = make_link(make_satellite("Sat12"), make_satellite("Gnd12"))
+    link.to_add = True
+    key = frozenset((link.source.name, link.target.name))
+    hil_manager = MagicMock()
+    hil_manager.is_hil_link.return_value = True
+    hil_manager.setup_link.side_effect = RuntimeError("namespace restore failed")
+    build_interfaces = MagicMock()
+    fake = _FakeTopology(
+        {key: link},
+        launcher=MagicMock(),
+        hil_manager=hil_manager,
+        _build_interfaces_from_link=build_interfaces,
+    )
+
+    with caplog.at_level(logging.ERROR):
+        LinkOpsMixin.bulk_link_operations(
+            fake, to_del=False, to_update=False, links_to_add=[link]
+        )
+        LinkOpsMixin._perform_local_link_operations(
+            fake, to_del=False, to_update=False, links_to_add=[link]
+        )
+
+    assert key in fake._link_add_failures()
+    assert link.to_add is True
+    build_interfaces.assert_not_called()
+    assert "namespace restore failed" in caplog.text
+
+
+def test_hil_update_exception_keeps_retry_flag_and_counts_error(caplog):
+    link = SimpleNamespace(
+        to_add=False,
+        to_update=True,
+        to_remove=False,
+        source=SimpleNamespace(name="Sat13"),
+        target=SimpleNamespace(name="Gnd13"),
+    )
+    hil_manager = MagicMock()
+    hil_manager.is_hil_link.return_value = True
+    hil_manager.update_link.side_effect = RuntimeError("qdisc update failed")
+    fake = _FakeTopology({0: link}, launcher=MagicMock(), hil_manager=hil_manager)
+
+    with caplog.at_level(logging.ERROR):
+        stats = LinkOpsMixin.bulk_link_operations(
+            fake, to_add=False, to_del=False, links_to_update=[link]
+        )
+
+    assert link.to_update is True
+    assert frozenset(("Sat13", "Gnd13")) in fake._link_update_failures()
+    assert stats["update_error_count"] == 1
+    assert "qdisc update failed" in caplog.text
+
+
 def test_hil_teardown_failure_keeps_link_and_local_state():
     link = _link_pending_removal()
     key = frozenset((link.source.name, link.target.name))

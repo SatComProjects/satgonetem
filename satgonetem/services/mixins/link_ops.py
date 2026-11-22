@@ -287,6 +287,14 @@ class LinkOpsMixin:
                     finished[category] - started[category]
                 )
 
+        if hil_updates:
+            update_failures = LinkOpsMixin._link_update_failures(self)
+            operation_stats["update_error_count"] += sum(
+                1
+                for link in hil_updates
+                if self._build_link_key(link.source, link.target) in update_failures
+            )
+
         if batch_updates:
             # One batch call is the unit of work: wall, total and per-link
             # figures all derive from the same elapsed time.
@@ -460,7 +468,18 @@ class LinkOpsMixin:
         else:
             key = frozenset((link.source.name, link.target.name))
         if self.hil_manager is not None and self.hil_manager.is_hil_link(link):
-            if self.hil_manager.update_link(link):
+            try:
+                update_ok = self.hil_manager.update_link(link)
+            except Exception as err:
+                failures.add(key)
+                logging.error(
+                    "Unable to update HIL link %s--%s: %s",
+                    link.source.name,
+                    link.target.name,
+                    err,
+                )
+                return time.perf_counter() - start
+            if update_ok:
                 failures.discard(key)
             else:
                 failures.add(key)
@@ -505,7 +524,12 @@ class LinkOpsMixin:
             failures.discard(key)
             return time.perf_counter() - start
         if self.hil_manager is not None and self.hil_manager.is_hil_link(link):
-            if self.hil_manager.setup_link(link):
+            try:
+                setup_ok = self.hil_manager.setup_link(link)
+            except Exception:
+                failures.add(key)
+                raise
+            if setup_ok:
                 failures.discard(key)
                 applied.add(key)
             else:
