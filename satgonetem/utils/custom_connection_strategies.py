@@ -29,27 +29,48 @@ def _retain_or_obsolete_existing_ground_links(
     """Partition existing ground-to-space links into retained and obsolete.
 
     An existing link is retained when its satellite is still visible and the
-    ground object's connection budget is not exhausted.  Retained link objects
-    are left untouched: marking them obsolete, or appending a replacement,
-    would tear down and recreate a stable link on every connectivity tick.
+    ground object's connection budget is not exhausted. When more visible
+    links exist than the budget allows, the highest-elevation links are kept
+    (the pre-hardening behaviour); links are only kept in creation order when
+    elevation is unavailable. Retained link objects are left untouched:
+    marking them obsolete, or appending a replacement, would tear down and
+    recreate a stable link on every connectivity tick.
 
     Returns:
         Ids of the satellites whose existing links were retained.
     """
     visible_satellite_ids = {id(visible.satellite) for visible in visible_satellites}
-    retained_satellite_ids: set[int] = set()
+    elevations: dict[int, float] = {}
+    for visible in visible_satellites:
+        elevation = getattr(visible, "elevation_above_horizon", None)
+        if isinstance(elevation, (int, float)):
+            elevations[id(visible.satellite)] = elevation
 
-    for link in ground_object.links:
-        if not isinstance(link, GroundToSpaceLink):
-            continue
+    candidates = [
+        link
+        for link in ground_object.links
+        if isinstance(link, GroundToSpaceLink)
+        and id(link.source) in visible_satellite_ids
+    ]
+    if all(id(link.source) in elevations for link in candidates):
+        candidates.sort(
+            key=lambda link: elevations[id(link.source)],
+            reverse=True,
+        )
+
+    retained_satellite_ids: set[int] = set()
+    retained_link_ids: set[int] = set()
+    for link in candidates:
         satellite_id = id(link.source)
         if (
-            satellite_id in visible_satellite_ids
-            and satellite_id not in retained_satellite_ids
+            satellite_id not in retained_satellite_ids
             and len(retained_satellite_ids) < maximum_number_of_links
         ):
             retained_satellite_ids.add(satellite_id)
-        else:
+            retained_link_ids.add(id(link))
+
+    for link in ground_object.links:
+        if isinstance(link, GroundToSpaceLink) and id(link) not in retained_link_ids:
             result.obsolete_links.append(link)
 
     return retained_satellite_ids

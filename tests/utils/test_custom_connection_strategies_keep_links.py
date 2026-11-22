@@ -8,8 +8,11 @@ tore the link down and recreated it on every connectivity tick.
 
 from __future__ import annotations
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
+from sat_com_connectivity.ground_object_to_space_connectivity.models import (
+    ComputedGroundObjectConnectionsResult,
+)
 from sat_com_connectivity.ground_object_to_space_connectivity.visibility_angle_utils import (
     VisibleSatellite,
 )
@@ -24,6 +27,7 @@ from sat_com_model.models import (
 from satgonetem.utils.custom_connection_strategies import (
     LongestConnectionTimeStrategy,
     WeightedConnection,
+    _retain_or_obsolete_existing_ground_links,
 )
 
 STRATEGIES = [LongestConnectionTimeStrategy, WeightedConnection]
@@ -164,3 +168,54 @@ def test_retained_link_leaves_room_for_one_new_connection() -> None:
     assert [
         connection.satellite for connection in result.new_ground_object_connections
     ] == [satellites[1]]
+
+
+def test_retains_the_highest_elevation_links_regardless_of_creation_order() -> None:
+    """Budget overflow keeps the best links, not the oldest ones."""
+    for strategy_cls in STRATEGIES:
+        ground_object = _make_ground_object(maximum_connected_satellites=2)
+        satellites = [_satellite(index) for index in range(3)]
+        links = [
+            GroundToSpaceLink(source=satellite, destination=ground_object)
+            for satellite in satellites
+        ]
+        # Created lowest-elevation first, so creation order is the opposite
+        # of the desired retention order.
+        ground_object.links.extend(links)
+        visible = _visible(
+            (satellites[0], 50.0),
+            (satellites[1], 60.0),
+            (satellites[2], 70.0),
+        )
+
+        result = _compute(strategy_cls, ground_object, visible)
+
+        assert result.obsolete_links == [links[0]], strategy_cls.__name__
+        assert links[1] not in result.obsolete_links
+        assert links[2] not in result.obsolete_links
+
+
+def test_retention_falls_back_to_creation_order_without_elevation() -> None:
+    """When elevation is unavailable, keep the previous deterministic order."""
+    ground_object = _make_ground_object(maximum_connected_satellites=2)
+    satellites = [_satellite(index) for index in range(3)]
+    links = [
+        GroundToSpaceLink(source=satellite, destination=ground_object)
+        for satellite in satellites
+    ]
+    ground_object.links.extend(links)
+    visible = [
+        MagicMock(satellite=satellite, elevation_above_horizon=None)
+        for satellite in satellites
+    ]
+
+    result = ComputedGroundObjectConnectionsResult()
+    retained = _retain_or_obsolete_existing_ground_links(
+        ground_object=ground_object,
+        visible_satellites=visible,
+        maximum_number_of_links=2,
+        result=result,
+    )
+
+    assert retained == {id(satellites[0]), id(satellites[1])}
+    assert result.obsolete_links == [links[2]]
