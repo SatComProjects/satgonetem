@@ -24,6 +24,16 @@ from satgonetem.services.simulation_timing import tick_delay
 from satgonetem.utils.constants import MAX_WORKERS
 from satgonetem.utils.utils import time_
 
+_LINK_STATE_ATTRIBUTES = (
+    "inter_satellite_direction",
+    "source_optical_terminal",
+    "destination_optical_terminal",
+    "source_constraint",
+    "destination_constraint",
+    "distance_km",
+    "duration",
+)
+
 if TYPE_CHECKING:
     from datetime import datetime
 
@@ -290,7 +300,7 @@ class SimulationLoopMixin:
 
             # Mutate only after every link has been validated, so an invalid
             # entry cannot leave a partially applied batch behind.
-            removed: list[tuple[str, object, str, str]] = []
+            removed: list[tuple[str, object, str, str, dict]] = []
             try:
                 for link_type, satcom_link, source_name, target_name in removals:
                     logging.info(
@@ -299,6 +309,16 @@ class SimulationLoopMixin:
                         source_name,
                         target_name,
                     )
+                    state = {
+                        attribute: getattr(satcom_link, attribute, None)
+                        for attribute in _LINK_STATE_ATTRIBUTES
+                    }
+                    # Record before the call: a removal can mutate the manager
+                    # and then raise, and that partial removal still needs a
+                    # compensating restore.
+                    removed.append(
+                        (link_type, satcom_link, source_name, target_name, state)
+                    )
 
                     if link_type == "InterSatelliteLink":
                         self.simulation_manager.remove_inter_satellite_link(satcom_link)
@@ -306,17 +326,22 @@ class SimulationLoopMixin:
                         self.simulation_manager.remove_ground_station_link(satcom_link)
                     elif link_type == "UserTerminalLink":
                         self.simulation_manager.remove_user_terminal_link(satcom_link)
-                    removed.append((link_type, satcom_link, source_name, target_name))
 
                 self.update_simulation(advance_timestep=False)
             except BaseException:
                 # Compensate in reverse order so a mid-batch failure does not
                 # leave earlier removals applied in the simulation manager.
-                for link_type, satcom_link, source_name, target_name in reversed(
-                    removed
-                ):
+                for (
+                    link_type,
+                    satcom_link,
+                    source_name,
+                    target_name,
+                    state,
+                ) in reversed(removed):
                     try:
-                        self._restore_removed_link(link_type, satcom_link)
+                        if self._satcom_link_present(link_type, satcom_link):
+                            continue
+                        self._restore_removed_link(link_type, satcom_link, state)
                         logging.warning(
                             "Rolled back simulated failure of %s between %s and %s",
                             link_type,
@@ -348,13 +373,33 @@ class SimulationLoopMixin:
                 len(links),
             )
 
-    def _restore_removed_link(self, link_type: str, satcom_link: object) -> None:
+    def _satcom_link_present(self, link_type: str, satcom_link: object) -> bool:
+        """Whether the simulation manager still holds *satcom_link*."""
+        getter_name = {
+            "InterSatelliteLink": "get_inter_satellites_links",
+            "GroundStationLink": "get_ground_stations_links",
+            "UserTerminalLink": "get_user_terminal_links",
+        }.get(link_type)
+        if getter_name is None:
+            return False
+        getter = getattr(self.simulation_manager, getter_name, None)
+        if not callable(getter):
+            return False
+        try:
+            return any(candidate is satcom_link for candidate in getter())
+        except Exception:
+            return False
+
+    def _restore_removed_link(
+        self, link_type: str, satcom_link: object, state: dict | None = None
+    ) -> None:
         """Re-create a link removed by :meth:`simulate_link_failure`.
 
         Used as the compensating action for a partially applied batch. The
         original link object cannot simply be re-inserted: removal unbinds its
         terminals and clears its flows, so the simulation manager's creation
-        path rebuilds the connection.
+        path rebuilds the connection. Persisted optical/constraint/distance
+        state is reapplied when available.
         """
         manager = self.simulation_manager
         source = satcom_link.source
@@ -365,12 +410,26 @@ class SimulationLoopMixin:
             keywords = {}
             if direction is not None:
                 keywords["inter_satellite_link_direction"] = direction
-            manager.create_and_add_inter_satellite_link_connection(
+            restored_link = manager.create_and_add_inter_satellite_link_connection(
                 source, destination, **keywords
             )
         elif link_type == "GroundStationLink":
-            manager.create_and_add_ground_station_link_connection(source, destination)
+            restored_link = manager.create_and_add_ground_station_link_connection(
+                source, destination
+            )
         elif link_type == "UserTerminalLink":
-            manager.create_and_add_user_terminal_link_connection(source, destination)
+            restored_link = manager.create_and_add_user_terminal_link_connection(
+                source, destination
+            )
         else:  # pragma: no cover - validated before mutation
             raise ValueError(f"Unsupported link type {link_type!r}")
+
+        for attribute, value in (state or {}).items():
+            if value is None:
+                continue
+            try:
+                setattr(restored_link, attribute, value)
+            except Exception:  # noqa: BLE001 - best-effort metadata restore
+                logging.warning(
+                    "Could not restore %s on recreated %s", attribute, link_type
+                )

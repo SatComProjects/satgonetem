@@ -125,6 +125,25 @@ class TestRestore:
         assert Path(data_file).exists()
         assert Path(data_file).parent.name.startswith("topology_ground_files_")
 
+    def test_restore_runtime_state_skips_malformed_node_records(
+        self, runtime_state, caplog
+    ):
+        import logging
+
+        state = dict(runtime_state)
+        state["satellites"] = [{"name": "BadSat"}]
+        state["ground_stations"] = [{"label": "NoPosition"}]
+        state["user_terminals"] = [{"label": "NoUTPosition"}]
+        state["points_of_presence"] = [{"label": "NoPoPPosition"}]
+        state["links"] = {}
+
+        with caplog.at_level(logging.WARNING):
+            sim_manager = restore_runtime_state(state, NetworkConfig())
+
+        assert sim_manager.get_satellites() == []
+        assert sim_manager.get_ground_stations() == []
+        assert "Failed to restore" in caplog.text
+
     def test_restore_runtime_state_returns_a_loaded_simulation_manager(
         self, runtime_state
     ):

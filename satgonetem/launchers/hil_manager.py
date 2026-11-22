@@ -381,12 +381,28 @@ class HILManager:
                 entered_satellite_ns = True
 
             with IPRoute() as ipr:
-                ipr.link(
-                    "add",
-                    ifname=sat_iface,
-                    kind="veth",
-                    peer={"ifname": host_iface, "net_ns_fd": HOST_NS_PATH},
-                )
+                try:
+                    ipr.link(
+                        "add",
+                        ifname=sat_iface,
+                        kind="veth",
+                        peer={"ifname": host_iface, "net_ns_fd": HOST_NS_PATH},
+                    )
+                except Exception as exc:
+                    if "exist" not in str(exc).lower():
+                        raise
+                    # A previous rollback may have left the SAT-side veth
+                    # behind. Remove it and retry once; deleting the SAT side
+                    # also removes the kernel-created host peer.
+                    stale = ipr.link("get", ifname=sat_iface)
+                    if stale:
+                        ipr.link("del", index=stale[0]["index"])
+                    ipr.link(
+                        "add",
+                        ifname=sat_iface,
+                        kind="veth",
+                        peer={"ifname": host_iface, "net_ns_fd": HOST_NS_PATH},
+                    )
                 veth_created = True
                 lnks = ipr.link("get", ifname=sat_iface)
                 if lnks:
@@ -529,7 +545,8 @@ class HILManager:
             rate_kbps: Link capacity in kbps.
 
         Returns:
-            True when every requested qdisc/txqueuelen command succeeded.
+            True when the qdisc commands succeeded. ``txqueuelen`` is a
+            best-effort kernel tuning hint and does not fail the link.
         """
         sat_iface = f"eth{gnd_id}"
         delay_ms = max(delay_ms, 1)
@@ -546,7 +563,6 @@ class HILManager:
                     runner=self._command_runner,
                 )
             except RuntimeError as exc:
-                success = False
                 logging.warning(
                     "HIL: txqueuelen setup failed on %s in %s: %s",
                     sat_iface,
@@ -639,11 +655,18 @@ class HILManager:
             text=True,
         )
         if r.returncode != 0:
+            stderr = (r.stderr or "").strip()
+            lowered = stderr.lower()
+            if "cannot find device" in lowered or "does not exist" in lowered:
+                logging.debug(
+                    "HIL: veth %s in %s is already absent", sat_iface, sat_name
+                )
+                return True
             logging.error(
                 "HIL: failed to delete veth %s in %s: %s",
                 sat_iface,
                 sat_name,
-                r.stderr.strip(),
+                stderr,
             )
             return False
         logging.debug("HIL: deleted veth %s in %s", sat_iface, sat_name)
@@ -810,12 +833,26 @@ class HILManager:
             RuntimeError: If any link cannot be fully set up, so a failed
                 initial wiring is not reported as a successful start.
         """
-        for link in links:
-            if not self.setup_link(link):
-                raise RuntimeError(
-                    "HIL: failed to set up link "
-                    f"{link.source.name}<->{link.target.name}"
-                )
+        wired: list = []
+        try:
+            for link in links:
+                if not self.setup_link(link):
+                    raise RuntimeError(
+                        "HIL: failed to set up link "
+                        f"{link.source.name}<->{link.target.name}"
+                    )
+                wired.append(link)
+        except BaseException:
+            for wired_link in reversed(wired):
+                try:
+                    self.teardown_link(wired_link)
+                except Exception:  # noqa: BLE001 - preserve the setup error
+                    logging.exception(
+                        "HIL: failed to roll back link %s<->%s",
+                        wired_link.source.name,
+                        wired_link.target.name,
+                    )
+            raise
 
     def teardown_all(self) -> None:
         """

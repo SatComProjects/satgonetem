@@ -210,6 +210,33 @@ class TestComputeDownlinkModcod:
         assert result.capacity_kbps is not None
         assert result.capacity_kbps > 0
 
+    def test_rejects_zero_distance_with_a_field_named_error(
+        self, calculator, mock_sat, mock_gs
+    ):
+        with pytest.raises(ValueError, match="distance_km"):
+            calculator.compute_downlink_modcod(
+                sat_node=mock_sat,
+                gnd_node=mock_gs,
+                distance_km=0.0,
+                gs_lat=0.0,
+                gs_lon=0.0,
+                gs_diameter=2.0,
+            )
+
+    def test_rejects_zero_downlink_frequency_with_a_field_named_error(
+        self, calculator, mock_sat, mock_gs
+    ):
+        calculator.frequency_ghz_downlink = 0.0
+        with pytest.raises(ValueError, match="frequency_ghz_downlink"):
+            calculator.compute_downlink_modcod(
+                sat_node=mock_sat,
+                gnd_node=mock_gs,
+                distance_km=1000.0,
+                gs_lat=0.0,
+                gs_lon=0.0,
+                gs_diameter=2.0,
+            )
+
     def test_missing_eirp_raises_when_the_antenna_cannot_derive_it(self, calculator):
         from satgonetem.link_budget.antenna import Antenna
 

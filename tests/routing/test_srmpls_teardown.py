@@ -52,7 +52,7 @@ class TestCachedPrefixes:
 
 
 class TestFlushNode:
-    def test_pops_cached_commands_before_deleting(self) -> None:
+    def test_drops_cached_commands_only_after_a_successful_flush(self) -> None:
         caches = [{}]
         caches[0][7] = [
             "ip route replace 10.0.0.9/32 encap mpls 16003 via 10.1.0.2 dev GS0.1"
@@ -61,7 +61,7 @@ class TestFlushNode:
 
         SRMPLSTeardown(caches).flush_node(node)
 
-        assert caches[0] == {}, "the cache must be dropped even if deletion fails"
+        assert caches[0] == {}
         assert node.execute_command.call_args_list[0].args[0] == [
             "sh",
             "-lc",
@@ -82,7 +82,9 @@ class TestFlushNode:
 
         node.execute_command.assert_not_called()
 
-    def test_delete_failure_is_logged_and_flush_still_runs(self, caplog) -> None:
+    def test_delete_failure_is_logged_retains_cache_and_flush_still_runs(
+        self, caplog
+    ) -> None:
         node = _node()
         node.execute_command.side_effect = [RuntimeError("delete failed"), ""]
         caches = [{7: ["ip route replace 10.0.0.9/32 via 10.0.0.2 dev GS1.1"]}]
@@ -93,8 +95,20 @@ class TestFlushNode:
         assert node.execute_command.call_count == 2
         assert "Failed to delete SR route 10.0.0.9/32 on GS1" in caplog.text
         assert "delete failed" in caplog.text
+        assert caches[0][7] == ["ip route replace 10.0.0.9/32 via 10.0.0.2 dev GS1.1"]
         assert node.execute_command.call_args_list[-1].args[0] == [
             "sh",
             "-lc",
             "ip -f mpls route flush table all",
         ]
+
+    def test_flush_failure_retains_cache(self, caplog) -> None:
+        node = _node()
+        node.execute_command.side_effect = ["", RuntimeError("flush failed")]
+        caches = [{7: ["ip route replace 10.0.0.9/32 via 10.0.0.2 dev GS1.1"]}]
+
+        with caplog.at_level(logging.ERROR):
+            SRMPLSTeardown(caches).flush_node(node)
+
+        assert "Failed to flush MPLS routes on GS1" in caplog.text
+        assert caches[0][7] == ["ip route replace 10.0.0.9/32 via 10.0.0.2 dev GS1.1"]

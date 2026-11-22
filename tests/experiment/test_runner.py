@@ -383,6 +383,67 @@ def test_run_manifest_reloads_as_scenario(tmp_path):
     assert Path(reloaded.topology).is_file()
 
 
+def test_dry_run_keeps_bundled_topology_name_replayable(tmp_path):
+    scenario = Scenario(
+        name="bundled",
+        topology="test_topology.json",
+        duration_s=1,
+        tick_s=1,
+    )
+
+    result = ExperimentRunner(scenario).run(output_dir=tmp_path / "run", dry_run=True)
+
+    manifest_data = yaml.safe_load((result.run_dir / "manifest.yaml").read_text())
+    assert manifest_data["topology"] == "test_topology.json"
+    reloaded = Scenario.from_file(result.run_dir / "manifest.yaml")
+    assert reloaded.topology == "test_topology.json"
+
+
+class _StartBoomTopology(_FakeTopology):
+    def start_gonetem(self):
+        raise RuntimeError("start boom")
+
+
+def test_startup_failure_still_attempts_backend_teardown(tmp_path):
+    topology = _StartBoomTopology()
+    scenario = _scenario(tmp_path, traffic=[], events=[])
+
+    result = ExperimentRunner(
+        scenario,
+        topology_factory=lambda path, config: topology,
+        collector_factory=lambda topo: _Collector(),
+    ).run(output_dir=tmp_path / "run", live=True, realtime=False)
+
+    assert any("start boom" in error for error in result.errors)
+    assert ("stop_gonetem",) in topology.calls
+
+
+def test_topology_preparation_failure_writes_error_artifacts(tmp_path):
+    scenario = _scenario(tmp_path, traffic=[], events=[])
+
+    def fail_factory(path, config):
+        raise RuntimeError("load boom")
+
+    result = ExperimentRunner(
+        scenario,
+        topology_factory=fail_factory,
+        collector_factory=lambda topo: _Collector(),
+    ).run(output_dir=tmp_path / "run", live=False, realtime=False)
+
+    assert any("load boom" in error for error in result.errors)
+    for name in (
+        "manifest.yaml",
+        "metrics.jsonl",
+        "flows.json",
+        "errors.json",
+        "summary.json",
+        "report.md",
+    ):
+        assert (result.run_dir / name).is_file(), name
+    summary = json.loads((result.run_dir / "summary.json").read_text())
+    assert any("load boom" in error for error in summary["errors"])
+
+
 class _BoomTopology(_FakeTopology):
     def next_step(self):
         raise RuntimeError("tick boom")

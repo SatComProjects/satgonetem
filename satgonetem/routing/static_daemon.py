@@ -74,6 +74,7 @@ class StaticRoutingDaemon(RoutingDaemon):
         self._peer_interface_index = PeerInterfaceIndex(topology)
         self._route_planner = StaticRoutePlanner(topology, self._peer_interface_index)
         self._route_batch_installer = RouteBatchInstaller(topology)
+        self._last_interface_version = getattr(topology, "interface_version", None)
         # Nodes whose last batch failed: their previous table must not be
         # treated as installed, so the next update re-emits every route.
         self._failed_nodes: set[str] = set()
@@ -117,6 +118,7 @@ class StaticRoutingDaemon(RoutingDaemon):
             True if routing was installed successfully, False otherwise.
         """
         self._route_planner.clear_reuse_cache()
+        self._last_interface_version = getattr(self.topology, "interface_version", None)
         self._failed_nodes.clear()
         try:
             self._populate_routing_tables()
@@ -162,6 +164,13 @@ class StaticRoutingDaemon(RoutingDaemon):
         if not self.topology.status:
             logging.warning("Static routing update skipped: topology not yet active")
             return
+
+        interface_version = getattr(self.topology, "interface_version", None)
+        if interface_version != self._last_interface_version:
+            # Recreated interfaces invalidate cached route entries even when
+            # the destination/gateway/next-hop signature is unchanged.
+            self._route_planner.clear_reuse_cache()
+            self._last_interface_version = interface_version
 
         self._populate_routing_tables()
         outcome = self._apply_all_routes(max_workers=max_workers)

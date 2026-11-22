@@ -554,7 +554,7 @@ def test_teardown_bridge_retry_clears_tracking_after_delete_succeeds(
 # _delete_sat_veth
 
 
-def test_delete_sat_veth_logs_error_when_command_fails(
+def test_delete_sat_veth_treats_absent_device_as_success(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     runner = MagicMock()
@@ -564,18 +564,9 @@ def test_delete_sat_veth_logs_error_when_command_fails(
     manager = HILManager({"Gnd0": "eth1"}, command_runner=runner)
     caplog.set_level(logging.ERROR)
 
-    manager._delete_sat_veth("Sat1", 7777, 2)
+    assert manager._delete_sat_veth("Sat1", 7777, 2) is True
 
-    runner.run.assert_called_once_with(
-        ["nsenter", "--net=/proc/7777/ns/net", "ip", "link", "delete", "eth2"],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-    assert (
-        "HIL: failed to delete veth eth2 in Sat1: Cannot find device eth2"
-        in caplog.text
-    )
+    assert "failed to delete veth" not in caplog.text
 
 
 # setup_link / update_link error paths
@@ -1259,7 +1250,7 @@ def test_apply_qos_returns_false_when_tc_fails(monkeypatch: pytest.MonkeyPatch) 
     assert manager._apply_qos("Sat1", 4321, 0, delay_ms=10, rate_kbps=1000) is False
 
 
-def test_apply_qos_returns_false_when_txqueuelen_fails(
+def test_apply_qos_txqueuelen_failure_still_succeeds(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     manager = HILManager({"Gnd0": "eth1"}, txqueuelen=8000)
@@ -1268,7 +1259,7 @@ def test_apply_qos_returns_false_when_txqueuelen_fails(
     )
     monkeypatch.setattr(hil_manager, "_run_tc_batch", MagicMock(return_value=None))
 
-    assert manager._apply_qos("Sat1", 4321, 0, delay_ms=10, rate_kbps=1000) is False
+    assert manager._apply_qos("Sat1", 4321, 0, delay_ms=10, rate_kbps=1000) is True
 
 
 def test_teardown_bridge_returns_false_when_delete_fails(
@@ -1302,6 +1293,25 @@ def test_wire_links_raises_when_setup_fails(monkeypatch: pytest.MonkeyPatch) -> 
 
 
 # wire_links / teardown_all
+
+
+def test_wire_links_rolls_back_links_wired_before_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = HILManager({"Gnd0": "eth1"})
+    links = [
+        _link("Sat1", "Gnd0", src_pid=111),
+        _link("Sat2", "Gnd0", src_pid=222),
+    ]
+    setup = MagicMock(side_effect=[True, False])
+    teardown = MagicMock()
+    monkeypatch.setattr(manager, "setup_link", setup)
+    monkeypatch.setattr(manager, "teardown_link", teardown)
+
+    with pytest.raises(RuntimeError, match="failed to set up link Sat2<->Gnd0"):
+        manager.wire_links(links)
+
+    teardown.assert_called_once_with(links[0])
 
 
 def test_wire_links_sets_up_every_link(monkeypatch: pytest.MonkeyPatch) -> None:

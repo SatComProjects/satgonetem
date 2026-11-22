@@ -49,6 +49,38 @@ def test_parses_shell_and_ground_station_scenario(tmp_path):
     assert scenario.to_dict()["shells"][0]["planes"] == 3
 
 
+def test_ground_station_name_rejects_csv_metacharacters(tmp_path):
+    path = _write(
+        tmp_path,
+        {
+            "name": "comma-station",
+            "duration_s": 60,
+            "shells": [{"identifier": "LEO"}],
+            "ground_stations": [
+                {"name": "Rome, IT", "latitude": 41.9, "longitude": 12.5}
+            ],
+        },
+    )
+
+    with pytest.raises(ScenarioError, match="ground_station.name"):
+        Scenario.from_file(path)
+
+
+def test_invalid_network_capacity_is_rejected(tmp_path):
+    path = _write(
+        tmp_path,
+        {
+            "name": "bad-capacity",
+            "duration_s": 60,
+            "shells": [{"identifier": "LEO"}],
+            "network": {"gnd_link_capacity": "abc"},
+        },
+    )
+
+    with pytest.raises(ScenarioError, match="scenario.network is invalid"):
+        Scenario.from_file(path)
+
+
 def test_topology_and_shells_are_mutually_exclusive(tmp_path):
     path = _write(
         tmp_path,

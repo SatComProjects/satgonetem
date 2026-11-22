@@ -9,6 +9,7 @@ facade.
 from __future__ import annotations
 
 import math
+import re
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass, fields
@@ -150,6 +151,19 @@ class NetworkConfig:
                     f"{MAX_LINK_QUEUE_PACKETS} packets, got {value}"
                 )
 
+        for name in (
+            "gnd_link_capacity",
+            "isl_link_capacity",
+            "ground_object_link_capacity",
+        ):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise TypeError(f"NetworkConfig.{name} must be an int, got {value!r}")
+            if value <= 0:
+                raise ValueError(
+                    f"NetworkConfig.{name} must be a positive integer, got {value}"
+                )
+
         loss = self.link_loss_percent
         if isinstance(loss, bool) or not isinstance(loss, (int, float)):
             raise TypeError(
@@ -286,10 +300,13 @@ def apply_config(instance: Any, config: NetworkConfig) -> None:
             If config.project_name is None, falls back to the instance's
             simulation manager project_name attribute, or "Constellation".
     """
-    base_name = config.project_name or getattr(
-        instance.simulation_manager, "project_name", "Constellation"
+    base_name = str(
+        config.project_name
+        or getattr(instance.simulation_manager, "project_name", "Constellation")
     )
-    instance.project_name = f"{base_name}_{int(time.time())}"
+    if not re.search(r"_\d{10}$", base_name):
+        base_name = f"{base_name}_{int(time.time())}"
+    instance.project_name = base_name
     for field in fields(NetworkConfig):
         if field.name != "project_name":
             setattr(instance, field.name, getattr(config, field.name))

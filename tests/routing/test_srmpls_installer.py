@@ -80,6 +80,26 @@ def _stack_entry(command: str) -> SimpleNamespace:
     return SimpleNamespace(to_iproute2_command=lambda: command)
 
 
+def test_stack_pass_prunes_non_addressable_satellite_cache() -> None:
+    sat = _RecordingSatellite(1, "Sat1", "10.0.0.1")
+    sat.set_addressable(False)
+    topology = _FakeTopology([sat], [])
+    label_manager = _FakeLabelManager({1: 16001})
+    cached = "ip route replace 10.9.9.9/32 encap mpls 16002 via 10.0.0.9 dev Sat1.9"
+    prev_stack = {1: [cached]}
+    sr_lfib = {1: [_stack_entry(cached)]}
+
+    errors = SRMPLSRouteInstaller(topology).apply_sr_routes_to_satellites(
+        label_manager, sr_lfib, prev_stack, {}
+    )
+
+    assert errors == 0
+    assert 1 not in prev_stack
+    assert 1 not in sr_lfib
+    assert sat.commands, "the stale satellite routes must be deleted"
+    assert "10.9.9.9/32" in sat.commands[0][2]
+
+
 def test_sid_pass_installs_own_sid_and_neighbour_forward_only() -> None:
     sat = _RecordingSatellite(1, "Sat1", "10.0.0.1")
     gs = _RecordingGroundStation(2, "Gnd2", "10.0.0.2")

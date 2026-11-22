@@ -376,7 +376,7 @@ class ExperimentRunner:
             write_json(run_dir / "flows.json", flows)
         except Exception as exc:  # noqa: BLE001 - report what can be written
             self._record_error(f"writing flows.json failed: {exc}")
-        if live and self.scenario.connectivity:
+        if live and topology is not None and self.scenario.connectivity:
             try:
                 matrix = topology.connectivity_matrix()
                 write_json(run_dir / "connectivity.json", matrix.to_dict())
@@ -445,9 +445,12 @@ class ExperimentRunner:
         topology_value = manifest.get("topology")
         if topology_value:
             topology_path = Path(str(topology_value))
-            if not topology_path.is_absolute():
-                topology_path = (Path(self.scenario.base_dir) / topology_path).resolve()
-            manifest["topology"] = str(topology_path)
+            if topology_path.is_absolute():
+                manifest["topology"] = str(topology_path)
+            else:
+                candidate = (Path(self.scenario.base_dir) / topology_path).resolve()
+                if candidate.is_file():
+                    manifest["topology"] = str(candidate)
         manifest["run_dir"] = str(run_dir)
         manifest["started_at"] = self._now().isoformat()
         _write_text_atomic(
@@ -466,19 +469,33 @@ class ExperimentRunner:
                 errors=list(self._errors),
             )
 
-        topology = self._load_topology()
-        topology.update_time = self.scenario.tick_s
-        if hasattr(topology, "update_factor"):
-            topology.update_factor = 1.0
-        collector = self._collector_factory(topology)
         samples: list[dict[str, Any]] = []
         flows: list[dict[str, Any]] = []
+        try:
+            topology = self._load_topology()
+            topology.update_time = self.scenario.tick_s
+            if hasattr(topology, "update_factor"):
+                topology.update_factor = 1.0
+            collector = self._collector_factory(topology)
+        except Exception as exc:  # noqa: BLE001 - persist a failed preparation
+            self._record_error(f"preparing the topology failed: {exc}")
+            (run_dir / "metrics.jsonl").write_text("", encoding="utf-8")
+            flows, summary = self._finalize_run(run_dir, None, live)
+            return RunResult(
+                run_dir=run_dir,
+                summary=summary,
+                flows=flows,
+                errors=list(self._errors),
+            )
 
         interrupted: BaseException | None = None
         try:
             if live:
-                topology.start_gonetem()
+                # Mark the backend as started before the call so a startup
+                # failure still reaches _stop_backend() and retries any
+                # launcher retained by the lifecycle mixin.
                 self._started_backend = True
+                topology.start_gonetem()
                 topology.set_ip_addresses()
                 if self.scenario.routing:
                     result = topology.init_routing(self.scenario.routing)

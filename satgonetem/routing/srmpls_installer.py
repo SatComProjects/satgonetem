@@ -339,6 +339,34 @@ class SRMPLSRouteInstaller:
             len(self._topology.satellites),
         )
 
+        errors = 0
+        active_ids = {
+            sat.id
+            for sat in self._topology.satellites.values()
+            if sat.is_addressable() and sat.container
+        }
+        for sat_id, cached in list(prev_sat_routes.items()):
+            if sat_id in active_ids:
+                continue
+            sat = self._topology.satellites.get(sat_id)
+            if sat is not None and sat.container:
+                stale, _ = route_changes(cached, [], set())
+                if stale:
+                    try:
+                        sat.execute_command(["sh", "-lc", build_batch(stale, [])])
+                    except Exception as exc:
+                        errors += 1
+                        logging.error(
+                            "Failed to delete stale SR routes on %s: %s",
+                            sat.name,
+                            exc,
+                        )
+                        continue
+            # Removed nodes have no container to clean; dropping their cache
+            # is the only remaining option and prevents unbounded growth.
+            prev_sat_routes.pop(sat_id, None)
+            sr_lfib.pop(sat_id, None)
+
         def install_satellite_routes(sat: Satellite) -> bool:
             route_commands = [
                 entry.to_iproute2_command() for entry in sr_lfib.get(sat.id, [])
@@ -358,7 +386,6 @@ class SRMPLSRouteInstaller:
             prev_sat_routes[sat.id] = route_commands
             return True
 
-        errors = 0
         with ThreadPoolExecutor(max_workers=workers) as pool:
             futures = [
                 pool.submit(install_satellite_routes, sat)  # type: ignore[arg-type]

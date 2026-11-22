@@ -266,6 +266,11 @@ class GoNetEmLifecycleMixin(GoNetEmClientMixin):
                     node_close += 1
                     if progress_cb:
                         progress_cb("CLOSE_NODE_CLOSE", node_close, node_count)
+            if node_count and node_close != node_count:
+                raise RuntimeError(
+                    "GoNetEmLauncher: ProjectClose incomplete: "
+                    f"closed {node_close} of {node_count} node(s)"
+                )
         except Exception as exc:
             logging.error("GoNetEmLauncher: ProjectClose failed: %s", exc)
             if progress_cb:

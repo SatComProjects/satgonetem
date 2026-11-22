@@ -171,6 +171,25 @@ def test_build_report_rejects_missing_manifest(tmp_path):
         build_report(tmp_path)
 
 
+def test_build_report_rejects_malformed_manifest_as_value_error(tmp_path):
+    root = tmp_path / "run"
+    root.mkdir()
+    (root / "manifest.yaml").write_text("name: [unclosed\n")
+
+    with pytest.raises(ValueError, match="manifest"):
+        build_report(root)
+
+
+def test_build_report_tolerates_non_list_link_values(tmp_path):
+    root = _run_dir(tmp_path)
+    (root / "metrics.jsonl").write_text(json.dumps({"step": 1, "links": 5}) + "\n")
+
+    summary = build_report(root)
+
+    assert summary["metrics"]["samples"] == 1
+    assert (root / "report.md").is_file()
+
+
 def test_build_report_includes_topology_counts(tmp_path):
     root = _run_dir(tmp_path)
     (root / "metrics.jsonl").write_text(
