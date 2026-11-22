@@ -225,9 +225,12 @@ thread; using one lock would deadlock the joining thread.
 `update_simulation(advance_timestep=True)` is the tick body. It runs while
 holding `_simulation_lock`:
 
-1. **Advance time** — increment `current_time_step` and call
-   `time_manager.tick(update_time)`. The sat_com tick action updates the
-   simulation manager's objects.
+1. **Advance time** — call `time_manager.tick(update_time)` and then
+   increment `current_time_step` (in a `finally`) only if simulation time
+   actually advanced. The sat_com tick updates time before running its
+   actions, so a failing action has still consumed that step and the counter
+   must reflect it. The sat_com tick action updates the simulation manager's
+   objects.
 2. **Sync positions** — copy satellite and ground-station positions from
    `satcom_object`.
 3. **Sync links** — one pass over `simulation_manager.get_all_links()`:
