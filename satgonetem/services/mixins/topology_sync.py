@@ -203,6 +203,12 @@ class TopologySyncMixin:
                         "is_active",
                         not getattr(sat_com_link, "disabled", False),
                     )
+                    if new_active:
+                        # The key is present again (or never left) and the
+                        # link is active. A stale removal marker from an
+                        # earlier failed delete must not tear down a live link.
+                        link.to_remove = False
+                        link.to_delete = False
                     if link.is_active != new_active:
                         link.is_active = new_active
                         if new_active:
