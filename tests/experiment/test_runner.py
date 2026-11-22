@@ -399,6 +399,25 @@ def test_dry_run_keeps_bundled_topology_name_replayable(tmp_path):
     assert reloaded.topology == "test_topology.json"
 
 
+class _StartBoomTopology(_FakeTopology):
+    def start_gonetem(self):
+        raise RuntimeError("start boom")
+
+
+def test_startup_failure_still_attempts_backend_teardown(tmp_path):
+    topology = _StartBoomTopology()
+    scenario = _scenario(tmp_path, traffic=[], events=[])
+
+    result = ExperimentRunner(
+        scenario,
+        topology_factory=lambda path, config: topology,
+        collector_factory=lambda topo: _Collector(),
+    ).run(output_dir=tmp_path / "run", live=True, realtime=False)
+
+    assert any("start boom" in error for error in result.errors)
+    assert ("stop_gonetem",) in topology.calls
+
+
 def test_topology_preparation_failure_writes_error_artifacts(tmp_path):
     scenario = _scenario(tmp_path, traffic=[], events=[])
 

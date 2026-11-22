@@ -491,8 +491,11 @@ class ExperimentRunner:
         interrupted: BaseException | None = None
         try:
             if live:
-                topology.start_gonetem()
+                # Mark the backend as started before the call so a startup
+                # failure still reaches _stop_backend() and retries any
+                # launcher retained by the lifecycle mixin.
                 self._started_backend = True
+                topology.start_gonetem()
                 topology.set_ip_addresses()
                 if self.scenario.routing:
                     result = topology.init_routing(self.scenario.routing)
