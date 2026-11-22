@@ -411,6 +411,7 @@ class TopologySyncMixin:
             link_stats["delete_time_total"] = delete_stats["delete_time_total"]
             link_stats["delete_time_wall"] = delete_stats.get("delete_time_wall", 0.0)
             link_stats["delete_time_per_link"] = delete_stats["delete_time_per_link"]
+            self.last_link_operation_stats = dict(link_stats)
 
             if (
                 link_stats["added_count"]

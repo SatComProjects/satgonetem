@@ -383,6 +383,10 @@ class TopologyManager(
         # Active routing daemon - set during init_routing() based on routing method
         self.routing_daemon: RoutingDaemon | None = None
 
+        # Most recent top-level link operation counters (added/updated/deleted)
+        # from update_simulation(). Read-only diagnostic for callers/tests.
+        self.last_link_operation_stats: dict = {}
+
         # Track active traffic flows started via TrafficTestingMixin
         self._active_flows: list = []
 
