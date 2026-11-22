@@ -451,10 +451,9 @@ def test_longest_connection_strategy_stops_when_retained_links_fill_capacity():
             )
         )
 
-    assert [
-        connection.satellite for connection in result.new_ground_object_connections
-    ] == [satellite]
-    assert existing_link in result.obsolete_links
+    # The existing link is kept as-is: no teardown and no replacement.
+    assert result.new_ground_object_connections == []
+    assert existing_link not in result.obsolete_links
 
 
 def test_weighted_connection_stops_when_retained_links_fill_capacity():
@@ -471,10 +470,9 @@ def test_weighted_connection_stops_when_retained_links_fill_capacity():
             satellites=[satellite],
         )
 
-    assert [
-        connection.satellite for connection in result.new_ground_object_connections
-    ] == [satellite]
-    assert existing_link in result.obsolete_links
+    # The existing link is kept as-is: no teardown and no replacement.
+    assert result.new_ground_object_connections == []
+    assert existing_link not in result.obsolete_links
 
 
 def test_longest_connection_strategy_sorts_estimates_and_respects_capacity():
@@ -555,11 +553,12 @@ def test_longest_connection_strategy_skips_retained_satellite_in_second_pass():
             )
         )
 
+    # Sat0's existing link is retained; only the free slot is filled.
     assert [
         connection.satellite.satellite_name
         for connection in result.new_ground_object_connections
-    ] == ["Sat0", "Sat1"]
-    assert existing_link in result.obsolete_links
+    ] == ["Sat1"]
+    assert existing_link not in result.obsolete_links
 
 
 def test_weighted_connection_keeps_retained_link_then_fills_remaining_capacity():
@@ -584,11 +583,12 @@ def test_weighted_connection_keeps_retained_link_then_fills_remaining_capacity()
             satellites=satellites,
         )
 
+    # Sat0's existing link is retained; only the free slot is filled.
     assert [
         connection.satellite.satellite_name
         for connection in result.new_ground_object_connections
-    ] == ["Sat0", "Sat1"]
-    assert existing_link in result.obsolete_links
+    ] == ["Sat1"]
+    assert existing_link not in result.obsolete_links
 
 
 def test_longest_connection_strategy_estimates_each_candidate_once(capsys):

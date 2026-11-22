@@ -129,6 +129,14 @@ class _UntouchableDomainManager(_DomainManagerStub):
         raise AssertionError("existing ground-object domain must not be resolved")
 
 
+class _DuplicateDomainManager(_DomainManagerStub):
+    """Manager whose identifier lookup is ambiguous for duplicate domains."""
+
+    def get_ground_object_domain(self, identifier: str) -> GroundObjectDomain:
+        self.requested_identifiers.append(identifier)
+        raise ValueError(f"duplicate ground-object domain identifier: {identifier}")
+
+
 class _NoAccessManager:
     """Manager that must not be touched at all."""
 
@@ -220,6 +228,23 @@ def test_add_custom_ground_station_creates_default_domain() -> None:
     assert ground_station.ground_object_domain.type == "ground_station"
     assert manager.added_domains == [ground_station.ground_object_domain]
     assert manager.added_ground_stations == [ground_station]
+
+
+def test_attach_domain_prefers_matching_identifier_on_duplicates() -> None:
+    """A duplicate-identifier lookup must not attach an unrelated station domain."""
+    generic_public = GroundObjectDomain(identifier="public", type="generic")
+    alpha_station = GroundObjectDomain(identifier="alpha", type="ground_station")
+    public_station = GroundObjectDomain(identifier="public", type="ground_station")
+    manager = _DuplicateDomainManager(
+        candidate_domains=(generic_public, alpha_station, public_station)
+    )
+    ground_object = SimpleNamespace(domain="public", ground_object_domain=None)
+
+    _attach_ground_object_domain(ground_object, manager)  # type: ignore[arg-type]
+
+    assert ground_object.ground_object_domain is public_station
+    assert manager.requested_identifiers == ["public"]
+    assert manager.added_domains == []
 
 
 def test_add_custom_ground_station_preserves_existing_domain() -> None:

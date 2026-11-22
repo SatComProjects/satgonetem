@@ -25,6 +25,7 @@ from sat_com_application.simulation_manager import (
     SimulationManager,
 )
 from sat_com_builder.models import SimulationProperty
+from sat_com_model.models import PointOfPresence, UserTerminal
 
 from satgonetem.launchers.base_launcher import NetworkLauncher
 from satgonetem.link_budget.config import AntennaConfig, LinkBudgetConfig
@@ -46,6 +47,7 @@ from satgonetem.services.mixins.traffic_testing import TrafficTestingMixin
 from satgonetem.services.topology_link_plan import ensure_inter_satellite_directions
 from satgonetem.traffic import PingConfig, PingFlow
 from satgonetem.utils.project_builder import (
+    _attach_ground_object_domain,
     add_custom_ground_station,
     create_and_load_simulation,
     create_custom_ground_station,
@@ -169,13 +171,19 @@ class NetworkConfig:
     controller_node_iface_pattern: str = "eth{node_id}"
 
     def __post_init__(self) -> None:
-        """Validate the queue-length fields.
+        """Validate the queue-length fields and the tick interval.
 
         Raises:
             TypeError: If a queue-length field is not an integer.
             ValueError: If a queue-length field is outside
-                ``[0, MAX_LINK_QUEUE_PACKETS]``.
+                ``[0, MAX_LINK_QUEUE_PACKETS]``, or if ``update_time`` is not
+                positive.
         """
+        if self.update_time <= 0:
+            raise ValueError(
+                f"NetworkConfig.update_time must be positive, got {self.update_time}"
+            )
+
         for name in ("link_netem_limit", "link_txqueuelen"):
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, int):
@@ -432,7 +440,9 @@ class TopologyManager(
 
         When the TopologyManager was created from a SimulationManager with
         programmatically added satellites and links (rather than from a
-        SimulationProperty), the runtime state is also serialised.
+        SimulationProperty), the runtime state is also serialised. That state
+        covers satellites, ground stations, user terminals, points of presence
+        and every link type between them.
 
         Args:
             path: Filesystem path where the JSON file will be written.
@@ -517,6 +527,32 @@ class TopologyManager(
             )
             add_custom_ground_station(gs, sim_manager)
 
+        for ut_data in runtime_state.get("user_terminals", []):
+            user_terminal = UserTerminal()
+            user_terminal.label = ut_data["label"]
+            user_terminal.object_id = ut_data.get("object_id", 0)
+            user_terminal.domain = ut_data.get("domain", "public")
+            user_terminal.set_position(
+                latitude=ut_data["latitude"],
+                longitude=ut_data["longitude"],
+                altitude=ut_data.get("altitude", 0),
+            )
+            _attach_ground_object_domain(user_terminal, sim_manager)
+            sim_manager.add_user_terminals(user_terminal)
+
+        for pop_data in runtime_state.get("points_of_presence", []):
+            point_of_presence = PointOfPresence()
+            point_of_presence.label = pop_data["label"]
+            point_of_presence.object_id = pop_data.get("object_id", 0)
+            point_of_presence.domain = pop_data.get("domain", "public")
+            point_of_presence.set_position(
+                latitude=pop_data["latitude"],
+                longitude=pop_data["longitude"],
+                altitude=pop_data.get("altitude", 0),
+            )
+            _attach_ground_object_domain(point_of_presence, sim_manager)
+            sim_manager.add_point_of_presence(point_of_presence)
+
         from sat_com_model.models import InterSatelliteLinkDirection
 
         links = runtime_state.get("links", {})
@@ -566,6 +602,22 @@ class TopologyManager(
             except Exception as exc:
                 logging.warning(f"Failed to restore GSL {gsl}: {exc}")
 
+        for utl in links.get("user_terminal", []):
+            try:
+                sat = next(
+                    s
+                    for s in sim_manager.get_satellites()
+                    if s.satellite_name == utl["source"]
+                )
+                ut = next(
+                    u
+                    for u in sim_manager.get_user_terminals()
+                    if u.label == utl["destination"]
+                )
+                sim_manager.create_and_add_user_terminal_link_connection(sat, ut)
+            except Exception as exc:
+                logging.warning(f"Failed to restore user-terminal link {utl}: {exc}")
+
         for gol in links.get("ground_object", []):
             try:
                 go_a = next(
@@ -595,8 +647,8 @@ class TopologyManager(
 
         When the file contains a ``runtime_state`` block (produced when saving a
         topology that was built programmatically via ``from_simulation_manager``),
-        the full runtime state—including custom satellites, ground stations, and
-        links—is restored instead.
+        the full runtime state—including custom satellites, ground stations,
+        user terminals, points of presence, and their links—is restored instead.
 
         Args:
             path: Path to the JSON file previously written by to_file().

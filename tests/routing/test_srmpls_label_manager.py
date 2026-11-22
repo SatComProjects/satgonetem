@@ -121,6 +121,80 @@ def test_route_returns_empty_for_missing_path():
     assert manager.get_sr_route_for_destination(1, 2, default_path=[1]) == ([], [])
 
 
+def test_label_stack_cache_distinguishes_php():
+    manager = SegmentRoutingManager()
+    for node_id in (1, 2, 3):
+        manager.allocate_node_sid(node_id)
+
+    _, with_php = manager.get_sr_route_for_destination(
+        1, 3, default_path=[1, 2, 3], use_php=True
+    )
+    _, without_php = manager.get_sr_route_for_destination(
+        1, 3, default_path=[1, 2, 3], use_php=False
+    )
+
+    assert with_php == [16002]
+    assert without_php == [16002, 16003]
+
+
+def test_label_stack_cache_distinguishes_the_default_path():
+    manager = SegmentRoutingManager()
+    for node_id in (1, 2, 3, 4):
+        manager.allocate_node_sid(node_id)
+
+    _, first = manager.get_sr_route_for_destination(
+        1, 3, default_path=[1, 2, 3], use_php=True
+    )
+    _, second = manager.get_sr_route_for_destination(
+        1, 3, default_path=[1, 4, 3], use_php=True
+    )
+
+    assert first == [16002]
+    assert second == [16004]
+
+
+def test_custom_path_change_invalidates_every_cached_stack_for_the_pair():
+    manager = SegmentRoutingManager()
+    for node_id in (1, 2, 3, 4):
+        manager.allocate_node_sid(node_id)
+    manager.get_sr_route_for_destination(1, 3, default_path=[1, 2, 3], use_php=True)
+    manager.get_sr_route_for_destination(1, 3, default_path=[1, 4, 3], use_php=False)
+    assert manager.get_statistics()["cached_stacks"] == 2
+
+    manager.set_custom_path(1, 3, [1, 3])
+
+    assert manager.get_statistics()["cached_stacks"] == 0
+
+
+class _MutatingKey(int):
+    """An int that inserts a cache entry when the cache compares it."""
+
+    __hash__ = int.__hash__
+
+    def __new__(cls, value, cache):
+        key = super().__new__(cls, value)
+        key.cache = cache
+        return key
+
+    def __eq__(self, other):
+        self.cache.setdefault((99, 99, True, (1,)), [])
+        return super().__eq__(other)
+
+
+def test_invalidating_a_pair_tolerates_inserts_while_iterating():
+    manager = SegmentRoutingManager()
+    cache = manager._label_stack_cache
+    mutating = _MutatingKey(1, cache)
+    cache[(mutating, 3, True, (2, 3))] = [16002]
+    cache[(1, 4, True, (2, 4))] = [16003]
+
+    manager._invalidate_pair_cache(1, 3)
+
+    assert (mutating, 3, True, (2, 3)) not in cache
+    assert (1, 4, True, (2, 4)) in cache
+    assert (99, 99, True, (1,)) in cache, "the concurrent insert must be preserved"
+
+
 def test_statistics_reset_cache_and_str():
     manager = SegmentRoutingManager()
     manager.allocate_node_sid(1, "Sat1")

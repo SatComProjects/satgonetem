@@ -169,16 +169,17 @@ Adds:
 | `addressable` | Whether the satellite receives a loopback route (see `set_addressable`) |
 | `is_addressable()` / `set_addressable(status)` | Read/write the flag |
 | `satcom_object` | `sat_com_model.Satellite` backing this node |
-| `sync_position_from_satcom()` | Copy latitude/longitude/altitude from `satcom_object.spatial_position` |
+| `sync_position_from_satcom(altitude_unit="m")` | Copy latitude/longitude/altitude from `satcom_object.spatial_position`, converting the altitude from metres (default) or taking it as kilometres |
 | `start_net_logger(path)` | Start `net_logger` on every interface, detached, writing `<path>/<node>_<iface>.log` |
 | `default_qos_is_on`, `program_specific_qos_is_on`, `qos_configuration_count` | Legacy QoS bookkeeping used by the TBF helper |
 
-`sync_position_from_satcom()` normalizes altitude to kilometres by dividing
-the sat_com value by 1000. If that result is below 100, the original value is
-used unchanged instead. In practice, orbital positions reported in metres
-become kilometres (`781089` → `781`), while ground-station positions already
-reported in kilometres (`0.034`) are preserved. Missing coordinates log a
-warning and leave the previous position in place.
+`sync_position_from_satcom(altitude_unit="m")` makes the altitude unit
+explicit. The default `"m"` follows the sat_com movement-model contract and
+divides the value by 1000 (`781089` → `781`); `altitude_unit="km"` stores the
+value unchanged (`0.034` → `0.034`). Any other unit raises `ValueError`. There
+is no magnitude heuristic, so a genuine 50 km altitude reported in metres
+becomes 50 km rather than 50,000 km. Missing coordinates log a warning and
+leave the previous position in place.
 
 ## `GroundStation`
 
@@ -191,7 +192,8 @@ gs.city = "Berlin"
 
 Adds `city` (display label, filled from the sat_com label during sync),
 `traffic_models` (free-form list for experiments), and `satcom_object`.
-`sync_position_from_satcom()` has the same behaviour as the satellite version.
+`sync_position_from_satcom()` divides the sat_com altitude by 1000
+(metres → kilometres); unlike the satellite version it has no unit flag.
 
 Ground-station links are the only links that use link-budget capacity
 calculation (see below).
@@ -217,7 +219,7 @@ assert iface.get_iname() == "eth3"
 | `name` | Emulator name, `<node>.<peer_id>`; loopbacks become `lo_<node>` in the manager list |
 | `ipv4` | Address string (`""` until assigned) |
 | `prefix_len` | `/31` for point-to-point links, `/32` for loopbacks |
-| `peer` | The interface at the other end of the link (not set for loopbacks) |
+| `peer` | The interface at the other end of the link; defaults to `None` until wired (not set for loopbacks) |
 | `is_active`, `previously_active` | Mirrors `Link.is_active` after each tick |
 | `is_monitored` | Set when interface statistics are collected |
 | `type` | `"lo"`, `"InterSatelliteLink"`, `"GroundStationLink"`, or `"GroundObjectLink"` |
@@ -226,10 +228,20 @@ assert iface.get_iname() == "eth3"
 
 `set_ipv4()` validates the address and prefix. `set_ip()` is a backward-
 compatible alias. `network` returns the `IPv4Network` or `None` when no
-address is set.
+address is set. Interfaces compare and hash by `name`: equal names yield equal
+hashes, and interfaces can be used as set members or dict keys.
+
+**Rename before hashing.** Because the hash is derived from `name`, renaming an
+`Interface` after it has been inserted into a `set` or used as a `dict` key
+changes its hash and makes the existing entry unreachable. Finish renaming
+first, then insert. `InterfaceMgrMixin` follows this order: it renames each
+node's loopback to `lo_<node>` and only then appends it to the interface list,
+so do not rename loopbacks again after they have been indexed.
 
 `get_iname()` returns `"lo"` for loopbacks and `"eth" + name.split(".")[1]`
-otherwise. This is the name tools should use inside the container.
+otherwise. This is the name tools should use inside the container. A
+non-loopback name without the expected `<iface>.<id>` form raises
+`ValueError` naming the offending interface (instead of an `IndexError`).
 
 ## `Link`
 
@@ -294,8 +306,12 @@ kbps. `update_link_capacities()`:
 
 For budget links, `peer1_capacity` is the satellite → ground-station downlink
 (ModCod strategy) and `peer2_capacity` is the ground-station → satellite
-uplink (Shannon strategy). If an antenna is missing or the budget fails, both
-fall back to `default_capacity_kbps` and a warning is logged.
+uplink (Shannon strategy). Elevation geometry requires `latitude`, `longitude`,
+and `altitude` on both nodes; `_compute_elevation_angle()` raises `ValueError`
+instead of inventing a fallback angle. A missing antenna, incomplete or
+invalid position, or failed budget makes both peers fall back to
+`default_capacity_kbps` with a logged warning; no default `(0, 0)` ground
+coordinates are substituted.
 
 `get_capacity()` returns `peer1_capacity`. `refresh_link_capacities()` returns
 `True` when either value changed and marks `to_update`.
@@ -367,8 +383,21 @@ not strictly below the end. Its defaults differ from the Pydantic
 `MPLSConfiguration` in `sat_com_models.py`: `use_php=False` here versus
 `php=True` there.
 
-`SRLabelStackEntry.label_stack` is written in push order and joined with `/`
-for the kernel command. An empty stack degrades to a plain IP route.
+`SRLabelStackEntry.label_stack` is ordered outermost first and joined with `/`
+for the kernel command: the first label is the top of the stack and is popped
+by the first transit node, after which the kernel processes the next label. An
+empty stack degrades to a plain IP route. Linux accepts at most
+`MAX_NEW_LABELS` (30) pushed labels, so a path with more than 30 transit nodes
+cannot be installed as a single stack.
+
+`SegmentRoutingManager.get_label_stack_for_path()` takes the complete path
+from source to destination. The source is never labelled, and the destination
+is labelled only when PHP is disabled (`use_php=False`). The ingress route and
+the stack reported by `set_sr_custom_path()` use this same builder, so the
+reported stack matches the ingress stack installed for addressable sources.
+The side effects of `set_sr_custom_path()` can lag: routes are rebuilt only
+while the topology is active, and installation errors are logged rather than
+raised, so a failed install can leave the reported stack ahead of the kernel.
 
 ## Declarative configuration models
 
@@ -403,9 +432,13 @@ sat.initialise_global_qos(
 )
 ```
 
-It reads the current qdisc with `tc qdisc show`, derives the required
-burst/limit from the demand, and issues `tc qdisc change`. The qdisc must
-already exist; the method logs an error and returns if no TBF line is found.
+It reads the current qdisc with `tc qdisc show`, parses every output line (a
+single-line qdisc display is valid), derives the required burst/limit from the
+demand, and issues `tc qdisc change`. The qdisc must already exist; the method
+logs an error and returns if no TBF line is found. A non-positive
+`demand_bit_rate` or `isl_capacity` raises `ValueError`. When the offered rate
+fits within capacity, or the derived limit/burst is non-positive, the method
+logs that no shaping is needed and leaves the qdisc unchanged.
 
 ## Putting it together
 

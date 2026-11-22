@@ -136,14 +136,18 @@ def run_iperf3_flow(
     src_ip = source.loopback.ipv4
 
     # Reserve an exclusive port for this run; config.port is not modified.
-    port = iperf3_ports._IPERF3_PORT_ALLOCATOR.allocate()
+    port = iperf3_ports._allocate_port()
     run_config = replace(config, port=port)
     try:
         server_cmd = (
             f'sh -c "iperf3 -s -1 -B {dst_ip} -p {port} --json > {server_json} 2>&1"'
         )
         destination.execute_command(server_cmd, detach=True)
-        _wait_for_iperf3_server(destination, dst_ip, port)
+        if not _wait_for_iperf3_server(destination, dst_ip, port):
+            raise RuntimeError(
+                f"iperf3 server did not start on {dst_ip}:{port}; "
+                f"client {source.name} -> {destination.name} was not started."
+            )
 
         client_cmd = run_config.build_client_command(dst_ip, src_ip, client_json)
         source.execute_command(client_cmd, detach=False)
@@ -178,4 +182,4 @@ def run_iperf3_flow(
         _kill_server(destination, dst_ip, port)
         _remove_temp_file(source, client_json)
         _remove_temp_file(destination, server_json)
-        iperf3_ports._IPERF3_PORT_ALLOCATOR.release(port)
+        iperf3_ports._release_port(port)

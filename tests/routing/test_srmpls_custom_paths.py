@@ -100,5 +100,6 @@ def test_statistics_report_enabled_routes():
 
     assert stats["enabled"] is True
     assert stats["sr_routes"] == 3
-    assert stats["ground_stations_with_routes"] == 2
+    assert stats["nodes_with_routes"] == 2
+    assert stats["ground_stations_with_routes"] == 1
     assert stats["node_sids_allocated"] == 3

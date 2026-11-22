@@ -17,20 +17,15 @@ import networkx as nx
 
 from satgonetem.models.ground_station import GroundStation
 from satgonetem.routing.srmpls_daemon import SRMPLSDaemon
+from satgonetem.routing.srmpls_label_manager import SegmentRoutingManager
 
 
-class _FakeLabelManager:
-    def __init__(self, sids):
-        self._sids = sids
-
-    def get_node_sid(self, node_id):
-        return self._sids.get(node_id)
-
-    def get_custom_path(self, source_id, destination_id):
-        return None
-
-    def get_label_stack_for_path(self, path, use_php=False):
-        return [16002]
+def _make_label_manager(sids):
+    """Build a real manager with the requested Node SIDs allocated."""
+    manager = SegmentRoutingManager(node_sid_base=16000)
+    for node_id in sids:
+        manager.allocate_node_sid(node_id)
+    return manager
 
 
 class _FakeLFIBEntry:
@@ -64,7 +59,7 @@ class _RecordingNode:
 
 def _make_daemon(*, satellites=None, ground_stations=None, sids=None, sr_lfib=None):
     daemon = SRMPLSDaemon.__new__(SRMPLSDaemon)
-    daemon._label_manager = _FakeLabelManager(sids or {})
+    daemon._label_manager = _make_label_manager(sids or {})
     daemon._sr_graph = object()
     daemon.sr_lfib = sr_lfib if sr_lfib is not None else {}
     daemon.topology = SimpleNamespace(
@@ -164,7 +159,10 @@ def _update_daemon(*, fail):
     )
 
     ground_stations = {source.id: source, destination.id: destination}
-    daemon = _make_daemon(ground_stations=ground_stations, sids={source.id: 16001})
+    daemon = _make_daemon(
+        ground_stations=ground_stations,
+        sids={source.id: 16001, destination.id: 16002},
+    )
     daemon.topology.get_current_graph = lambda: graph
     daemon.topology.get_ground_stations = lambda: [source, destination]
     daemon.topology._get_interface_to_peer = lambda node, peer_id: interface
@@ -182,6 +180,7 @@ def test_update_sr_route_for_source_batch_is_fail_fast():
     batch = source.execute_command.call_args.args[0]
     assert batch[:2] == ["sh", "-lc"]
     assert batch[2].startswith("set -e; ")
+    assert "encap mpls 16002 via" in batch[2]
     assert daemon._prev_sr_gs_routes[source.id]
 
 

@@ -164,7 +164,7 @@ class GoNetEmLifecycleMixin(GoNetEmClientMixin):
     def _cleanup_failed_start(self) -> None:
         """Best-effort cleanup after a failed start_containers() call."""
         try:
-            if self._client is not None and self._request is not None:
+            if self._request is not None:
                 self.force_close_project()
         except Exception as exc:
             logging.error("GoNetEmLauncher: cleanup after failed start failed: %s", exc)

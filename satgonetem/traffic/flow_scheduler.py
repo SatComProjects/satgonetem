@@ -267,6 +267,7 @@ class FlowScheduler:
         errors: list[Exception] = []
 
         progress_event = threading.Event()
+        progress_thread: threading.Thread | None = None
 
         def _progress_printer() -> None:
             while not progress_event.is_set():
@@ -277,12 +278,11 @@ class FlowScheduler:
         try:
             with ThreadPoolExecutor(max_workers=self._max_workers) as executor:
                 if self._debug:
-                    progress_thread = threading.Thread(
-                        target=_progress_printer, daemon=True
-                    )
-                    progress_thread.start()
+                    thread = threading.Thread(target=_progress_printer, daemon=True)
+                    thread.start()
+                    progress_thread = thread
 
-                pending: set[Future[AnyResult]] = set()
+                pending: dict[Future[AnyResult], AnyFlow] = {}
                 flow_deque: deque[AnyFlow] = deque(self._flows)
                 # Once submission starts the sorted list is no longer needed.
                 # Drop the scheduler's reference so it does not keep every
@@ -302,12 +302,10 @@ class FlowScheduler:
                         self._on_flow_done if self._debug else None,
                         self._flow_timeout_sec,
                     )
-                    future._satgonetem_flow = flow
-                    pending.add(future)
+                    pending[future] = flow
 
                 for future in as_completed(pending):
-                    completed_flow: AnyFlow = future._satgonetem_flow
-                    pending.discard(future)
+                    completed_flow = pending.pop(future)
                     exc = future.exception()
                     if exc is not None:
                         if isinstance(exc, Exception):
@@ -327,9 +325,6 @@ class FlowScheduler:
                         # The scheduler was asked not to retain it.
                         completed_flow.discard_result()
 
-                if self._debug:
-                    progress_event.set()
-                    progress_thread.join(timeout=2.0)
         except Exception as exc:
             with self._status_lock:
                 self._scheduler_error = exc
@@ -338,6 +333,12 @@ class FlowScheduler:
             with self._status_lock:
                 self._errors = errors
                 self._status = FlowSchedulerStatus.DONE
+        finally:
+            # Stop the debug printer on success and failure alike: a daemon
+            # thread must not keep printing after the scheduler is terminal.
+            if progress_thread is not None:
+                progress_event.set()
+                progress_thread.join(timeout=2.0)
 
     def status(self) -> FlowSchedulerStatus:
         """Return the current lifecycle state.

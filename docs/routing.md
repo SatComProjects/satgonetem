@@ -54,13 +54,26 @@ Effects:
 * **Static routing** — routes are installed to addressable satellites from every
   ground station and every other addressable satellite. Non-addressable
   satellites are never destinations, only next-hops.
-* **SR-MPLS** — label bindings and LFIB entries are built only for addressable
-  satellites (plus all ground stations).
+* **SR-MPLS** — label bindings and destination entries are built only for
+  addressable satellites (plus all ground stations). See the SR-MPLS ingress
+  section below for which nodes act as sources.
 * **Test connectivity** — `topology.test_connectivity()` pings only ground
   stations and addressable satellites.
 
 If no satellites are marked addressable, routing still works between ground
 stations; satellites simply forward packets without being reachable themselves.
+
+### SR-MPLS ingress routes and statistics
+
+Every ground station and every addressable satellite is an **ingress source**:
+`SRMPLSDaemon` installs a label-stack route from that source to every other
+destination (ground stations plus addressable satellites). A satellite
+therefore owns both its O(degree) SID and per-neighbour forward rules and an
+O(N) ingress table. The ingress table is rebuilt on every update; non-addressable
+satellites are never ingress sources or destinations.
+
+`SRMPLSDaemon.get_sr_statistics()` reports `nodes_with_routes` for every LFIB
+source and `ground_stations_with_routes` for the ground-station subset only.
 
 ---
 
@@ -178,7 +191,16 @@ picked up automatically.
   code.
 - `P4Daemon` is experimental and is **not** a registered routing method: its
   constructor requires a P4 controller directory. Instantiate it directly only
-  for experiments.
+  for experiments. `start_p4_controller()` returns `True` only after the
+  controller process is running and a readiness probe succeeds within the
+  timeout. The default probe opens a TCP connection to `127.0.0.1:9559` (the
+  P4Runtime port); override `controller_host`/`controller_port`, or pass a
+  `readiness_probe` callable for a different health check. On startup failure
+  the daemon stops the controller, drains the background output readers, and
+  logs the collected stderr so early-exit diagnostics are preserved.
+  `remove()` without a node stops the controller and releases the shared graph
+  segment. Per-node removal is unsupported because P4 uses one controller and
+  one global segment; `remove(node)` logs a warning and is a no-op.
 
 ---
 

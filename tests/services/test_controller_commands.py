@@ -103,6 +103,7 @@ def test_remove_controller_veth_removes_ovs_port_then_host_link(
     controller_host: _ControllerHost,
 ) -> None:
     run = controller_host.command_runner.run
+    run.return_value = _completed()
     controller_host._remove_controller_veth(
         "veth-host", "veth-controller", "Controller", ovs_cid="ovs-123"
     )
@@ -134,6 +135,7 @@ def test_remove_controller_veth_without_container_only_deletes_host_link(
     controller_host: _ControllerHost,
 ) -> None:
     run = controller_host.command_runner.run
+    run.return_value = _completed()
     controller_host._remove_controller_veth(
         "veth-host", "veth-controller", "Controller", ovs_cid=None
     )
@@ -196,7 +198,7 @@ def test_setup_controller_connection_builds_full_veth_command_sequence(
             "sudo",
             "ip",
             "addr",
-            "add",
+            "replace",
             "248.0.0.2/16",
             "dev",
             "veth-host",

@@ -177,6 +177,12 @@ class StaticRoutingDaemon(RoutingDaemon):
             new_links: Newly added links (unused for static routing).
             max_workers: Maximum number of worker threads for parallel route
                 updates.
+
+        Raises:
+            ValueError: If a reachable destination's next hop has no interface
+                on the source node, or that interface has no peer. The
+                inconsistency is reported instead of silently installing an
+                on-link route the topology cannot use.
         """
         if not self.topology.status:
             logging.warning("Static routing update skipped: topology not yet active")
@@ -767,13 +773,30 @@ class StaticRoutingDaemon(RoutingDaemon):
         Returns:
             One ``(dst_id, destination, gateway, next_hop)`` tuple per
             destination, in ``dst_array`` order.
+
+        Raises:
+            ValueError: If a reachable destination's next hop has no entry in
+                *src_ifaces* or that interface has no peer. Silently falling
+                back to an on-link route would install a route the topology
+                cannot use.
         """
         signature: list[tuple[int, str, str, int | None]] = []
         for dst in dst_array:
             next_hop = next_hops[dst.id].get(src_id)
             gateway = ""
             if next_hop is not None:
-                interface = src_ifaces.get(int(next_hop))
+                iface_map = src_ifaces or {}
+                interface = iface_map.get(int(next_hop))
+                if interface is None:
+                    raise ValueError(
+                        f"Source {src_id} has no interface to next hop {next_hop} "
+                        f"for destination {dst.id}"
+                    )
+                if interface.peer is None:
+                    raise ValueError(
+                        f"Source {src_id} interface {interface.name!r} to next hop "
+                        f"{next_hop} for destination {dst.id} has no peer"
+                    )
                 gateway = interface.peer.ipv4
             signature.append((dst.id, loopback_ips[dst.id], gateway, next_hop))
         return signature
@@ -1099,6 +1122,8 @@ class StaticRoutingDaemon(RoutingDaemon):
 
         next_hop = path[1]
         interface = self._resolve_interface(gs_src, gs_src.id, next_hop, iface_map)
+        if interface.peer is None:
+            raise ValueError(f"Interface {interface.name} on {gs_src.name} has no peer")
 
         gs_src.ipv4_routing_table.append(
             RoutingEntry(
@@ -1126,6 +1151,10 @@ class StaticRoutingDaemon(RoutingDaemon):
 
         next_hop = path[1]
         interface = self._resolve_interface(sat_src, sat_src.id, next_hop, iface_map)
+        if interface.peer is None:
+            raise ValueError(
+                f"Interface {interface.name} on {sat_src.name} has no peer"
+            )
 
         sat_src.ipv4_routing_table.append(
             RoutingEntry(

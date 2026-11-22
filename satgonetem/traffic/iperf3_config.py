@@ -97,8 +97,8 @@ class Iperf3Config:
 
         parts = [
             "iperf3",
-            f"-c {server_ip}",
-            f"-B {bind_ip}",
+            f"-c {shlex.quote(server_ip)}",
+            f"-B {shlex.quote(bind_ip)}",
             f"-p {self.port}",
             f"--interval {self.interval}",
             "--json",
@@ -121,16 +121,16 @@ class Iperf3Config:
             if self.bandwidth_mbps > 0:
                 parts.append(f"-b {self.bandwidth_mbps}M")
             if self.congestion_control:
-                parts.append(f"-C {self.congestion_control}")
+                parts.append(f"-C {shlex.quote(self.congestion_control)}")
             if self.window_size:
-                parts.append(f"-w {self.window_size}")
+                parts.append(f"-w {shlex.quote(self.window_size)}")
             if self.mss is not None:
                 parts.append(f"-M {self.mss}")
             if self.no_delay:
                 parts.append("-N")
 
         if self.length:
-            parts.append(f"-l {self.length}")
+            parts.append(f"-l {shlex.quote(self.length)}")
         if self.reverse:
             parts.append("--reverse")
         if self.bidir:
@@ -142,7 +142,7 @@ class Iperf3Config:
         if self.omit > 0:
             parts.append(f"-O {self.omit}")
         if self.affinity:
-            parts.append(f"--affinity {self.affinity}")
+            parts.append(f"--affinity {shlex.quote(self.affinity)}")
 
         parts.append(f"> {shlex.quote(output_json_path)} 2>&1")
         return " ".join(parts)

@@ -127,3 +127,52 @@ class TestInterfaceEquality:
         iface1.set_ip("10.0.0.1")
         iface2.set_ip("10.0.0.2")
         assert iface1 == iface2
+
+
+class TestInterfacePeerInitialization:
+    """The peer is optional until the interface is wired to its link peer."""
+
+    def test_peer_is_none_by_default(self):
+        assert Interface(name="Sat0.1").peer is None
+
+    def test_peer_can_be_assigned(self):
+        source = Interface(name="Sat0.1")
+        target = Interface(name="Gnd0.0", iface_type="GndLink")
+        source.peer = target
+        assert source.peer is target
+
+
+class TestInterfaceGetInameValidation:
+    """Plain names cannot be mapped to a container interface name."""
+
+    def test_plain_name_raises_value_error(self):
+        iface = Interface(name="iface0")
+        with pytest.raises(ValueError, match="has no '.id' suffix"):
+            iface.get_iname()
+
+    def test_missing_suffix_message_names_the_interface(self):
+        iface = Interface(name="loopback")
+        with pytest.raises(ValueError, match="loopback"):
+            iface.get_iname()
+
+
+class TestInterfaceHashing:
+    """Interfaces are hashable consistently with name-based equality."""
+
+    def test_equal_interfaces_have_equal_hash(self):
+        first = Interface(name="Sat1.5")
+        second = Interface(name="Sat1.5")
+        assert first == second
+        assert hash(first) == hash(second)
+
+    def test_interface_can_be_used_in_a_set(self):
+        first = Interface(name="Sat1.5")
+        second = Interface(name="Sat1.5")
+        third = Interface(name="Sat1.6")
+        assert {first, second, third} == {first, third}
+
+    def test_hash_does_not_depend_on_ip_or_type(self):
+        first = Interface(name="Sat1.5")
+        second = Interface(name="Sat1.5", iface_type="ISL")
+        second.set_ip("10.0.0.1")
+        assert hash(first) == hash(second)

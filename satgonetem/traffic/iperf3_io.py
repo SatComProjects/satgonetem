@@ -29,7 +29,9 @@ def _is_iperf3_server_listening(
         or None when the probe could not be executed (e.g. a mocked node).
     """
     port_token = f"{listen_ip}:{port}"
-    process_pattern = f"iperf3 -s -1 -B {listen_ip} -p {port}"
+    # Bracketed so pgrep -f cannot match the wrapper sh -c command line that
+    # carries the pattern itself.
+    process_pattern = f"[i]perf3 -s -1 -B {listen_ip} -p {port}"
     check_cmd = (
         f"ss -ltn 2>/dev/null | grep -F {shlex.quote(port_token)} "
         f"|| pgrep -f {shlex.quote(process_pattern)} 2>/dev/null"
@@ -59,11 +61,16 @@ def _wait_for_iperf3_server(
 ) -> bool:
     """Wait for the destination iperf3 server to accept connections.
 
-    Polls for at most *timeout* seconds. When the listener probe is not
-    available at all, keeps the legacy fixed startup grace period instead.
+    Polls for at most *timeout* seconds. When the listener probe cannot be
+    executed at all (a reduced ``execute_command`` fake or an embedder
+    without ``ss``/``pgrep``), keeps the legacy fixed startup grace period
+    and reports ready: the probe cannot distinguish a slow server from a
+    missing one, and the flow's own command failures remain the hard error.
 
     Returns:
-        True when the server was observed listening, False otherwise.
+        True when the server was observed listening or the probe was
+        unavailable (after the fallback grace period); False only when an
+        explicit not-listening result outlived the timeout.
     """
     deadline = time.monotonic() + timeout
     while True:
@@ -72,7 +79,7 @@ def _wait_for_iperf3_server(
             return True
         if listening is None:
             time.sleep(fallback)
-            return False
+            return True
         if time.monotonic() >= deadline:
             return False
         time.sleep(poll_interval)

@@ -268,6 +268,7 @@ class SimulationLoopMixin:
                 "UserTerminalLink",
             )
 
+            removals: list[tuple[str, object, str, str]] = []
             for link in links:
                 satcom_link = getattr(link, "satcom_object", None)
                 link_type = getattr(satcom_link, "type", None)
@@ -285,6 +286,11 @@ class SimulationLoopMixin:
                         "Link has no type attribute or does not have a valid link type"
                     )
 
+                removals.append((link_type, satcom_link, source_name, target_name))
+
+            # Mutate only after every link has been validated, so an invalid
+            # entry cannot leave a partially applied batch behind.
+            for link_type, satcom_link, source_name, target_name in removals:
                 logging.info(
                     "Removing %s between %s and %s",
                     link_type,

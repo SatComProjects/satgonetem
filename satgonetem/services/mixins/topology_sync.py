@@ -489,8 +489,16 @@ class TopologySyncMixin:
                 raise ValueError("Simulation manager is not set")
 
             if advance_timestep:
-                self.current_time_step += 1
-                self._update_simulation_manager_time()
+                # tick() advances simulation time before executing actions, so
+                # an action that raises has still consumed the step. Track the
+                # counter against time actually advanced, not tick success.
+                time_manager = self.simulation_manager.time_manager
+                time_before = time_manager.get_current_time()
+                try:
+                    self._update_simulation_manager_time()
+                finally:
+                    if time_manager.get_current_time() != time_before:
+                        self.current_time_step += 1
 
             self._sync_node_positions()
             link_changes = self._sync_links()

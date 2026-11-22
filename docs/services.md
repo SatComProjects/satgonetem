@@ -128,7 +128,8 @@ manager, which immediately runs the initial sync. `from_file()` also restores
 embedded ground-object CSV files into a temporary directory and rewrites the
 `data_file` paths before building the project. Files produced from a live
 `SimulationManager` include a `runtime_state` section so programmatically
-added satellites and links survive a round trip.
+added satellites, ground stations, user terminals, points of presence and
+their links survive a round trip.
 
 ### Registering a routing daemon
 
@@ -198,8 +199,12 @@ later.
 | `_lifecycle_lock` | `Lock` serializing start/stop |
 
 Status flags are not independent: `stop_gonetem()` clears `status`,
-`gonetem_is_on`, and `routing_initiated`, and resets `routing_method` and
-`launcher`.
+`gonetem_is_on`, and `routing_initiated`, resets `routing_method`, and removes
+the routing daemon. `launcher`, `project_id`, `client`, and `request` are
+cleared only when project teardown succeeds. If the graceful close fails and
+the forced fallback does not report success, they are retained and
+`_pending_force_close` is set so the next `stop_gonetem()` retries the forced
+close directly.
 
 ## Locking model
 
@@ -209,7 +214,9 @@ mutation:
 - the background loop tick;
 - `next_step()`;
 - `move_to_time()`;
-- `simulate_link_failure()`.
+- `simulate_link_failure()`;
+- `init_routing()` / `delete_routing()`;
+- routing-daemon removal in `stop_gonetem()` / `force_stop_gonetem()`.
 
 API mutations block until an in-flight tick finishes; they are not queued or
 rejected. The lock is reentrant because `next_step()` and `move_to_time()`
@@ -222,9 +229,12 @@ thread; using one lock would deadlock the joining thread.
 `update_simulation(advance_timestep=True)` is the tick body. It runs while
 holding `_simulation_lock`:
 
-1. **Advance time** — increment `current_time_step` and call
-   `time_manager.tick(update_time)`. The sat_com tick action updates the
-   simulation manager's objects.
+1. **Advance time** — call `time_manager.tick(update_time)` and then
+   increment `current_time_step` (in a `finally`) only if simulation time
+   actually advanced. The sat_com tick updates time before running its
+   actions, so a failing action has still consumed that step and the counter
+   must reflect it. The sat_com tick action updates the simulation manager's
+   objects.
 2. **Sync positions** — copy satellite and ground-station positions from
    `satcom_object`.
 3. **Sync links** — one pass over `simulation_manager.get_all_links()`:
@@ -266,27 +276,53 @@ topology.stop_gonetem()         # close the project
 `start_gonetem(controller=False)`:
 
 - returns `None` if already started;
+- raises `RuntimeError` before creating a new launcher when a previous failed
+  stop retained one, instead of silently overwriting it;
 - builds a `GoNetEmLauncher`;
 - filters HIL-managed nodes and links out of the software launch;
 - calls `start_containers()` then `wire_links()` (a no-op for GoNetEm);
 - wires HIL links through `hil_manager.wire_links()`;
 - sets `status` and `gonetem_is_on`, records `start_time_`.
 
-On failure it force-closes the project, clears the launcher, resets the three
-flags, and re-raises.
+On failure it force-closes the project, resets the three flags, and re-raises.
+The launcher is cleared only when the forced close returns `True`; if it
+returns `False`, the launcher is retained, `_pending_force_close` is set, and
+`stop_gonetem()` can retry the cleanup.
 
 `stop_gonetem()`:
 
 - stops the loop if running;
-- stops active traffic flows with a bounded wait (5 s per live thread);
+- stops active traffic flows with a bounded wait (5 s per live thread). Each
+  flow is isolated, so one status or stop error does not abort the rest of
+  teardown; flows whose thread is still alive after the wait (or whose
+  liveness cannot be checked) stay in `_active_flows` for a later retry;
+- removes the routing daemon with `remove()` while the project containers
+  still exist, logs a removal error without aborting, then clears
+  `routing_daemon` and `routing_initiated`;
 - tears down HIL links;
-- closes the launcher project;
-- clears `launcher`, `status`, `gonetem_is_on`, `routing_initiated`, and
-  `routing_method`.
+- closes the launcher project. If `close_project()` fails, it logs the error
+  and calls `force_close_project()` as a fallback; the fallback counts as
+  successful only when it returns `True`;
+- when a previous stop retained the launcher, skips the graceful close (its
+  client is already gone) and calls `force_close_project()` directly;
+- sets `status`, `gonetem_is_on`, and `routing_initiated` to false and clears
+  `routing_method`; clears `launcher`, `project_id`, `client`, and `request`
+  only when project close succeeded or the force-close fallback returned
+  `True`.
 
-It may raise a HIL teardown error after the rest of the teardown has
-completed. `force_stop_gonetem()` follows the same sequence with
-`force_close_project()`, emits a `ResourceWarning`, and is meant for recovery.
+It may raise a HIL teardown error after the rest of the teardown has completed,
+even when the project close also failed. If both `close_project()` and the
+force-close fallback fail (or the fallback does not report success),
+`launcher` and the project handles are retained and the close error is raised
+after cleanup so the caller can retry `stop_gonetem()`. On that retry only the
+forced close runs; if it still does not return `True`, the handles stay
+retained, `_pending_force_close` stays set, and a `RuntimeError` is raised.
+
+`force_stop_gonetem()` performs the loop/flow teardown, removes the routing
+daemon best-effort, then runs HIL teardown and
+`force_close_project()`. It emits a `ResourceWarning` and always clears the
+launcher, project handles (`project_id`, `client`, `request`), routing daemon,
+and status flags without the close-retry retention. It is meant for recovery.
 
 `set_ip_addresses(satellites=True, ground_stations=True)` requires
 `address_plan` to exist. It calls `set_ipv4s_for_all_nodes()` and returns the
@@ -407,12 +443,17 @@ types raise `AttributeError`.
 - `init_routing(routing_method="", max_workers=MAX_WORKERS)` tears down any
   existing daemon, instantiates the requested one (built-in or registered),
   calls `init()`, and stores it on `routing_daemon`. It returns elapsed
-  seconds or `-1.0` on failure. A failed init never leaves a half-initialized
-  daemon installed.
-- `delete_routing()` calls `remove()` and clears the daemon and flags; returns
-  `-1.0` if routing was not initialized.
+  seconds or `-1.0` on failure. Unknown methods and daemon construction or
+  initialization errors are reported as `-1.0` and never leave a
+  half-initialized daemon installed.
+- `delete_routing()` calls `remove()` and clears the daemon and flags even when
+  `remove()` raises; returns `-1.0` if routing was not initialized.
+- Both lifecycle methods hold the simulation lock, so they serialize with the
+  simulation loop tick and API-driven topology mutations.
 - `get_path_between_nodes(source, target)` runs `networkx.shortest_path()` on
-  `get_current_graph()` using the `weight` attribute. It is a diagnostic
+  `get_current_graph()` using the `weight` attribute. Endpoints must be
+  `GroundStation` or `Satellite` instances (subclasses included); nodes missing
+  from the graph or disconnected return an empty path. It is a diagnostic
   helper, not the active daemon's forwarding table.
 - `get_allowed_routing_methods()` returns the built-ins plus registered names.
 
@@ -435,8 +476,9 @@ See [Routing](routing.md) for the daemon interface and built-in methods.
 
 `ping()`, `run_iperf3()`, and `run_hping3()` accept one node or a list for
 each endpoint, create the Cartesian product of flows, start each in its own
-thread, and return immediately. Every started flow is appended to
-`_active_flows`, which `stop_gonetem()` uses for bounded cleanup.
+thread, and return immediately. Every flow is appended to `_active_flows`
+*before* it is started, so a startup failure cannot orphan an already-running
+flow from `stop_gonetem()`'s bounded cleanup.
 
 The flows must be joined or polled by the caller:
 
@@ -520,9 +562,19 @@ privileges. See
 ## Failure and cleanup rules
 
 - A failed `start_gonetem()` force-closes the project and resets all startup
-  flags.
-- A failed `stop_gonetem()` still clears the launcher and flags; it re-raises
-  the HIL teardown error after cleanup.
+  flags. The launcher is retained when the forced close returns `False`, so
+  `stop_gonetem()` can retry the cleanup instead of silently dropping the
+  handle.
+- A failed `stop_gonetem()` still resets the status flags and clears
+  `routing_method`; it re-raises the HIL teardown error after cleanup. The
+  launcher and project handles are cleared when project close succeeds or the
+  force-close fallback returns `True`, and retained when that fallback fails
+  or does not report success. A retained launcher sets `_pending_force_close`,
+  so the next `stop_gonetem()` retries `force_close_project()` directly and
+  clears the handles only if it returns `True`.
+- `start_gonetem()` refuses to overwrite a launcher retained by a failed stop:
+  it raises `RuntimeError` and leaves the retained handles intact. Retry
+  `stop_gonetem()` first.
 - A failed routing init removes the partially initialized daemon and returns
   `-1.0`.
 - A failed tick is recorded and retried; it does not stop the loop.

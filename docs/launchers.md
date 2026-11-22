@@ -55,7 +55,7 @@ class NetworkLauncher(ABC):
 | `start_containers(nodes, workers=64, progress_cb=None, controller=False, links=None)` | Provision containers/processes; returns `(container_time, link_time)` |
 | `wire_links(links, workers=64, progress_cb=None)` | Create veths/bridges and apply initial qdiscs |
 | `close_project(progress_cb=None)` | Tear down all containers and links |
-| `force_close_project()` | Best-effort teardown after a failed startup |
+| `force_close_project()` | Best-effort teardown after a failed startup; returns whether cleanup completed |
 
 ### Per-tick link methods
 
@@ -167,6 +167,12 @@ links:
   images default to `jariassuarez/sgnt:ground-station`.
 - Interface names in the YAML are `<node>.<peer_id>`, matching
   `Link.get_names()`.
+- Node names, images, and link peer names are emitted as YAML scalars. Values
+  that would change meaning in the flow mappings used for links (commas,
+  brackets, braces, comments, newlines, YAML indicators, or type coercions)
+  are double-quoted as JSON strings, which are valid YAML; ordinary values
+  stay unquoted and byte-identical. Non-BMP characters are emitted literally
+  rather than as UTF-16 surrogate escapes, which Go's YAML parsers reject.
 
 `generate_project(dest_dir, ...)` wraps that YAML into a gzipped tar archive
 named `project.gnet` with a single `network.yml` member. The filename is
@@ -224,11 +230,21 @@ channel, and clears the client. It is a no-op if no project is open.
    `ntm<project_id>.` (the exact project prefix; a bare `ntm` filter would
    match every project on the host).
 3. `docker stop -t 0` and `docker rm` those containers.
-4. Call `ProjectClose` and close the channel.
+4. Call `ProjectClose`, drain the server-streaming response with a 10-second
+   deadline (`FORCE_CLOSE_TIMEOUT_SECONDS`), and close the channel. Draining
+   lets the server finish the close before the transport disappears. The RPC
+   is skipped when the client was already cleared by a failed
+   `close_project()`; container cleanup still runs from the retained project
+   id.
 
 It is used by `start_gonetem()` after a failed launch and by
 `TopologyManager.force_stop_gonetem()`. When the project ID is empty,
-container cleanup is skipped rather than risking a host-wide match.
+container cleanup is skipped rather than risking a host-wide match. The method
+is best-effort and returns `bool`: Docker and RPC failures are logged rather
+than raised, and `False` means at least one cleanup step failed, so callers
+must not assume the project closed cleanly. It returns `True` when cleanup is
+confirmed, including when there was nothing to clean (no retained request or
+no matching containers).
 
 ## Using the launcher directly
 

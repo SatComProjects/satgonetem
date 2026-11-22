@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import re
+from pathlib import Path
 
 import pytest
 
@@ -93,3 +95,43 @@ def test_results_plot_metric_and_plot_all_write_pdfs(tmp_path):
     assert all_files
     assert (tmp_path / metric_file).exists()
     assert all((tmp_path / name).exists() for name in all_files)
+
+
+@pytest.mark.parametrize("metric", ["rtt", "rttvar", "snd_cwnd", "pmtu"])
+def test_plot_metric_falls_back_to_streams_for_summaryless_metrics(tmp_path, metric):
+    """TCP metrics live in stream rows; summaries only carry bits/bytes."""
+    from satgonetem.traffic.iperf3_config import Iperf3Config
+
+    results = Iperf3Results(json.dumps(_tcp_json()), Iperf3Config())
+
+    path = results.plot_metric(
+        metric, output_dir=str(tmp_path), file_stem="stream_only"
+    )
+
+    assert path is not None
+    assert Path(path).exists()
+
+
+def test_plot_all_includes_stream_only_metrics(tmp_path):
+    from satgonetem.traffic.iperf3_config import Iperf3Config
+
+    results = Iperf3Results(json.dumps(_tcp_json()), Iperf3Config())
+
+    files = results.plot_all(output_dir=str(tmp_path), file_stem="all")
+
+    stems = {Path(path).stem for path in files}
+    for metric in ("retransmits", "snd_cwnd", "snd_wnd", "rtt", "rttvar", "pmtu"):
+        assert f"all_{metric}" in stems, f"missing plot for {metric}: {stems!r}"
+
+
+def test_generate_plots_stats_delegate_to_results(tmp_path, capsys):
+    """Printed statistics must use Iperf3Results, not the summary-only copy."""
+    source = tmp_path / "stream_metrics.json"
+    source.write_text(json.dumps(_tcp_json()))
+
+    generate_iperf3_plots(str(source), "stats", use_tmp_dir=False)
+
+    out = capsys.readouterr().out
+    assert "Not available" not in out, out
+    assert re.search(r"Avg RTT:\s+[\d.]+ ms", out), out
+    assert re.search(r"Avg Send CWnd:\s+[\d.]+ KB", out), out

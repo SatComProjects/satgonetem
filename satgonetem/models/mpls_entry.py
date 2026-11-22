@@ -159,7 +159,7 @@ class SRLabelStackEntry:
 
     Attributes:
         destination: Destination IP address/prefix
-        label_stack: List of labels to push (bottom to top order)
+        label_stack: Labels to push, outermost (top of stack) first
         next_hop: IP of the first hop
         interface: Outgoing interface
         fec_prefix: Prefix length for the FEC
@@ -175,8 +175,10 @@ class SRLabelStackEntry:
         """
         Generate the iproute2 command to install the SR route.
 
-        The label stack is specified in the order they should appear
-        in the packet (bottom to top), separated by '/'.
+        The label stack is specified outermost first, matching the order the
+        labels appear in the packet and the order iproute2 expects. The first
+        label is the top of the stack and is popped first; the kernel then
+        processes the next label.
 
         Example: For path GS1 -> Sat3 -> Sat7 -> GS2
                  label_stack = [SID(Sat3), SID(Sat7)] = [16003, 16007]
@@ -191,8 +193,8 @@ class SRLabelStackEntry:
             # No labels to push - direct IP forwarding
             return f"ip route replace {self.destination}/{self.fec_prefix} via {self.next_hop} dev {iface_name}"
 
-        # Join labels with '/' for the MPLS encap command
-        # Labels are pushed in order: first label becomes innermost (processed last)
+        # Join labels with '/' for the MPLS encap command. iproute2 expects the
+        # outermost label first; the kernel pops it first, then the next label.
         labels_str = "/".join(str(label) for label in self.label_stack)
 
         return f"ip route replace {self.destination}/{self.fec_prefix} encap mpls {labels_str} via {self.next_hop} dev {iface_name}"

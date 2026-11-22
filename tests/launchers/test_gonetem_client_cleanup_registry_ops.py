@@ -9,6 +9,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from satgonetem.launchers.gonetem_cleanup import FORCE_CLOSE_TIMEOUT_SECONDS
 from satgonetem.launchers.gonetem_launcher import GoNetEmLauncher
 from satgonetem.launchers.registry import (
     available_launchers,
@@ -139,7 +140,7 @@ def test_run_docker_command_reports_oserror(caplog):
     assert "failed to run docker rm id1: docker missing" in caplog.text
 
 
-def test_list_project_containers_returns_empty_on_oserror(caplog):
+def test_list_project_containers_returns_none_on_oserror(caplog):
     launcher = _launcher()
     launcher._command_runner = MagicMock()
     launcher._command_runner.run.side_effect = OSError("cannot execute docker")
@@ -147,26 +148,20 @@ def test_list_project_containers_returns_empty_on_oserror(caplog):
     with caplog.at_level(logging.ERROR):
         containers = launcher._list_project_containers("prj")
 
-    assert containers == []
+    assert containers is None
     assert "could not list Docker containers: cannot execute docker" in caplog.text
 
 
-def test_force_close_requires_client_and_request():
+def test_force_close_without_request_only_closes_transport():
     launcher = _launcher()
     launcher._command_runner = MagicMock()
     launcher._request = None
-    launcher._client = MagicMock()
+    client = launcher._client = MagicMock()
 
-    launcher.force_close_project()
-
-    launcher._command_runner.run.assert_not_called()
-    launcher._client.ProjectClose.assert_not_called()
-
-    launcher._client = None
-    launcher._request = netem_pb2.ProjectRequest(id="prj")
-    launcher.force_close_project()
+    assert launcher.force_close_project() is True
 
     launcher._command_runner.run.assert_not_called()
+    client.ProjectClose.assert_not_called()
 
 
 def test_force_close_logs_project_close_failure_and_closes_transport(caplog):
@@ -179,13 +174,68 @@ def test_force_close_logs_project_close_failure_and_closes_transport(caplog):
     connection = launcher._connection = MagicMock()
 
     with caplog.at_level(logging.ERROR):
-        launcher.force_close_project()
+        assert launcher.force_close_project() is False
 
     assert "force_close_project failed: close exploded" in caplog.text
     connection.close.assert_called_once()
     assert launcher._connection is None
     assert launcher._channel is None
     assert launcher._client is None
+
+
+def test_force_close_drains_stream_before_closing_transport():
+    launcher = _launcher()
+    launcher._client = MagicMock()
+    launcher._command_runner = MagicMock()
+    launcher._command_runner.run.return_value = _completed()
+    launcher._request = netem_pb2.ProjectRequest(id="prj")
+    channel = launcher._channel = MagicMock()
+    events = []
+
+    def stream():
+        events.append("first")
+        yield netem_pb2.ProjectCloseMsg(
+            code=netem_pb2.ProjectCloseMsg.NODE_COUNT, total=1
+        )
+        events.append("second")
+        yield netem_pb2.ProjectCloseMsg(code=netem_pb2.ProjectCloseMsg.NODE_CLOSE)
+        events.append("exhausted")
+
+    launcher._client.ProjectClose.return_value = stream()
+    channel.close.side_effect = lambda: events.append("transport-closed")
+    client = launcher._client
+
+    launcher.force_close_project()
+
+    assert events == ["first", "second", "exhausted", "transport-closed"]
+    client.ProjectClose.assert_called_once_with(
+        launcher._request, timeout=FORCE_CLOSE_TIMEOUT_SECONDS
+    )
+    assert launcher._client is None
+    assert launcher._channel is None
+
+
+def test_force_close_still_closes_transport_when_stream_raises(caplog):
+    launcher = _launcher()
+    launcher._client = MagicMock()
+    launcher._command_runner = MagicMock()
+    launcher._command_runner.run.return_value = _completed()
+    launcher._request = netem_pb2.ProjectRequest(id="prj")
+    channel = launcher._channel = MagicMock()
+
+    def stream():
+        yield None
+        raise RuntimeError("stream exploded")
+
+    launcher._client.ProjectClose.return_value = stream()
+
+    with caplog.at_level(logging.ERROR):
+        launcher.force_close_project()
+
+    assert "force_close_project failed: stream exploded" in caplog.text
+    channel.close.assert_called_once()
+    assert launcher._client is None
+    assert launcher._channel is None
 
 
 # Registry

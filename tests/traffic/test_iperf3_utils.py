@@ -441,7 +441,7 @@ class TestIperf3Flow:
         src = _make_node("gs0", "10.0.0.1")
         dst = _make_node("gs1", "10.0.0.2")
         src.execute_command.return_value = client_output
-        dst.execute_command.return_value = None
+        dst.execute_command.return_value = "LISTEN"
         cfg = Iperf3Config(duration=1)
         return Iperf3Flow(src, dst, cfg)
 
@@ -522,7 +522,7 @@ class TestIperf3Flow:
             src = _make_node("gs0", "10.0.0.1")
             dst = _make_node("gs1", "10.0.0.2")
             src.execute_command.return_value = "not json"
-            dst.execute_command.return_value = None
+            dst.execute_command.return_value = "LISTEN"
             cfg = Iperf3Config(duration=1)
             flow = Iperf3Flow(src, dst, cfg)
             flow.start()
@@ -671,7 +671,7 @@ class TestRunIperf3Flow:
             src = _make_node("gs0", "10.0.0.1")
             dst = _make_node("gs1", "10.0.0.2")
             src.execute_command.return_value = _TCP_JSON
-            dst.execute_command.return_value = None
+            dst.execute_command.return_value = "LISTEN"
             cfg = Iperf3Config(duration=1)
             res = run_iperf3_flow(src, dst, cfg)
             assert isinstance(res, Iperf3Results)
@@ -681,7 +681,7 @@ class TestRunIperf3Flow:
             src = _make_node("gs0", "10.0.0.1")
             dst = _make_node("gs1", "10.0.0.2")
             src.execute_command.return_value = _TCP_JSON
-            dst.execute_command.return_value = None
+            dst.execute_command.return_value = "LISTEN"
             cfg = Iperf3Config(duration=1)
             run_iperf3_flow(src, dst, cfg)
             server_calls = [
@@ -694,7 +694,7 @@ class TestRunIperf3Flow:
             src = _make_node("gs0", "10.0.0.1")
             dst = _make_node("gs1", "10.0.0.2")
             src.execute_command.return_value = _TCP_JSON
-            dst.execute_command.return_value = None
+            dst.execute_command.return_value = "LISTEN"
             cfg = Iperf3Config(duration=1)
             run_iperf3_flow(src, dst, cfg)
             client_calls = [
@@ -707,7 +707,7 @@ class TestRunIperf3Flow:
             src = _make_node("gs0", "10.0.0.1")
             dst = _make_node("gs1", "10.0.0.2")
             src.execute_command.return_value = "no json here"
-            dst.execute_command.return_value = "no json either"
+            dst.execute_command.return_value = "LISTEN"
             cfg = Iperf3Config(duration=1)
             with pytest.raises(RuntimeError, match="Could not retrieve"):
                 run_iperf3_flow(src, dst, cfg)

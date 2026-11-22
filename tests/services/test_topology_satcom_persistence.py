@@ -11,6 +11,7 @@ from datetime import datetime
 from pathlib import Path
 
 import pytest
+from sat_com_model.models import PointOfPresence, UserTerminal
 
 from satgonetem.services.topology_satcom import TopologyManager
 from satgonetem.utils.project_builder import (
@@ -144,3 +145,82 @@ class TestGroundFileRestorePaths:
         assert first_data_file.parent != second_data_file.parent
         assert first_data_file.read_text() == _BENIGN_CSV
         assert second_data_file.read_text() == _OTHER_CSV
+
+
+def test_runtime_state_roundtrip_preserves_user_terminals_and_pops(
+    tmp_path, runtime_topology
+):
+    """User terminals, points of presence and their links must survive a reload."""
+    sim_manager = runtime_topology.simulation_manager
+    satellite = sim_manager.get_satellites()[0]
+    ground_station = sim_manager.get_ground_stations()[0]
+
+    user_terminal = UserTerminal(label="AuditUT", object_id=11, domain="public")
+    user_terminal.set_position(latitude=40.5, longitude=-3.5, altitude=120.0)
+    sim_manager.add_user_terminals(user_terminal)
+    sim_manager.create_and_add_user_terminal_link_connection(satellite, user_terminal)
+
+    point_of_presence = PointOfPresence(label="AuditPoP", object_id=12, domain="public")
+    point_of_presence.set_position(latitude=41.5, longitude=-4.5, altitude=220.0)
+    sim_manager.add_point_of_presence(point_of_presence)
+    sim_manager.create_and_add_ground_object_link_connection(
+        point_of_presence, ground_station
+    )
+
+    path = tmp_path / "runtime_ut_pop.json"
+    runtime_topology.to_file(str(path))
+    reloaded = TopologyManager.from_file(str(path))
+
+    reloaded_manager = reloaded.simulation_manager
+    user_terminals = reloaded_manager.get_user_terminals()
+    assert [(ut.label, ut.object_id, ut.domain) for ut in user_terminals] == [
+        ("AuditUT", 11, "public")
+    ]
+    assert user_terminals[0].spatial_position_info.latitude == pytest.approx(40.5)
+    assert user_terminals[0].spatial_position_info.longitude == pytest.approx(-3.5)
+    assert user_terminals[0].spatial_position_info.altitude == pytest.approx(120.0)
+
+    pops = reloaded_manager.get_point_of_presences()
+    assert [(pop.label, pop.object_id, pop.domain) for pop in pops] == [
+        ("AuditPoP", 12, "public")
+    ]
+    assert pops[0].spatial_position_info.latitude == pytest.approx(41.5)
+    assert pops[0].spatial_position_info.longitude == pytest.approx(-4.5)
+    assert pops[0].spatial_position_info.altitude == pytest.approx(220.0)
+
+    user_terminal_links = reloaded_manager.get_user_terminal_links()
+    assert [
+        (link.source.satellite_name, link.destination.label)
+        for link in user_terminal_links
+    ] == [("AuditSat-001", "AuditUT")]
+    ground_object_links = reloaded_manager.get_static_ground_object_links()
+    assert [
+        (link.source.label, link.destination.label) for link in ground_object_links
+    ] == [("AuditPoP", "AuditGS")]
+
+    satellite_before = reloaded_manager.get_satellites()[0]
+    position_before = (
+        satellite_before.spatial_position_info.latitude,
+        satellite_before.spatial_position_info.longitude,
+        satellite_before.spatial_position_info.altitude,
+    )
+    time_before = reloaded.get_current_time()
+    step_before = reloaded.get_current_time_step()
+
+    reloaded.update_simulation()
+
+    assert reloaded.get_current_time() > time_before
+    assert reloaded.get_current_time_step() == step_before + 1
+    satellite_after = reloaded_manager.get_satellites()[0]
+    position_after = (
+        satellite_after.spatial_position_info.latitude,
+        satellite_after.spatial_position_info.longitude,
+        satellite_after.spatial_position_info.altitude,
+    )
+    assert position_after != position_before
+
+    # Restored user terminals and points of presence need a ground-object
+    # domain, otherwise the next tick raises AttributeError.
+    for ground_object in (user_terminals[0], pops[0]):
+        assert ground_object.ground_object_domain is not None
+        assert ground_object.ground_object_domain.type == "ground_station"
