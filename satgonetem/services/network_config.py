@@ -150,6 +150,19 @@ class NetworkConfig:
                     f"{MAX_LINK_QUEUE_PACKETS} packets, got {value}"
                 )
 
+        for name in (
+            "gnd_link_capacity",
+            "isl_link_capacity",
+            "ground_object_link_capacity",
+        ):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise TypeError(f"NetworkConfig.{name} must be an int, got {value!r}")
+            if value <= 0:
+                raise ValueError(
+                    f"NetworkConfig.{name} must be a positive integer, got {value}"
+                )
+
         loss = self.link_loss_percent
         if isinstance(loss, bool) or not isinstance(loss, (int, float)):
             raise TypeError(

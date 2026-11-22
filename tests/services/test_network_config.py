@@ -41,6 +41,26 @@ def topology():
     return TopologyManager.from_file(TEST_TOPOLOGY)
 
 
+class TestLinkCapacities:
+    @pytest.mark.parametrize(
+        "name",
+        ["gnd_link_capacity", "isl_link_capacity", "ground_object_link_capacity"],
+    )
+    def test_accepts_positive_integers(self, name):
+        config = NetworkConfig(**{name: 1})
+
+        assert getattr(config, name) == 1
+
+    @pytest.mark.parametrize(
+        "name",
+        ["gnd_link_capacity", "isl_link_capacity", "ground_object_link_capacity"],
+    )
+    @pytest.mark.parametrize("value", [0, -1, True, 1.5, "100"])
+    def test_rejects_non_positive_or_non_integer_values(self, name, value):
+        with pytest.raises((TypeError, ValueError), match=name):
+            NetworkConfig(**{name: value})
+
+
 class TestQueueLengthFields:
     def test_defaults_keep_current_queue_length(self):
         config = NetworkConfig()
