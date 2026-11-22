@@ -10,6 +10,7 @@ Extends Node with satellite-specific state and behaviour:
 from __future__ import annotations
 
 import logging
+import shlex
 
 from sat_com_model.models import Satellite as SatComSatellite
 
@@ -121,5 +122,8 @@ class Satellite(Node, QoSCapableMixin):
         for interface in self.interfaces:
             iname = interface.get_iname()
             destination = path + f"/{self.name}_{iname}.log"
-            command = f"net_logger --interface {iname} --log {destination} --interval 1"
+            command = (
+                f"net_logger --interface {shlex.quote(iname)} "
+                f"--log {shlex.quote(destination)} --interval 1"
+            )
             self.execute_command(command, detach=True)

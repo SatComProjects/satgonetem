@@ -1,9 +1,11 @@
 """Tests for the Satellite model."""
 
+import shlex
 from unittest.mock import MagicMock
 
 import pytest
 
+from satgonetem.models.interface import Interface
 from satgonetem.models.node import Node
 from satgonetem.models.satellite import Satellite
 
@@ -159,3 +161,31 @@ class TestSatelliteEquality:
     def test_hash_matches_name_hash(self):
         sat = Satellite("Sat7")
         assert hash(sat) == hash("Sat7")
+
+
+class TestSatelliteNetLogger:
+    """The log destination is interpolated into a container shell command."""
+
+    def test_log_path_is_quoted(self):
+        sat = Satellite("Sat0")
+        sat.interfaces.append(Interface(name="Sat0.1"))
+        sat.execute_command = MagicMock()
+        hostile_path = "/tmp/logs; touch /tmp/pwned"
+
+        sat.start_net_logger(hostile_path)
+
+        command = sat.execute_command.call_args.args[0]
+        tokens = shlex.split(command)
+        destination = hostile_path + "/Sat0_eth1.log"
+        assert tokens[tokens.index("--log") + 1] == destination
+        assert f"--log {destination}" not in command
+
+    def test_normal_path_is_unchanged(self):
+        sat = Satellite("Sat0")
+        sat.interfaces.append(Interface(name="Sat0.1"))
+        sat.execute_command = MagicMock()
+
+        sat.start_net_logger("/tmp/logs")
+
+        command = sat.execute_command.call_args.args[0]
+        assert "--log /tmp/logs/Sat0_eth1.log" in command
