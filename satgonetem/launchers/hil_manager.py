@@ -220,10 +220,42 @@ class HILManager:
             return link.source
         return link.target
 
+    @staticmethod
+    def _positive_int(value: object) -> int:
+        """Convert a capacity value to a positive int, or 0 when unusable."""
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return 0
+        try:
+            capacity = int(value)
+        except (OverflowError, ValueError):
+            return 0
+        return capacity if capacity > 0 else 0
+
     def _link_capacity_kbps(self, link) -> int:
-        """Return the satellite-side capacity for a link in kbps."""
-        p1 = int(getattr(link, "peer1_capacity", 0) or 0)
-        return p1 or self._gnd_capacity_kbps
+        """Return the satellite-side capacity for a link in kbps.
+
+        Preference order matches the documented QoS model: peer1_capacity,
+        the link's capacity, then the configured ground-station default.
+        """
+        p1 = self._positive_int(getattr(link, "peer1_capacity", 0))
+        if p1:
+            return p1
+
+        capacity = self._positive_int(getattr(link, "capacity", 0))
+        if capacity:
+            return capacity
+
+        get_capacity = getattr(link, "get_capacity", None)
+        if callable(get_capacity):
+            try:
+                modeled = self._positive_int(get_capacity())
+            except Exception as exc:
+                logging.warning("HIL: could not read link capacity: %s", exc)
+            else:
+                if modeled:
+                    return modeled
+
+        return self._gnd_capacity_kbps
 
     def _create_veth(self, sat_name: str, sat_pid: int, gnd_id: int) -> bool:
         """
