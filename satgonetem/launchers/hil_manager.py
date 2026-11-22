@@ -318,9 +318,12 @@ class HILManager:
             )
             return False
         finally:
+            restore_failed = False
             try:
-                # Retry the restore once; a second failure is logged here but
-                # the restore error still propagates from the code above.
+                # Retry the restore once. A failure here is fatal even when the
+                # body already failed for another reason: this thread may still
+                # be inside the container namespace, so the caller must not
+                # continue as if the operation had failed safely.
                 if (
                     entered_satellite_ns
                     and not restored_host_ns
@@ -331,11 +334,17 @@ class HILManager:
                         sat_name,
                         sat_pid,
                     )
+                    restore_failed = True
                 # Any failure after the pair was added must not leak it.
                 if veth_created and not succeeded:
                     self._delete_sat_veth(sat_name, sat_pid, gnd_id)
             finally:
                 saved_ns.close()
+            if restore_failed:
+                raise _NamespaceRestoreError(
+                    "HIL: failed to restore host network namespace for "
+                    f"{sat_name} (pid {sat_pid})"
+                )
 
     def _create_bridge(self, gnd_name: str, gnd_id: int) -> bool:
         """

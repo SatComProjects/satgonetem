@@ -287,6 +287,63 @@ def test_create_veth_returns_false_and_rolls_back_when_sat_setup_fails(
     assert sat_ns.closed is True
 
 
+def test_create_veth_raises_when_restore_retry_fails_after_setup_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A restore failure is fatal even when an earlier setup step failed first.
+
+    The explicit restore check is only reached on the normal path. When the
+    satellite-side setup raises, the retry in ``finally`` is the only restore
+    attempt; a failure there must not leave the thread in the container
+    namespace while returning False.
+    """
+    runner = MagicMock()
+    runner.run.return_value = subprocess.CompletedProcess(args=[], returncode=0)
+    manager = HILManager({"Gnd0": "eth1"}, command_runner=runner)
+    libc = MagicMock()
+    # Enter the satellite namespace, then fail the only (retry) restore.
+    libc.setns.side_effect = [0, -1]
+    monkeypatch.setattr(
+        hil_manager, "ctypes", SimpleNamespace(CDLL=MagicMock(return_value=libc))
+    )
+
+    saved_ns = _FakeNsFile(11)
+    sat_ns = _FakeNsFile(22)
+    _install_fake_open(
+        monkeypatch,
+        {"/proc/self/ns/net": saved_ns, "/proc/4242/ns/net": sat_ns},
+    )
+
+    sat_ipr = MagicMock()
+    sat_ipr.__enter__.return_value = sat_ipr
+    sat_ipr.__exit__.return_value = False
+
+    def link(action, **kwargs):
+        if action == "add":
+            return None
+        raise RuntimeError("link lookup failed")
+
+    sat_ipr.link.side_effect = link
+    monkeypatch.setattr(hil_manager, "IPRoute", MagicMock(side_effect=[sat_ipr]))
+
+    with pytest.raises(RuntimeError, match="failed to restore host network namespace"):
+        manager._create_veth("Sat1", 4242, 3)
+
+    # The veth pair is rolled back before the fatal error propagates.
+    runner.run.assert_called_once_with(
+        ["nsenter", "--net=/proc/4242/ns/net", "ip", "link", "delete", "eth3"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    assert libc.setns.call_args_list == [
+        call(22, CLONE_NEWNET),
+        call(11, CLONE_NEWNET),
+    ]
+    assert saved_ns.closed is True
+    assert sat_ns.closed is True
+
+
 def test_create_veth_returns_false_and_rolls_back_when_host_setup_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
