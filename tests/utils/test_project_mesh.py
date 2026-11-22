@@ -135,6 +135,7 @@ def _sat(
     phase_deg: float = 0.0,
     altitude_km: float = 550.0,
     *,
+    inc_deg: float = 53.0,
     radius_km: float | None = None,
     nodeo_deg: float | None = None,
 ) -> _FakeSatellite:
@@ -143,6 +144,7 @@ def _sat(
         raan_deg,
         phase_deg,
         altitude_km,
+        inc_deg=inc_deg,
         radius_km=radius_km,
         nodeo_deg=nodeo_deg,
     )
@@ -225,10 +227,11 @@ def test_sgp4_elements_wrap_raan_into_range_and_convert_altitude() -> None:
     elements = _get_orbital_elements(sat, None)
 
     assert elements is not None
-    raan, phase, altitude = elements
+    raan, phase, altitude, inclination = elements
     assert raan == pytest.approx(5.0)
     assert phase == pytest.approx(20.0)
     assert altitude == pytest.approx(600.0)
+    assert inclination == pytest.approx(53.0)
 
 
 def test_pyorbital_elements_are_derived_from_teme_state() -> None:
@@ -239,11 +242,12 @@ def test_pyorbital_elements_are_derived_from_teme_state() -> None:
     elements = _get_orbital_elements(_FakeSatellite(model), None)
 
     assert elements is not None
-    raan, phase, altitude = elements
+    raan, phase, altitude, inclination = elements
     assert raan == pytest.approx(210.0, abs=1e-9)
     assert phase == pytest.approx(25.0, abs=1e-9)
     # Metres are converted to kilometres, using the geodetic altitude.
     assert altitude == pytest.approx(123.456)
+    assert inclination == pytest.approx(60.0, abs=1e-9)
 
 
 def test_missing_position_accessor_yields_no_elements() -> None:
@@ -399,6 +403,43 @@ def test_grouping_sorts_planes_by_average_raan() -> None:
     assert _plane_raans(planes) == [{100.0, 101.0}, {350.0, 351.0}]
 
 
+def test_grouping_separates_same_raan_and_altitude_by_inclination() -> None:
+    # Equal RAAN and altitude but different inclinations describe intersecting
+    # orbital planes: intra-plane links inside one merged group would be
+    # geometrically invalid.
+    same_plane = [
+        _sat(10.0, 20.0, 550.0, inc_deg=53.0),
+        _sat(10.0, 120.0, 550.0, inc_deg=53.0),
+    ]
+    other_plane = [
+        _sat(10.2, 40.0, 550.0, inc_deg=70.0),
+        _sat(10.2, 140.0, 550.0, inc_deg=70.0),
+    ]
+
+    planes = _group_satellites_by_orbital_plane(same_plane + other_plane, None)
+
+    assert len(planes) == 2
+    grouped = [{id(sat) for sat, _phase in plane} for plane in planes]
+    assert {id(sat) for sat in same_plane} in grouped
+    assert {id(sat) for sat in other_plane} in grouped
+
+
+def test_grouping_altitude_drift_is_not_chained_into_one_plane() -> None:
+    # Consecutive 30--40 km gaps are all below the 50 km tolerance, but the
+    # full drift spans 110 km.  An absolute window must split it into two
+    # planes instead of chaining every altitude into one cluster.
+    sats = [_sat(10.0, 0.0, altitude) for altitude in (550.0, 580.0, 620.0, 660.0)]
+
+    planes = _group_satellites_by_orbital_plane(
+        sats, None, max_altitude_difference=50.0
+    )
+
+    assert [len(plane) for plane in planes] == [2, 2]
+    for plane in planes:
+        altitudes = [sat.altitude_km for sat, _phase in plane]
+        assert max(altitudes) - min(altitudes) <= 50.0
+
+
 # ---------------------------------------------------------------------------
 # add_mesh_links
 # ---------------------------------------------------------------------------
@@ -486,6 +527,30 @@ def test_add_mesh_links_connects_adjacent_planes_by_sorted_phase() -> None:
         link.inter_satellite_direction is InterSatelliteLinkDirection.ADJACENT
         for link in manager.isl_links
     )
+
+
+def test_add_mesh_links_pairs_closest_unmatched_phase() -> None:
+    # Sorted-index pairing would connect a0->b80 and a100->b350.  The closest
+    # unmatched pairs are a0->b350 (10 deg) and a100->b80 (20 deg).
+    plane_a = [_sat(0.0, 0.0, radius_km=7000.0), _sat(0.0, 100.0, radius_km=7000.0)]
+    plane_b = [
+        _sat(10.0, 80.0, radius_km=7000.0),
+        _sat(10.0, 350.0, radius_km=7000.0),
+    ]
+    manager = _FakeSimulationManager(plane_a + plane_b)
+
+    add_mesh_links(
+        manager,
+        add_orbital=False,
+        add_adjacent=True,
+        add_ground=False,
+        min_plane_size=2,
+    )
+
+    assert manager.isl_calls == [
+        (plane_a[0], plane_b[1]),
+        (plane_a[1], plane_b[0]),
+    ]
 
 
 def test_add_mesh_links_skips_adjacent_planes_below_min_plane_size() -> None:

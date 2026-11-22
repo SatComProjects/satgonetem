@@ -117,14 +117,13 @@ def test_sgp4_tle_elements_take_precedence():
     elements = _get_orbital_elements(_Satellite(_Sgp4Model()), None)
 
     assert elements is not None
-    raan, phase, altitude = elements
-    assert math.isfinite(raan)
-    assert math.isfinite(phase)
-    assert math.isfinite(altitude)
+    raan, phase, altitude, inclination = elements
+    assert all(math.isfinite(value) for value in elements)
     # Derived RAAN would be 0 deg for this state; the TLE says 123.4 deg.
     assert raan == pytest.approx(123.4)
     assert 0.0 <= phase < 360.0
     assert altitude == pytest.approx(550.0)
+    assert inclination == pytest.approx(53.0)
 
 
 def test_pyorbital_model_derives_elements_from_teme_state():
@@ -138,12 +137,13 @@ def test_pyorbital_model_derives_elements_from_teme_state():
 
     assert elements is not None
     assert isinstance(elements, tuple)
-    assert len(elements) == 3
-    raan, phase, altitude = elements
+    assert len(elements) == 4
+    raan, phase, altitude, inclination = elements
     assert all(math.isfinite(value) for value in elements)
     assert raan == pytest.approx(raan_deg, abs=1e-9)
     assert phase == pytest.approx(arg_lat_deg, abs=1e-9)
     assert altitude == pytest.approx(550.0)
+    assert inclination == pytest.approx(inc_deg, abs=1e-9)
 
 
 def test_unusable_model_returns_none():
