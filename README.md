@@ -1,6 +1,8 @@
 # SatGoNetem
 
 [![CI](https://github.com/SatComProjects/satgonetem/actions/workflows/ci.yml/badge.svg)](https://github.com/SatComProjects/satgonetem/actions/workflows/ci.yml)
+[![Release](https://github.com/SatComProjects/satgonetem/actions/workflows/release.yml/badge.svg)](https://github.com/SatComProjects/satgonetem/actions/workflows/release.yml)
+[![Python 3.10 | 3.11 | 3.12 | 3.13 | 3.14](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13%20%7C%203.14-blue)](https://github.com/SatComProjects/satgonetem/actions/workflows/ci.yml)
 
 **Satellite Network Emulation Tool** - A Python framework for emulating dynamic satellite constellations (LEO, MEO, GEO) as live virtual networks with real-time topology updates, pluggable routing, and traffic measurement.
 
