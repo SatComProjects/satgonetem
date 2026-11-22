@@ -10,6 +10,7 @@ import pytest
 import yaml
 
 from satgonetem.launchers.gonetem_launcher import GoNetEmLauncher
+from satgonetem.launchers.gonetem_project import _yaml_scalar
 
 
 class FakeLink:
@@ -236,6 +237,49 @@ def test_topology_quotes_non_bmp_scalars_without_surrogate_escapes():
     assert document["nodes"]["Sat0"]["image"] == image
     assert document["nodes"]["Gnd1"]["image"] == gnd_image
     assert document["links"][0]["peer1"] == f"{peer_name}.1"
+
+
+@pytest.mark.parametrize(
+    ("char", "escape"),
+    [
+        ("\u0085", "\\u0085"),
+        ("\u2028", "\\u2028"),
+        ("\u2029", "\\u2029"),
+    ],
+)
+def test_yaml_scalar_escapes_yaml_line_break_characters(char, escape):
+    """Escape NEL/LS/PS inside double-quoted scalars.
+
+    YAML 1.1, PyYAML, and Go yaml.v2/v3 treat these characters as line breaks
+    even inside double quotes, so a raw character is normalized away when the
+    generated document is parsed.  The ``\\uXXXX`` escapes are valid in both
+    PyYAML and Go yaml, so the value survives a round-trip.
+    """
+    text = f"a{char}b"
+
+    emitted = _yaml_scalar(text)
+
+    assert char not in emitted
+    assert escape in emitted
+    assert yaml.safe_load(f"{{value: {emitted}}}") == {"value": text}
+
+
+def test_yaml_scalar_keeps_normal_values_unchanged():
+    assert _yaml_scalar("Sat0.1") == "Sat0.1"
+    assert _yaml_scalar("docker.satellite") == "docker.satellite"
+    assert _yaml_scalar("evil: image") == '"evil: image"'
+
+
+def test_topology_empty_fallback_image_stays_empty_after_round_trip():
+    gnd = _ground_station(1, "Gnd0", image="")
+    topology_manager = _topology({}, {gnd.id: gnd}, {})
+    launcher = _launcher(topology_manager)
+
+    generated = launcher.get_gonetem_topology(fallback=True)
+    document = yaml.safe_load(generated)
+
+    assert 'image: ""' in generated
+    assert document["nodes"]["Gnd1"]["image"] == ""
 
 
 def test_generate_project_writes_network_yml_archive(tmp_path):
