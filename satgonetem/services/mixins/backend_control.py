@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import logging
 import os
 import tempfile
 from typing import TYPE_CHECKING, Any
@@ -267,14 +268,30 @@ class BackendControlMixin:
             previous_interface_states = [
                 (interface, interface.is_active) for _node, interface in pairs
             ]
+            applied: list[tuple[int, Any]] = []
             try:
-                for node, interface in pairs:
+                for index, (node, interface) in enumerate(pairs):
                     if_index = self._interface_index(interface)
                     set_state(node.name, if_index, up)
+                    applied.append((index, node))
             except BaseException:
                 link.admin_up = previous_admin_up
                 for interface, previous_state in previous_interface_states:
                     interface.is_active = previous_state
+                for index, node in reversed(applied):
+                    interface = pairs[index][1]
+                    try:
+                        set_state(
+                            node.name,
+                            self._interface_index(interface),
+                            previous_interface_states[index][1],
+                        )
+                    except Exception as exc:  # noqa: BLE001 - preserve primary error
+                        logging.error(
+                            "Failed to restore interface state for %s: %s",
+                            node.name,
+                            exc,
+                        )
                 raise
 
             link.admin_up = up

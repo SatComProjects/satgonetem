@@ -278,7 +278,11 @@ def test_set_link_state_failure_leaves_previous_local_state_intact():
     with pytest.raises(RuntimeError, match="second endpoint failed"):
         host.set_link_state(link, False)
 
-    assert len(calls) == 2
+    assert calls == [
+        ("Sat0", 1, False),
+        ("Sat1", 0, False),
+        ("Sat0", 1, True),
+    ]
     assert link.admin_up is True
     assert source_interface.is_active is True
     assert target_interface.is_active is True
