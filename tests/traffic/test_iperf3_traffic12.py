@@ -234,14 +234,48 @@ class TestServerReadinessWait:
         assert mock_sleep.call_count == 1
 
     def test_keeps_fallback_when_probe_unavailable(self):
+        """An unavailable probe must not fail flows that the grace period covers."""
         node = MagicMock()
         node.execute_command.return_value = None
 
         with patch("satgonetem.traffic.iperf3_flow.time.sleep") as mock_sleep:
             ready = iperf3_flow._wait_for_iperf3_server(node, "10.0.0.2", 5201)
 
-        assert ready is False
+        assert ready is True
         mock_sleep.assert_called_once_with(0.5)
+
+    @patch("satgonetem.traffic.iperf3_flow.time.sleep")
+    def test_flow_proceeds_when_readiness_probe_unavailable(self, _mock_sleep):
+        """Reduced execute_command fakes must keep the legacy grace period."""
+        source = _make_node("sat0", "10.0.0.1")
+        destination = _make_node("gnd0", "10.0.0.2")
+        source.execute_command.side_effect = lambda command, **_kwargs: (
+            _TCP_JSON if command.startswith("cat ") else ""
+        )
+        # No listener output: the probe cannot tell whether the server started.
+        destination.execute_command.return_value = None
+
+        flow = Iperf3Flow(source, destination, Iperf3Config(duration=1))
+        flow._run()
+
+        assert flow.status() == FlowStatus.DONE
+        assert flow.results().protocol == "TCP"
+
+    @patch(
+        "satgonetem.traffic.iperf3_flow._wait_for_iperf3_server",
+        return_value=False,
+    )
+    def test_flow_fails_when_probe_reports_not_listening(self, _mock_ready):
+        """An explicit not-listening result after the timeout must still fail."""
+        source = _make_node("sat0", "10.0.0.1")
+        destination = _make_node("gnd0", "10.0.0.2")
+        destination.execute_command.return_value = ""
+
+        flow = Iperf3Flow(source, destination, Iperf3Config(duration=1))
+        flow._run()
+
+        assert flow.status() == FlowStatus.ERROR
+        assert "iperf3 server did not start" in str(flow._error)
 
     def test_wait_is_bounded(self):
         node = MagicMock()
