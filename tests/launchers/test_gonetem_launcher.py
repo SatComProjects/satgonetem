@@ -189,7 +189,7 @@ def test_force_close_still_closes_project_when_docker_ps_fails(launcher):
     client.ProjectClose.assert_called_once_with(
         launcher._request, timeout=FORCE_CLOSE_TIMEOUT_SECONDS
     )
-    channel.close.assert_not_called()
+    channel.close.assert_called_once()
 
 
 def test_start_containers_raises_runtime_error_when_server_unreachable(launcher):

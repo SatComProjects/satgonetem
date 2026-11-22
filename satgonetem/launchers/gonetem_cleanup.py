@@ -92,15 +92,16 @@ class GoNetEmCleanupMixin:
             True when cleanup completed (or there was nothing to clean),
             False when the project id is missing, a Docker command failed, or
             ``ProjectClose`` raised. The caller can use this to decide whether
-            to retain project handles for a retry. On failure the gRPC transport
-            is retained so a retry can reuse it; an empty project id is
-            terminal because no retry can target a project.
+            to retain project handles for a retry. A failed ``ProjectClose``
+            retains the gRPC transport so the RPC can be retried; a Docker-only
+            failure closes it because only container cleanup remains. An empty
+            project id is terminal because no retry can target a project.
         """
         succeeded = True
+        project_close_failed = False
         try:
             request = self._request
             if request is None:
-                self._close_transport()
                 return True
 
             project_id = str(getattr(request, "id", "") or "")
@@ -108,7 +109,6 @@ class GoNetEmCleanupMixin:
                 logging.warning(
                     "GoNetEmLauncher: project id is empty; skipping Docker cleanup"
                 )
-                self._close_transport()
                 return False
 
             container_ids = self._list_project_containers(project_id)
@@ -123,16 +123,22 @@ class GoNetEmCleanupMixin:
                     succeeded = False
 
             if self._client is not None:
-                response = self._client.ProjectClose(
-                    request, timeout=FORCE_CLOSE_TIMEOUT_SECONDS
-                )
-                # ProjectClose is server-streaming: consume the stream so the
-                # server can process the request before the transport closes.
-                for _ in response:
-                    pass
-            if succeeded:
-                self._close_transport()
+                try:
+                    response = self._client.ProjectClose(
+                        request, timeout=FORCE_CLOSE_TIMEOUT_SECONDS
+                    )
+                    # ProjectClose is server-streaming: consume the stream so
+                    # the server can process the request before the transport
+                    # closes.
+                    for _ in response:
+                        pass
+                except Exception:
+                    project_close_failed = True
+                    raise
             return succeeded
         except Exception as exc:
             logging.error("GoNetEmLauncher: force_close_project failed: %s", exc)
             return False
+        finally:
+            if not project_close_failed:
+                self._close_transport()
