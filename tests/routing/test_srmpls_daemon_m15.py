@@ -120,4 +120,5 @@ def test_statistics_count_ground_stations_separately_from_all_sources() -> None:
 
     assert stats["nodes_with_routes"] == 3
     assert stats["ground_stations_with_routes"] == 2
-    assert stats["sr_routes"] == sum(len(v) for v in daemon.sr_lfib.values())
+    # Each of the three sources has a route to the other two destinations.
+    assert stats["sr_routes"] == 6
