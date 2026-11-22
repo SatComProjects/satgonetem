@@ -126,6 +126,38 @@ def test_start_containers_reports_progress_for_every_topology_event(
     assert not list(tmp_path.glob("*.gnet"))
 
 
+def test_start_containers_counts_batched_progress_totals(grpc_client, tmp_path):
+    grpc_client.TopologyRun.return_value = [
+        _run_msg(netem_pb2.TopologyRunMsg.NODE_COUNT, 3),
+        _run_msg(netem_pb2.TopologyRunMsg.LINK_COUNT, 2),
+        _run_msg(netem_pb2.TopologyRunMsg.NODE_START, 2),
+        _run_msg(netem_pb2.TopologyRunMsg.NODE_START, 1),
+        _run_msg(netem_pb2.TopologyRunMsg.LINK_SETUP, 2),
+        _run_msg(netem_pb2.TopologyRunMsg.NODE_LOADCONFIG, 3),
+    ]
+    launcher, _connection, _factory = _start_launcher(tmp_path, grpc_client)
+    events = []
+
+    launcher.start_containers([], progress_cb=lambda *event: events.append(event))
+
+    assert ("NODE_START", 3, 3) in events
+    assert ("LINK_SETUP", 2, 2) in events
+
+
+def test_start_containers_accepts_terminal_marker_with_short_progress(
+    grpc_client, tmp_path
+):
+    grpc_client.TopologyRun.return_value = [
+        _run_msg(netem_pb2.TopologyRunMsg.NODE_COUNT, 3),
+        _run_msg(netem_pb2.TopologyRunMsg.LINK_COUNT, 2),
+        _run_msg(netem_pb2.TopologyRunMsg.NODE_START, 1),
+        _run_msg(netem_pb2.TopologyRunMsg.NODE_MESSAGES),
+    ]
+    launcher, _connection, _factory = _start_launcher(tmp_path, grpc_client)
+
+    launcher.start_containers([])
+
+
 def test_start_containers_allows_omitting_progress_callback(grpc_client, tmp_path):
     grpc_client.TopologyRun.return_value = [
         _run_msg(netem_pb2.TopologyRunMsg.NODE_COUNT, 1),
@@ -289,6 +321,20 @@ def test_close_project_reports_progress_and_closes_channel():
     channel.close.assert_called_once()
     assert launcher._client is None
     assert launcher._channel is None
+
+
+def test_close_project_counts_batched_node_close_totals():
+    launcher = _new_launcher()
+    launcher._client = MagicMock()
+    launcher._request = netem_pb2.ProjectRequest(id="prj-1")
+    launcher._client.ProjectClose.return_value = [
+        netem_pb2.ProjectCloseMsg(code=netem_pb2.ProjectCloseMsg.NODE_COUNT, total=5),
+        netem_pb2.ProjectCloseMsg(code=netem_pb2.ProjectCloseMsg.NODE_CLOSE, total=3),
+        netem_pb2.ProjectCloseMsg(code=netem_pb2.ProjectCloseMsg.NODE_CLOSE, total=2),
+    ]
+    launcher._channel = MagicMock()
+
+    launcher.close_project()
 
 
 def test_close_project_rejects_partial_node_close():

@@ -92,12 +92,19 @@ class GoNetEmLifecycleMixin(GoNetEmClientMixin):
 
             node_count = link_count = node_start = link_setup = node_config = 0
             node_count_seen = link_count_seen = False
+            saw_node_messages = False
             container_start_t = link_start_t = None
             container_time = link_time = 0.0
             try:
                 for msg in client.TopologyRun(self._request):
                     code = msg.code
-                    if code == netem_pb2.TopologyRunMsg.NODE_COUNT:
+                    if code == netem_pb2.TopologyRunMsg.NODE_MESSAGES:
+                        # The server sends this terminal message only after
+                        # Topology.Run completed successfully. Progress events
+                        # are batched best-effort and can be dropped when the
+                        # stream closes, so the terminal marker is authoritative.
+                        saw_node_messages = True
+                    elif code == netem_pb2.TopologyRunMsg.NODE_COUNT:
                         node_count = msg.total
                         node_count_seen = True
                         if progress_cb:
@@ -110,19 +117,19 @@ class GoNetEmLifecycleMixin(GoNetEmClientMixin):
                     elif code == netem_pb2.TopologyRunMsg.NODE_START:
                         if container_start_t is None:
                             container_start_t = time.monotonic()
-                        node_start += 1
+                        node_start += max(int(msg.total or 0), 1)
                         container_time = time.monotonic() - container_start_t
                         if progress_cb:
                             progress_cb("NODE_START", node_start, node_count)
                     elif code == netem_pb2.TopologyRunMsg.LINK_SETUP:
                         if link_start_t is None:
                             link_start_t = time.monotonic()
-                        link_setup += 1
+                        link_setup += max(int(msg.total or 0), 1)
                         link_time = time.monotonic() - link_start_t
                         if progress_cb:
                             progress_cb("LINK_SETUP", link_setup, link_count)
                     elif code == netem_pb2.TopologyRunMsg.NODE_LOADCONFIG:
-                        node_config += 1
+                        node_config += max(int(msg.total or 0), 1)
                         if progress_cb:
                             progress_cb("NODE_LOADCONFIG", node_config, node_count)
             except Exception as exc:
@@ -130,20 +137,20 @@ class GoNetEmLifecycleMixin(GoNetEmClientMixin):
                     f"GoNetEmLauncher: TopologyRun failed: {exc}"
                 ) from exc
 
-            # The server advertises totals before streaming per-object
-            # progress. A stream that ends before every advertised node/link
-            # is observed is a partial (crash/timeout) run and must not be
-            # reported as a successful start.
-            if node_count_seen and node_start != node_count:
-                raise RuntimeError(
-                    "GoNetEmLauncher: TopologyRun incomplete: "
-                    f"started {node_start} of {node_count} node(s)"
-                )
-            if link_count_seen and link_setup != link_count:
-                raise RuntimeError(
-                    "GoNetEmLauncher: TopologyRun incomplete: "
-                    f"set up {link_setup} of {link_count} link(s)"
-                )
+            # A clean EOF without the terminal NODE_MESSAGES marker is a
+            # partial (crash/timeout) run. With the marker, batched or dropped
+            # progress counters are informational only.
+            if not saw_node_messages:
+                if node_count_seen and node_start != node_count:
+                    raise RuntimeError(
+                        "GoNetEmLauncher: TopologyRun incomplete: "
+                        f"started {node_start} of {node_count} node(s)"
+                    )
+                if link_count_seen and link_setup != link_count:
+                    raise RuntimeError(
+                        "GoNetEmLauncher: TopologyRun incomplete: "
+                        f"set up {link_setup} of {link_count} link(s)"
+                    )
 
             logging.info(
                 "GoNetEmLauncher: topology running (%d nodes, %d links)",
@@ -263,7 +270,7 @@ class GoNetEmLifecycleMixin(GoNetEmClientMixin):
                     if progress_cb:
                         progress_cb("CLOSE_NODE_COUNT", 0, node_count)
                 elif msg.code == netem_pb2.ProjectCloseMsg.NODE_CLOSE:
-                    node_close += 1
+                    node_close += max(int(msg.total or 0), 1)
                     if progress_cb:
                         progress_cb("CLOSE_NODE_CLOSE", node_close, node_count)
             if node_count and node_close != node_count:
