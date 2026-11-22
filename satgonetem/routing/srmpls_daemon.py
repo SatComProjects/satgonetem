@@ -221,20 +221,27 @@ class SRMPLSDaemon(RoutingDaemon):
         self._rebuild_sr_mpls_routing(init_flag=False, max_workers=max_workers)
 
     def remove(self, node: Node | None = None, max_workers: int = 128) -> None:
-        """Remove all SR-MPLS forwarding entries.
+        """Remove SR-MPLS forwarding entries for one node or the topology.
 
-        Flushes the kernel MPLS label-forwarding table on every node (or on a
-        single node if provided), then resets all in-memory SR state.
+        With *node*, flushes that node's kernel entries and drops only that
+        node's cached routes and LFIB slot. The daemon stays initialized for
+        the remaining nodes. Without *node*, flushes every node and resets all
+        in-memory SR state.
 
         Args:
-            node: If provided, flush only this node. Otherwise flush all
+            node: If provided, remove only this node. Otherwise remove all
                 satellites and ground stations.
             max_workers: Maximum number of parallel worker threads.
         """
         if node is not None:
             self._flush_node(node)
-        else:
-            self._flush_all_nodes(max_workers)
+            self.sr_lfib.pop(node.id, None)
+            self._prev_sr_gs_routes.pop(node.id, None)
+            self._prev_sr_sat_routes.pop(node.id, None)
+            self._prev_sr_node_sid_routes.pop(node.id, None)
+            return
+
+        self._flush_all_nodes(max_workers)
 
         self.sr_lfib = {}
         self._sr_graph = None
