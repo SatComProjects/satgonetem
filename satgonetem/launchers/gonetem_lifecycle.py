@@ -270,7 +270,7 @@ class GoNetEmLifecycleMixin(GoNetEmClientMixin):
                     if progress_cb:
                         progress_cb("CLOSE_NODE_COUNT", 0, node_count)
                 elif msg.code == netem_pb2.ProjectCloseMsg.NODE_CLOSE:
-                    node_close += 1
+                    node_close += max(int(msg.total or 0), 1)
                     if progress_cb:
                         progress_cb("CLOSE_NODE_CLOSE", node_close, node_count)
             if node_count and node_close != node_count:
