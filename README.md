@@ -411,6 +411,9 @@ python scripts/verify_900_satellites.py
 # Live three-node topology: GSL + ISL, static routing, bidirectional pings
 python scripts/verify_connectivity.py
 
+# 10x10 Walker constellation: 5-minute steps, per-step link churn, 220 pings
+python scripts/verify_10x10_connectivity.py
+
 # Same, when GoNetEm NodeRun cannot exec into containers in the environment
 python scripts/verify_connectivity.py --transport docker
 ```
