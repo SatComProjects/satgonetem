@@ -121,6 +121,51 @@ def test_route_returns_empty_for_missing_path():
     assert manager.get_sr_route_for_destination(1, 2, default_path=[1]) == ([], [])
 
 
+def test_label_stack_cache_distinguishes_php():
+    manager = SegmentRoutingManager()
+    for node_id in (1, 2, 3):
+        manager.allocate_node_sid(node_id)
+
+    _, with_php = manager.get_sr_route_for_destination(
+        1, 3, default_path=[1, 2, 3], use_php=True
+    )
+    _, without_php = manager.get_sr_route_for_destination(
+        1, 3, default_path=[1, 2, 3], use_php=False
+    )
+
+    assert with_php == [16002]
+    assert without_php == [16002, 16003]
+
+
+def test_label_stack_cache_distinguishes_the_default_path():
+    manager = SegmentRoutingManager()
+    for node_id in (1, 2, 3, 4):
+        manager.allocate_node_sid(node_id)
+
+    _, first = manager.get_sr_route_for_destination(
+        1, 3, default_path=[1, 2, 3], use_php=True
+    )
+    _, second = manager.get_sr_route_for_destination(
+        1, 3, default_path=[1, 4, 3], use_php=True
+    )
+
+    assert first == [16002]
+    assert second == [16004]
+
+
+def test_custom_path_change_invalidates_every_cached_stack_for_the_pair():
+    manager = SegmentRoutingManager()
+    for node_id in (1, 2, 3, 4):
+        manager.allocate_node_sid(node_id)
+    manager.get_sr_route_for_destination(1, 3, default_path=[1, 2, 3], use_php=True)
+    manager.get_sr_route_for_destination(1, 3, default_path=[1, 4, 3], use_php=False)
+    assert manager.get_statistics()["cached_stacks"] == 2
+
+    manager.set_custom_path(1, 3, [1, 3])
+
+    assert manager.get_statistics()["cached_stacks"] == 0
+
+
 def test_statistics_reset_cache_and_str():
     manager = SegmentRoutingManager()
     manager.allocate_node_sid(1, "Sat1")

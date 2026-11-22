@@ -271,7 +271,7 @@ def test_path_change_does_not_delete_prefix_owned_by_stack_pass():
     assert len(sat1.kernel.batches) > batches_before
     assert sat1.kernel.failures == []
     route = sat1.kernel.ip["10.0.0.2/32"]
-    assert "encap mpls 16002 via 10.10.0.2 dev eth3" in route
+    assert "encap mpls 16003/16002 via 10.10.0.2 dev eth3" in route
     _assert_one_owner_and_convergence(daemon, sat1)
 
     # Directly connected GS: only the stack pass owns its prefix, and the SID
