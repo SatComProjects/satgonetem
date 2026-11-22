@@ -179,6 +179,65 @@ def test_topology_quotes_injected_names_in_controller_links():
     assert document["links"][0]["peer2"] == "SatA\ninjected: true.50007"
 
 
+@pytest.mark.parametrize(
+    "peer_name",
+    [
+        "Gnd1, injected",
+        "Gnd1[injected]",
+        "Gnd1{injected}",
+    ],
+)
+def test_topology_quotes_flow_mapping_characters_in_peer_names(peer_name):
+    sat = _satellite(0, peer_name)
+    gnd = _ground_station(0, "Gnd0")
+    link = FakeLink(sat, gnd, capacity=2000)
+    topology_manager = _topology({sat.id: sat}, {gnd.id: gnd}, {"sat-gnd": link})
+    launcher = _launcher(topology_manager)
+
+    document = yaml.safe_load(launcher.get_gonetem_topology())
+
+    assert set(document) == {"nodes", "links"}
+    assert set(document["nodes"]) == {"Sat0", "Gnd0"}
+    assert len(document["links"]) == 1
+    assert set(document["links"][0]) == {"peer1", "peer2", "peer1qos", "peer2qos"}
+    assert document["links"][0]["peer1"] == f"{peer_name}.0"
+    assert document["links"][0]["peer2"] == "Gnd0.0"
+
+
+def test_topology_quotes_flow_mapping_characters_in_controller_links():
+    sat = _satellite(7, "SatA, injected")
+    topology_manager = _topology({sat.id: sat}, {}, {})
+    launcher = _launcher(topology_manager)
+
+    document = yaml.safe_load(launcher.get_gonetem_topology(controller=True))
+
+    assert set(document) == {"nodes", "links"}
+    assert len(document["links"]) == 1
+    assert set(document["links"][0]) == {"peer1", "peer2", "peer1qos", "peer2qos"}
+    assert document["links"][0]["peer1"] == "Controller.7"
+    assert document["links"][0]["peer2"] == "SatA, injected.50007"
+
+
+def test_topology_quotes_non_bmp_scalars_without_surrogate_escapes():
+    image = "evil: 😀"
+    peer_name = "Sat😀\nevil: true"
+    gnd_image = "gnd😀: image"
+    sat = _satellite(0, peer_name, image=image)
+    gnd = _ground_station(1, "Gnd0", image=gnd_image)
+    link = FakeLink(sat, gnd, capacity=2000)
+    topology_manager = _topology({sat.id: sat}, {gnd.id: gnd}, {"sat-gnd": link})
+    launcher = _launcher(topology_manager)
+
+    generated = launcher.get_gonetem_topology()
+    document = yaml.safe_load(generated)
+
+    assert "\\ud83d" not in generated.lower()
+    assert "\\ude00" not in generated.lower()
+    assert document["nodes"]["Sat0"]["image"] == image
+    assert document["nodes"]["Gnd1"]["image"] == gnd_image
+    assert document["links"][0]["peer1"] == f"{peer_name}.1"
+
+
 def test_generate_project_writes_network_yml_archive(tmp_path):
     sat = _satellite(0, "Sat0")
     gnd = _ground_station(2, "Gnd0", image="gnd-image")
