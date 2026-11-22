@@ -141,12 +141,12 @@ class LinuxNetworkNamespace:
     CLONE_NEWNET = 0x40000000
 
     @staticmethod
-    def _setns(libc: Any, ns_fd: Any, pid: int) -> None:
+    def _setns(libc: Any, ns_fd: Any, target: str) -> None:
         import ctypes
 
         if libc.setns(ns_fd.fileno(), LinuxNetworkNamespace.CLONE_NEWNET) != 0:
             errno = ctypes.get_errno()
-            raise OSError(errno, f"setns failed for PID {pid}")
+            raise OSError(errno, f"setns failed for {target}")
 
     def create_dummy_interface(self, pid: int, name: str) -> None:
         import ctypes
@@ -155,15 +155,20 @@ class LinuxNetworkNamespace:
 
         libc = ctypes.CDLL("libc.so.6", use_errno=True)
         with open("/proc/self/ns/net", "rb") as saved_ns:
+            entered_target_ns = False
             try:
                 with open(f"/proc/{pid}/ns/net", "rb") as ns_fd:
-                    self._setns(libc, ns_fd, pid)
+                    self._setns(libc, ns_fd, f"PID {pid}")
+                    entered_target_ns = True
                     with IPRoute() as ipr:
                         ipr.link("add", ifname=name, kind="dummy")
                         idx = ipr.link_lookup(ifname=name)[0]
                         ipr.link("set", index=idx, state="up")
             finally:
-                libc.setns(saved_ns.fileno(), self.CLONE_NEWNET)
+                # A failed restore would silently leave this thread in the
+                # target namespace, so surface it instead of ignoring errno.
+                if entered_target_ns:
+                    self._setns(libc, saved_ns, "host network namespace")
 
     def create_veth(
         self,
@@ -178,9 +183,11 @@ class LinuxNetworkNamespace:
 
         libc = ctypes.CDLL("libc.so.6", use_errno=True)
         with open("/proc/self/ns/net", "rb") as saved_ns:
+            entered_target_ns = False
             try:
                 with open(f"/proc/{source_pid}/ns/net", "rb") as ns_fd:
-                    self._setns(libc, ns_fd, source_pid)
+                    self._setns(libc, ns_fd, f"PID {source_pid}")
+                    entered_target_ns = True
                     with IPRoute() as ipr:
                         ipr.link(
                             "add",
@@ -195,12 +202,15 @@ class LinuxNetworkNamespace:
                         ipr.link("set", index=idx, state="up")
 
                 with open(f"/proc/{destination_pid}/ns/net", "rb") as ns_fd:
-                    self._setns(libc, ns_fd, destination_pid)
+                    self._setns(libc, ns_fd, f"PID {destination_pid}")
                     with IPRoute() as ipr:
                         idx = ipr.link_lookup(ifname=destination_name)[0]
                         ipr.link("set", index=idx, state="up")
             finally:
-                libc.setns(saved_ns.fileno(), self.CLONE_NEWNET)
+                # A failed restore would silently leave this thread in the
+                # target namespace, so surface it instead of ignoring errno.
+                if entered_target_ns:
+                    self._setns(libc, saved_ns, "host network namespace")
 
 
 __all__ = [

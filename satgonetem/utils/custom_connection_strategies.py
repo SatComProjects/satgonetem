@@ -321,28 +321,15 @@ class LongestConnectionTimeStrategy(GroundToSpaceConnectionStrategy):
             return computed_ground_object_connections_result
 
         list_of_satellites = []
-        import time as _t
 
         for visible_satellite in visible_satellites:
             if id(visible_satellite.satellite) in retained_satellite_ids:
                 # Already kept above; do not create a duplicate connection.
                 continue
-            tic = _t.perf_counter()
             time_until_disconnection = self.estimate_time_until_disconnection_2(
                 ground_object=ground_object,
                 satellite=visible_satellite.satellite,
                 minimum_elevation=ground_object.ground_object_domain.elevation_above_horizon,
-            )
-            tac = _t.perf_counter()
-            time_until_disconnection_2 = self.estimate_time_until_disconnection_2(
-                ground_object=ground_object,
-                satellite=visible_satellite.satellite,
-                minimum_elevation=ground_object.ground_object_domain.elevation_above_horizon,
-            )
-            print(time_until_disconnection, time_until_disconnection_2)
-            toc = _t.perf_counter()
-            print(
-                f"First method took {tac - tic:.4f} seconds, second method took {toc - tac:.4f} seconds for satellite {visible_satellite.satellite.satellite_name}"
             )
             if time_until_disconnection is None:
                 # Defensive guard: older/overridden estimators may still return None,

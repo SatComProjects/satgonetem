@@ -8,9 +8,11 @@ from unittest.mock import MagicMock, patch
 import grpc
 import pytest
 
+from satgonetem.models.interface import Interface
 from satgonetem.proto import netem_pb2
 from satgonetem.services.mixins.link_ops import LinkOpsMixin
 from satgonetem.utils.constants import ROUTE_APPLY_WORKERS
+from tests.support.factories import make_link, make_satellite
 
 
 def _update_response(codes, *, error=""):
@@ -48,6 +50,36 @@ class _FakeTopology(LinkOpsMixin):
 
     def get_status(self):
         return True
+
+    @staticmethod
+    def _build_link_key(source, target):
+        return frozenset((source.name, target.name))
+
+
+def _link_pending_removal():
+    """Build a real /31 link with both node interfaces attached, marked stale."""
+    source = make_satellite("Sat0")
+    target = make_satellite("Sat1")
+    link = make_link(source, target)
+    source_interface = Interface(f"{source.name}.{target.id}")
+    target_interface = Interface(f"{target.name}.{source.id}")
+    source_interface.peer = target_interface
+    target_interface.peer = source_interface
+    source.interfaces.append(source_interface)
+    target.interfaces.append(target_interface)
+    link.peer_interfaces.extend([source_interface, target_interface])
+    link.to_remove = True
+    return link
+
+
+def _topology_with_link(link, launcher, address_plan):
+    return _FakeTopology(
+        {frozenset((link.source.name, link.target.name)): link},
+        launcher=launcher,
+        address_plan=address_plan,
+        interfaces=list(link.peer_interfaces),
+        interface_version=0,
+    )
 
 
 def test_interface_removals_run_on_the_calling_thread():
@@ -441,3 +473,176 @@ def test_remove_link_interfaces_bumps_interface_version():
     LinkOpsMixin._remove_link_interfaces(fake, link)
 
     assert fake.interface_version == 8
+
+
+def _run_delete_operations(link, launcher, address_plan):
+    fake = _topology_with_link(link, launcher, address_plan)
+    stats = LinkOpsMixin.bulk_link_operations(
+        fake,
+        to_add=False,
+        to_update=False,
+        links_to_add=[],
+        links_to_update=[],
+        links_to_remove=[link],
+    )
+    LinkOpsMixin._perform_local_link_operations(
+        fake,
+        to_add=False,
+        to_update=False,
+        links_to_add=[],
+        links_to_update=[],
+        links_to_remove=[link],
+    )
+    return fake, stats
+
+
+def test_failed_backend_delete_retains_link_and_address_slot(caplog):
+    link = _link_pending_removal()
+    key = frozenset((link.source.name, link.target.name))
+    launcher = MagicMock()
+    launcher.delete_link.side_effect = RuntimeError("LinkDel failed")
+    address_plan = MagicMock()
+
+    with caplog.at_level(logging.ERROR):
+        fake, stats = _run_delete_operations(link, launcher, address_plan)
+
+    # Spec 0006: deleted_count reports attempts, not successes.
+    assert stats["deleted_count"] == 1
+    # The emulator still has the veth pair, so the manager keeps the link and
+    # its /31 for a retry instead of forgetting state it cannot recreate.
+    assert fake.links == {key: link}
+    assert link.to_remove is True
+    assert link.to_delete is True
+    address_plan.release_link.assert_not_called()
+    assert fake.interfaces == link.peer_interfaces
+    assert link.peer_interfaces[0] in link.source.interfaces
+    assert link.peer_interfaces[1] in link.target.interfaces
+    assert "Unable to delete link Sat0--Sat1" in caplog.text
+
+
+def test_delete_retry_cleans_up_once_backend_recovers():
+    link = _link_pending_removal()
+    key = frozenset((link.source.name, link.target.name))
+    launcher = MagicMock()
+    launcher.delete_link.side_effect = [RuntimeError("LinkDel failed"), None]
+    address_plan = MagicMock()
+
+    fake, _ = _run_delete_operations(link, launcher, address_plan)
+    assert fake.links == {key: link}
+    address_plan.release_link.assert_not_called()
+
+    fake, _ = _run_delete_operations(link, launcher, address_plan)
+
+    assert launcher.delete_link.call_count == 2
+    assert fake.links == {}
+    address_plan.release_link.assert_called_once_with(key)
+
+
+def test_successful_backend_delete_releases_link_and_address_slot():
+    link = _link_pending_removal()
+    key = frozenset((link.source.name, link.target.name))
+    source_interfaces = list(link.source.interfaces)
+    target_interfaces = list(link.target.interfaces)
+    launcher = MagicMock()
+    address_plan = MagicMock()
+
+    fake, _ = _run_delete_operations(link, launcher, address_plan)
+
+    launcher.delete_link.assert_called_once_with(link)
+    assert fake.links == {}
+    assert link.to_delete is False
+    address_plan.release_link.assert_called_once_with(key)
+    assert fake.interfaces == []
+    assert link.source.interfaces == [
+        interface
+        for interface in source_interfaces
+        if interface not in link.peer_interfaces
+    ]
+    assert link.target.interfaces == [
+        interface
+        for interface in target_interfaces
+        if interface not in link.peer_interfaces
+    ]
+
+
+def _run_add_operations(link, launcher, **kwargs):
+    fake = _FakeTopology(
+        {frozenset((link.source.name, link.target.name)): link},
+        launcher=launcher,
+        **kwargs,
+    )
+    stats = LinkOpsMixin.bulk_link_operations(
+        fake,
+        to_del=False,
+        to_update=False,
+        links_to_add=[link],
+        links_to_update=[],
+        links_to_remove=[],
+    )
+    LinkOpsMixin._perform_local_link_operations(
+        fake,
+        to_del=False,
+        to_update=False,
+        links_to_add=[link],
+        links_to_update=[],
+        links_to_remove=[],
+    )
+    return fake, stats
+
+
+def test_failed_backend_add_keeps_link_retryable(caplog):
+    link = make_link(make_satellite("Sat2"), make_satellite("Sat3"))
+    link.to_add = True
+    key = frozenset((link.source.name, link.target.name))
+    launcher = MagicMock()
+    launcher.add_link.side_effect = RuntimeError("LinkAdd failed")
+    build_interfaces = MagicMock()
+
+    with caplog.at_level(logging.ERROR):
+        fake, stats = _run_add_operations(
+            link, launcher, _build_interfaces_from_link=build_interfaces
+        )
+
+    # Spec 0006: added_count reports attempts, not successes.
+    assert stats["added_count"] == 1
+    assert fake.links == {key: link}
+    assert link.to_add is True
+    assert link.peer_interfaces == []
+    build_interfaces.assert_not_called()
+    assert "Unable to add link Sat2--Sat3" in caplog.text
+
+
+def test_add_retry_builds_interfaces_once_backend_recovers():
+    link = make_link(make_satellite("Sat4"), make_satellite("Sat5"))
+    link.to_add = True
+    launcher = MagicMock()
+    launcher.add_link.side_effect = [RuntimeError("LinkAdd failed"), None]
+    build_interfaces = MagicMock()
+
+    fake, _ = _run_add_operations(
+        link, launcher, _build_interfaces_from_link=build_interfaces
+    )
+    assert fake.links
+    assert link.to_add is True
+    build_interfaces.assert_not_called()
+
+    fake, _ = _run_add_operations(
+        link, launcher, _build_interfaces_from_link=build_interfaces
+    )
+
+    assert launcher.add_link.call_count == 2
+    assert link.to_add is False
+    build_interfaces.assert_called_once_with(link, set_ip=True, sync_to_node=True)
+
+
+def test_successful_backend_add_builds_interfaces_and_clears_flag():
+    link = make_link(make_satellite("Sat6"), make_satellite("Sat7"))
+    link.to_add = True
+    launcher = MagicMock()
+    build_interfaces = MagicMock()
+
+    _run_add_operations(link, launcher, _build_interfaces_from_link=build_interfaces)
+
+    launcher.add_link.assert_called_once_with(link)
+    build_interfaces.assert_called_once_with(link, set_ip=True, sync_to_node=True)
+    assert link.to_add is False

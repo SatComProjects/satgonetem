@@ -589,3 +589,47 @@ def test_weighted_connection_keeps_retained_link_then_fills_remaining_capacity()
         for connection in result.new_ground_object_connections
     ] == ["Sat0", "Sat1"]
     assert existing_link in result.obsolete_links
+
+
+def test_longest_connection_strategy_estimates_each_candidate_once(capsys):
+    """Each visible candidate is estimated once and nothing is printed (H13).
+
+    The second estimator call and the per-satellite debug prints were pure
+    overhead: they doubled TEME/ECEF work per handover and flooded stdout.
+    """
+    ground_object = _make_ground_object(maximum_connected_satellites=3)
+    satellites = [
+        Satellite(satellite_name=f"Sat{index}", topology_uniq_id=index)
+        for index in range(3)
+    ]
+    visible_satellites = [
+        VisibleSatellite(satellite=satellite, elevation_above_horizon=elevation)
+        for satellite, elevation in zip(satellites, [60.0, 50.0, 40.0], strict=True)
+    ]
+    call_log: list[str] = []
+
+    def fake_estimator(**kwargs):
+        call_log.append(kwargs["satellite"].satellite_name)
+        return 120.0
+
+    with (
+        patch(
+            "satgonetem.utils.custom_connection_strategies.get_visible_satellites",
+            return_value=visible_satellites,
+        ),
+        patch.object(
+            LongestConnectionTimeStrategy,
+            "estimate_time_until_disconnection_2",
+            side_effect=fake_estimator,
+        ),
+    ):
+        result = (
+            LongestConnectionTimeStrategy().compute_ground_object_connection_strategy(
+                ground_object=ground_object,
+                satellites=satellites,
+            )
+        )
+
+    assert sorted(call_log) == ["Sat0", "Sat1", "Sat2"]
+    assert len(result.new_ground_object_connections) == 3
+    assert capsys.readouterr().out == ""

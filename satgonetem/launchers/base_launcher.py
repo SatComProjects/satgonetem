@@ -81,11 +81,19 @@ class NetworkLauncher(ABC):
 
     @abstractmethod
     def add_link(self, link) -> None:
-        """Create a new link and apply qdiscs to both ends."""
+        """Create a new link and apply qdiscs to both ends.
+
+        Raises:
+            RuntimeError: If the backend could not create the link.
+        """
 
     @abstractmethod
     def delete_link(self, link) -> None:
-        """Remove a link (both ends)."""
+        """Remove a link (both ends).
+
+        Raises:
+            RuntimeError: If the backend could not delete the link.
+        """
 
     @abstractmethod
     def set_link_capacities(self, isl_kbps: int, gnd_kbps: int, links: list) -> None:

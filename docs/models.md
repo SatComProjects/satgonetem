@@ -309,7 +309,7 @@ The topology sync layer uses four flags consumed by `bulk_link_operations()`:
 | `to_add` | Create this link in the backend |
 | `to_update` | Push new delay/rate to the backend |
 | `to_remove` | Delete the link from the backend |
-| `to_delete` | Legacy/auxiliary delete marker |
+| `to_delete` | Set while a backend link deletion is unconfirmed; cleared on success so failed deletes stay retryable |
 
 ### Helpers
 
