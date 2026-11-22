@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import grpc
 
@@ -154,7 +154,7 @@ class LinkOpsMixin:
         # per-operation durations; their *_time_wall is the first-submit-to-
         # last-completion span. Updates are one batch call, so all three update
         # figures derive from that call's wall time.
-        operation_stats = {
+        operation_stats: dict[str, Any] = {
             "added_count": len(processed_add),
             "updated_count": len(processed_update),
             "deleted_count": len(processed_remove),
@@ -289,10 +289,12 @@ class LinkOpsMixin:
 
         if hil_updates:
             update_failures = LinkOpsMixin._link_update_failures(self)
-            operation_stats["update_error_count"] += sum(
-                1
-                for link in hil_updates
-                if self._build_link_key(link.source, link.target) in update_failures
+            hil_errors = 0
+            for link in hil_updates:
+                if self._build_link_key(link.source, link.target) in update_failures:
+                    hil_errors += 1
+            operation_stats["update_error_count"] = (
+                int(operation_stats["update_error_count"]) + hil_errors
             )
 
         if batch_updates:
