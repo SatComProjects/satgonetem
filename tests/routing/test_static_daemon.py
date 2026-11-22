@@ -148,6 +148,19 @@ class TestStaticRoutingDaemonUpdate:
 
         mock_apply.assert_called_once()
 
+    def test_clears_route_cache_when_interface_version_changes(self, daemon, topology):
+        daemon._last_interface_version = 1
+        topology.interface_version = 2
+
+        with (
+            patch.object(daemon._route_planner, "clear_reuse_cache") as clear_cache,
+            patch.object(daemon, "_populate_routing_tables"),
+            patch.object(daemon, "_apply_all_routes"),
+        ):
+            daemon.update(new_links=[])
+
+        clear_cache.assert_called_once()
+
     def test_skips_route_application_when_topology_inactive(self, daemon, topology):
         topology.status = False
 
