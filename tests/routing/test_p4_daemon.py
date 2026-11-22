@@ -7,15 +7,20 @@ post-launch grace sleep) are patched so the tests never launch a real process.
 from __future__ import annotations
 
 import io
+import logging
 import os
 import subprocess
+import threading
 from types import SimpleNamespace
 from unittest.mock import MagicMock
+from uuid import uuid4
 
 import pytest
 
+from satgonetem.models.interface import Interface
 from satgonetem.routing import p4_daemon
 from satgonetem.routing.p4_daemon import P4Daemon, safe_int, safe_ip
+from tests.support import make_link, make_satellite
 
 pytestmark = pytest.mark.unit
 
@@ -47,6 +52,64 @@ class FakeProcess:
         if self._wait_errors:
             raise self._wait_errors.pop(0)
         return self.returncode
+
+
+class RacyStderr:
+    """A stderr stand-in where a second reader consumes the failure output.
+
+    The reader thread blocks until the process is stopped (or the timeout
+    expires). A concurrent ``read()`` before that point wins the race and
+    discards the pending text, reproducing the lost-output failure mode.
+    """
+
+    def __init__(self, message):
+        self._message = message
+        self._released = threading.Event()
+        self._consumed_by_read = False
+        self.read_calls = 0
+
+    def release(self):
+        self._released.set()
+
+    def readline(self):
+        self._released.wait(timeout=2)
+        if self._consumed_by_read:
+            return ""
+        message, self._message = self._message, ""
+        return message
+
+    def read(self):
+        self.read_calls += 1
+        if not self._released.is_set():
+            self._consumed_by_read = True
+            self._message = ""
+            return ""
+        message, self._message = self._message, ""
+        return message
+
+
+class RacyProcess(FakeProcess):
+    """Fake controller process whose termination releases the stderr reader."""
+
+    def __init__(self, stderr):
+        super().__init__(returncode=3)
+        self.stderr = stderr
+
+    def terminate(self):
+        super().terminate()
+        self.stderr.release()
+
+
+def _make_export_link(source, target):
+    """Build a link that can be exported without touching a real node."""
+    link = make_link(source, target)
+    link.peer_interfaces = [
+        Interface(name=f"{source.name}.{target.id}"),
+        Interface(name=f"{target.name}.{source.id}"),
+    ]
+    for iface in link.peer_interfaces:
+        iface.set_mac_address("")
+    return link
 
 
 def _patch_os(
@@ -95,7 +158,11 @@ def _patch_sleep(monkeypatch):
 @pytest.fixture
 def daemon(topology, tmp_path):
     """A daemon whose controller directory is never touched on disk."""
-    return P4Daemon(topology, str(tmp_path / "controller"))
+    return P4Daemon(
+        topology,
+        str(tmp_path / "controller"),
+        readiness_probe=lambda: True,
+    )
 
 
 @pytest.mark.parametrize(
@@ -148,7 +215,7 @@ def test_start_sets_executable_bit_when_script_is_not_executable(
     chmod_calls = _patch_os(monkeypatch, exists=True, executable=False)
     process = FakeProcess(returncode=None)
     popen = _patch_popen(monkeypatch, process=process)
-    sleep = _patch_sleep(monkeypatch)
+    _patch_sleep(monkeypatch)
     script_path = str(tmp_path / "controller" / "run_controller.sh")
 
     assert daemon.start_p4_controller() is True
@@ -156,7 +223,6 @@ def test_start_sets_executable_bit_when_script_is_not_executable(
     assert chmod_calls == [(script_path, 0o755)]
     popen.assert_called_once()
     assert popen.call_args.args[0] == [script_path]
-    sleep.assert_called_once_with(0.5)
     assert daemon.p4_controller_process is process
 
 
@@ -195,6 +261,23 @@ def test_start_detects_immediate_exit_and_stops_process(daemon, monkeypatch):
     assert process.terminate_calls == 1
     assert process.wait_calls == 1
     assert process.kill_calls == 0
+    assert daemon.p4_controller_process is None
+
+
+def test_start_preserves_early_exit_stderr_without_concurrent_read(
+    daemon, monkeypatch, caplog
+):
+    _patch_os(monkeypatch, exists=True, executable=True)
+    stderr = RacyStderr("controller boot failure")
+    process = RacyProcess(stderr)
+    _patch_popen(monkeypatch, process=process)
+    _patch_sleep(monkeypatch)
+
+    with caplog.at_level(logging.ERROR):
+        assert daemon.start_p4_controller() is False
+
+    assert stderr.read_calls == 0
+    assert "controller boot failure" in caplog.text
     assert daemon.p4_controller_process is None
 
 
@@ -319,6 +402,23 @@ def test_remove_stops_controller_and_releases_shared_memory(daemon):
     assert daemon.p4_controller_process is None
 
 
+def test_remove_with_node_does_not_tear_down_shared_controller(daemon, caplog):
+    graph = MagicMock()
+    process = FakeProcess()
+    daemon.graph_shared_memory = graph
+    daemon.p4_controller_process = process
+
+    with caplog.at_level(logging.WARNING):
+        daemon.remove(make_satellite("Sat0"))
+
+    assert "does not support per-node route removal" in caplog.text
+    assert process.terminate_calls == 0
+    assert graph.close.call_count == 0
+    assert graph.unlink.call_count == 0
+    assert daemon.graph_shared_memory is graph
+    assert daemon.p4_controller_process is process
+
+
 def test_start_p4_controller_uses_injected_process_runner(
     topology, tmp_path, monkeypatch
 ):
@@ -337,6 +437,7 @@ def test_start_p4_controller_uses_injected_process_runner(
         topology,
         str(tmp_path / "controller"),
         process_runner=runner,
+        readiness_probe=lambda: True,
     )
     _patch_os(monkeypatch, exists=True, executable=True)
     _patch_sleep(monkeypatch)
@@ -344,3 +445,137 @@ def test_start_p4_controller_uses_injected_process_runner(
     assert daemon.start_p4_controller() is True
     assert runner.calls
     assert runner.calls[0][0] == [str(tmp_path / "controller" / "run_controller.sh")]
+
+
+def test_start_checks_readiness_probe_before_returning_true(daemon, monkeypatch):
+    _patch_os(monkeypatch, exists=True, executable=True)
+    process = FakeProcess(returncode=None)
+    _patch_popen(monkeypatch, process=process)
+    sleep = _patch_sleep(monkeypatch)
+    probe = MagicMock(side_effect=[False, False, True])
+    monkeypatch.setattr(daemon, "_readiness_probe", probe, raising=False)
+
+    assert daemon.start_p4_controller(timeout=10) is True
+
+    assert probe.call_count == 3
+    assert sleep.call_count == 2
+    assert daemon.p4_controller_process is process
+
+
+def test_start_returns_false_and_stops_controller_when_readiness_times_out(
+    daemon, monkeypatch, caplog
+):
+    _patch_os(monkeypatch, exists=True, executable=True)
+    process = FakeProcess(returncode=None)
+    _patch_popen(monkeypatch, process=process)
+    _patch_sleep(monkeypatch)
+    probe = MagicMock(return_value=False)
+    monkeypatch.setattr(daemon, "_readiness_probe", probe, raising=False)
+
+    with caplog.at_level(logging.ERROR):
+        assert daemon.start_p4_controller(timeout=0) is False
+
+    assert probe.call_count == 1
+    assert "did not become ready" in caplog.text
+    assert process.terminate_calls == 1
+    assert daemon.p4_controller_process is None
+
+
+def test_start_accepts_injected_readiness_probe(topology, tmp_path, monkeypatch):
+    _patch_os(monkeypatch, exists=True, executable=True)
+    process = FakeProcess(returncode=None)
+    _patch_popen(monkeypatch, process=process)
+    _patch_sleep(monkeypatch)
+    probe = MagicMock(return_value=True)
+    daemon = P4Daemon(
+        topology,
+        str(tmp_path / "controller"),
+        readiness_probe=probe,
+    )
+
+    assert daemon.start_p4_controller() is True
+    probe.assert_called_once_with()
+
+
+def test_default_readiness_probe_checks_controller_port(
+    topology, tmp_path, monkeypatch
+):
+    daemon = P4Daemon(
+        topology,
+        str(tmp_path / "controller"),
+        controller_port=9559,
+    )
+    connection = MagicMock()
+    create_connection = MagicMock(return_value=connection)
+    monkeypatch.setattr(p4_daemon.socket, "create_connection", create_connection)
+
+    assert daemon._probe_controller_port() is True
+
+    create_connection.assert_called_once_with(("127.0.0.1", 9559), timeout=0.5)
+    connection.__enter__.assert_called_once_with()
+
+
+def test_default_readiness_probe_returns_false_when_port_is_unreachable(
+    topology, tmp_path, monkeypatch
+):
+    daemon = P4Daemon(topology, str(tmp_path / "controller"))
+    create_connection = MagicMock(side_effect=OSError("connection refused"))
+    monkeypatch.setattr(p4_daemon.socket, "create_connection", create_connection)
+
+    assert daemon._probe_controller_port() is False
+
+
+def test_update_before_init_is_a_documented_noop(daemon, caplog):
+    assert daemon.graph_shared_memory is None
+
+    with caplog.at_level(logging.WARNING):
+        assert daemon.update([]) is None
+
+    assert "not initialized" in caplog.text
+    assert daemon.graph_shared_memory is None
+
+
+def test_update_exports_only_active_links_not_pending_removal(daemon, monkeypatch):
+    graph = MagicMock()
+    daemon.graph_shared_memory = graph
+    active = SimpleNamespace(is_active=True, to_remove=False, tag="active")
+    inactive = SimpleNamespace(is_active=False, to_remove=False, tag="inactive")
+    pending_removal = SimpleNamespace(is_active=True, to_remove=True, tag="pending")
+    daemon.topology.links = {0: active, 1: inactive, 2: pending_removal}
+    monkeypatch.setattr(p4_daemon, "build_edge_from_link", lambda link: link.tag)
+
+    daemon.update([])
+
+    assert graph.write_edges.call_args.args[0] == ["active"]
+
+
+def test_update_grows_shared_memory_when_links_exceed_init_capacity(
+    topology, tmp_path, monkeypatch
+):
+    name = f"satgonetem-test-p4-{os.getpid()}-{uuid4().hex}"
+    daemon = P4Daemon(topology, str(tmp_path / "controller"), shared_memory_name=name)
+    topology.links = {
+        0: _make_export_link(make_satellite("Sat0"), make_satellite("Sat1"))
+    }
+    monkeypatch.setattr(daemon, "start_p4_controller", lambda timeout=10: True)
+
+    try:
+        assert daemon.init() is True
+        graph = daemon.graph_shared_memory
+        assert graph.max_edges == 1
+
+        topology.links[1] = _make_export_link(
+            make_satellite("Sat2"), make_satellite("Sat3")
+        )
+        daemon.update([])
+
+        graph = daemon.graph_shared_memory
+        assert graph.max_edges >= 2
+        assert graph.header[0]["num_edges"] == 2
+        assert graph.header[0]["max_edges"] == graph.max_edges
+        assert {int(edge["src_name"]) for edge in graph.edges[:2]} == {0, 2}
+    finally:
+        graph = daemon.graph_shared_memory
+        if graph is not None:
+            graph.close()
+            graph.unlink()

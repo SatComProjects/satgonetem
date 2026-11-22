@@ -1,14 +1,22 @@
 import logging
 import os
+import socket
 import subprocess
 import threading
 import time
+from collections import deque
+from collections.abc import Callable
 from typing import Any
 
 from satgonetem.models import GroundStation, Interface, Link, Node, Satellite
 from satgonetem.ports import ProcessRunner, default_runner
 from satgonetem.routing.base_daemon import RoutingContext, RoutingDaemon
 from satgonetem.routing.graph_shared_memory import GraphSharedMemory
+
+_READINESS_POLL_INTERVAL = 0.1
+_READINESS_PROBE_TIMEOUT = 0.5
+_OUTPUT_DRAIN_TIMEOUT = 1.0
+_MAX_BUFFERED_STDERR_LINES = 200
 
 
 def safe_int(x, default=0):
@@ -105,12 +113,18 @@ class P4Daemon(RoutingDaemon):
         p4_controller_path: str,
         shared_memory_name: str = "satgonetem_graph",
         process_runner: ProcessRunner | None = None,
+        controller_host: str = "127.0.0.1",
+        controller_port: int = 9559,
+        readiness_probe: Callable[[], bool] | None = None,
     ):
         super().__init__(topology_manager)
         self.graph_shared_memory: Any = None
         self.p4_controller_path = p4_controller_path
         self.shared_memory_name = shared_memory_name
         self._process_runner = process_runner or default_runner
+        self.controller_host = controller_host
+        self.controller_port = controller_port
+        self._readiness_probe = readiness_probe
         # Process handle for the controller
         self.p4_controller_process: subprocess.Popen | None = None
         # Logger for controller output and events
@@ -151,11 +165,43 @@ class P4Daemon(RoutingDaemon):
         self.logger.info("P4 controller started")
         return True
 
-    def start_p4_controller(self, timeout: int = 10) -> bool:
-        """Start the P4 controller script located in self.p4_controller_path.
+    def _drain_controller_output(
+        self,
+        threads: tuple[threading.Thread, threading.Thread],
+        stderr_lines: deque[str],
+    ) -> None:
+        """Join the output readers and report the stderr they collected.
 
-        Returns True if the process was launched and the gRPC port became available
-        within `timeout` seconds; otherwise False.
+        The reader threads own ``proc.stdout``/``proc.stderr``; the main thread
+        must never read those streams concurrently. Joining before inspecting
+        the buffer makes the failure output deterministic.
+        """
+        for thread in threads:
+            thread.join(timeout=_OUTPUT_DRAIN_TIMEOUT)
+        if stderr_lines:
+            self.logger.error("P4 controller stderr:\n%s", "\n".join(stderr_lines))
+
+    def _probe_controller_port(self) -> bool:
+        """Return True when the controller endpoint accepts a TCP connection."""
+        try:
+            with socket.create_connection(
+                (self.controller_host, self.controller_port),
+                timeout=_READINESS_PROBE_TIMEOUT,
+            ):
+                return True
+        except OSError:
+            return False
+
+    def start_p4_controller(self, timeout: float = 10) -> bool:
+        """Start the P4 controller and wait until its gRPC endpoint is ready.
+
+        Returns True only when the controller process is still running and the
+        readiness probe succeeds within ``timeout`` seconds. The default probe
+        opens a TCP connection to ``controller_host:controller_port``; pass
+        ``readiness_probe`` to the constructor for a different health check.
+        Returns False when the script is missing or not executable, the process
+        exits, or the endpoint does not become ready before the deadline. Any
+        started process is stopped on failure.
         """
         script_path = os.path.join(self.p4_controller_path, "run_controller.sh")
 
@@ -192,13 +238,19 @@ class P4Daemon(RoutingDaemon):
 
         self.p4_controller_process = proc
 
-        # Background threads to stream stdout/stderr into logger
-        def _stream_reader(stream, log_fn):
+        # Background threads stream stdout/stderr into the logger. stderr is
+        # also buffered so the main thread can report it after joining.
+        stderr_lines: deque[str] = deque(maxlen=_MAX_BUFFERED_STDERR_LINES)
+
+        def _stream_reader(stream, log_fn, sink=None):
             try:
                 for line in iter(stream.readline, ""):
                     if not line:
                         break
-                    log_fn(line.rstrip())
+                    text = line.rstrip()
+                    if sink is not None:
+                        sink.append(text)
+                    log_fn(text)
             except Exception:
                 pass
 
@@ -206,28 +258,40 @@ class P4Daemon(RoutingDaemon):
             target=_stream_reader, args=(proc.stdout, self.logger.info), daemon=True
         )
         t_err = threading.Thread(
-            target=_stream_reader, args=(proc.stderr, self.logger.error), daemon=True
+            target=_stream_reader,
+            args=(proc.stderr, self.logger.error, stderr_lines),
+            daemon=True,
         )
         t_out.start()
         t_err.start()
 
-        # Give the process a short moment to fail fast if something is wrong
-        time.sleep(0.5)
-        if proc.poll() is not None:
-            self.logger.error(
-                f"P4 controller process exited immediately with code {proc.returncode}"
-            )
-            # Read any remaining stderr if available
-            try:
-                err = proc.stderr.read() if proc.stderr is not None else None
-                if err:
-                    self.logger.error(err)
-            except Exception:
-                pass
-            self.stop_p4_controller()
-            return False
+        deadline = time.monotonic() + timeout
+        probe = self._readiness_probe or self._probe_controller_port
+        while True:
+            if proc.poll() is not None:
+                self.logger.error(
+                    f"P4 controller process exited during startup "
+                    f"with code {proc.returncode}"
+                )
+                self.stop_p4_controller()
+                self._drain_controller_output((t_out, t_err), stderr_lines)
+                return False
 
-        return True
+            if probe():
+                return True
+
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                self.logger.error(
+                    f"P4 controller endpoint "
+                    f"{self.controller_host}:{self.controller_port} did not become "
+                    f"ready within {timeout} seconds"
+                )
+                self.stop_p4_controller()
+                self._drain_controller_output((t_out, t_err), stderr_lines)
+                return False
+
+            time.sleep(min(_READINESS_POLL_INTERVAL, remaining))
 
     def is_p4_controller_running(self) -> bool:
         return (
@@ -257,14 +321,56 @@ class P4Daemon(RoutingDaemon):
             self.p4_controller_process = None
 
     def update(self, new_links: "list[Link]", max_workers: int = 4) -> None:
-        edges = []
+        """Export a snapshot of the active topology graph to shared memory.
 
-        for link in self.topology.links.values():
-            edge = build_edge_from_link(link)
-            edges.append(edge)
+        The snapshot contains only links that are active and not pending
+        removal, matching the graph used for route computation. If the daemon
+        is not initialized, or initialization failed and released the segment,
+        there is nothing to update: the call logs a warning and returns without
+        raising. When topology growth exceeds the segment capacity, the segment
+        is recreated with room for the new edges.
 
+        Args:
+            new_links: List of newly added links (unused; the export is a full
+                snapshot of the topology).
+            max_workers: Maximum number of worker threads (unused).
+        """
+        if self.graph_shared_memory is None:
+            self.logger.warning(
+                "P4 graph shared memory is not initialized; skipping graph update"
+            )
+            return
+
+        edges = [
+            build_edge_from_link(link)
+            for link in self.topology.links.values()
+            if link.is_active and not getattr(link, "to_remove", False)
+        ]
+
+        if self.graph_shared_memory.ensure_capacity(len(edges)):
+            self.logger.info(
+                "P4 graph shared memory resized to at least %d edges", len(edges)
+            )
         self.graph_shared_memory.write_edges(edges)
 
     def remove(self, node: "Node | None" = None, max_workers: int = 4) -> None:
+        """Tear down the controller and graph segment, or ignore a node scope.
+
+        P4Daemon uses one controller and one global graph segment for the whole
+        topology, so it cannot remove routes for a single node in isolation.
+        When ``node`` is provided, the request is a documented no-op with a
+        warning. When ``node`` is None, the controller is stopped and the owned
+        graph segment is released.
+
+        Args:
+            node: Unsupported per-node scope; only None is acted on.
+            max_workers: Maximum number of worker threads (unused).
+        """
+        if node is not None:
+            self.logger.warning(
+                "P4Daemon does not support per-node route removal; "
+                "call remove() without a node for full teardown"
+            )
+            return
         self.stop_p4_controller()
         self._release_graph_shared_memory()
