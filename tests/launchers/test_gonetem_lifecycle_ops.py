@@ -291,6 +291,20 @@ def test_close_project_reports_progress_and_closes_channel():
     assert launcher._channel is None
 
 
+def test_close_project_rejects_partial_node_close():
+    launcher = _new_launcher()
+    launcher._client = MagicMock()
+    launcher._request = netem_pb2.ProjectRequest(id="prj-1")
+    launcher._client.ProjectClose.return_value = [
+        netem_pb2.ProjectCloseMsg(code=netem_pb2.ProjectCloseMsg.NODE_COUNT, total=2),
+        netem_pb2.ProjectCloseMsg(code=netem_pb2.ProjectCloseMsg.NODE_CLOSE),
+    ]
+    launcher._channel = MagicMock()
+
+    with pytest.raises(RuntimeError, match="incomplete"):
+        launcher.close_project()
+
+
 def test_close_project_reports_error_and_completion_then_reraises(caplog):
     launcher = _new_launcher()
     launcher._client = MagicMock()
