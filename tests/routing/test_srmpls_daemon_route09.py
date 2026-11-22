@@ -210,6 +210,11 @@ class TestPerStepErrorCounting:
         topology.satellites = {0: sat}
         daemon._label_manager = MagicMock()
         daemon._label_manager.get_node_sid.return_value = 16000
+        entry = MagicMock()
+        entry.to_iproute2_command.return_value = (
+            "ip route replace 10.30.0.1/32 encap mpls 16000 via 10.0.0.2 dev eth1"
+        )
+        daemon.sr_lfib = {0: [entry]}
 
         errors = daemon._apply_sr_routes_to_satellites()
 
