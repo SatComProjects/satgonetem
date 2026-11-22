@@ -241,8 +241,10 @@ It is used by `start_gonetem()` after a failed launch and by
 `TopologyManager.force_stop_gonetem()`. When the project ID is empty,
 container cleanup is skipped rather than risking a host-wide match. The method
 is best-effort and returns `bool`: Docker and RPC failures are logged rather
-than raised, and `False` means at least one cleanup step failed (or there was
-nothing it could clean), so callers must not assume the project closed cleanly.
+than raised, and `False` means at least one cleanup step failed, so callers
+must not assume the project closed cleanly. It returns `True` when cleanup is
+confirmed, including when there was nothing to clean (no retained request or
+no matching containers).
 
 ## Using the launcher directly
 
