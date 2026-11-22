@@ -257,12 +257,36 @@ class P4Daemon(RoutingDaemon):
             self.p4_controller_process = None
 
     def update(self, new_links: "list[Link]", max_workers: int = 4) -> None:
-        edges = []
+        """Export a snapshot of the active topology graph to shared memory.
 
-        for link in self.topology.links.values():
-            edge = build_edge_from_link(link)
-            edges.append(edge)
+        The snapshot contains only links that are active and not pending
+        removal, matching the graph used for route computation. If the daemon
+        is not initialized, or initialization failed and released the segment,
+        there is nothing to update: the call logs a warning and returns without
+        raising. When topology growth exceeds the segment capacity, the segment
+        is recreated with room for the new edges.
 
+        Args:
+            new_links: List of newly added links (unused; the export is a full
+                snapshot of the topology).
+            max_workers: Maximum number of worker threads (unused).
+        """
+        if self.graph_shared_memory is None:
+            self.logger.warning(
+                "P4 graph shared memory is not initialized; skipping graph update"
+            )
+            return
+
+        edges = [
+            build_edge_from_link(link)
+            for link in self.topology.links.values()
+            if link.is_active and not getattr(link, "to_remove", False)
+        ]
+
+        if self.graph_shared_memory.ensure_capacity(len(edges)):
+            self.logger.info(
+                "P4 graph shared memory resized to at least %d edges", len(edges)
+            )
         self.graph_shared_memory.write_edges(edges)
 
     def remove(self, node: "Node | None" = None, max_workers: int = 4) -> None:

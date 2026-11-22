@@ -7,15 +7,19 @@ post-launch grace sleep) are patched so the tests never launch a real process.
 from __future__ import annotations
 
 import io
+import logging
 import os
 import subprocess
 from types import SimpleNamespace
 from unittest.mock import MagicMock
+from uuid import uuid4
 
 import pytest
 
+from satgonetem.models.interface import Interface
 from satgonetem.routing import p4_daemon
 from satgonetem.routing.p4_daemon import P4Daemon, safe_int, safe_ip
+from tests.support import make_link, make_satellite
 
 pytestmark = pytest.mark.unit
 
@@ -47,6 +51,18 @@ class FakeProcess:
         if self._wait_errors:
             raise self._wait_errors.pop(0)
         return self.returncode
+
+
+def _make_export_link(source, target):
+    """Build a link that can be exported without touching a real node."""
+    link = make_link(source, target)
+    link.peer_interfaces = [
+        Interface(name=f"{source.name}.{target.id}"),
+        Interface(name=f"{target.name}.{source.id}"),
+    ]
+    for iface in link.peer_interfaces:
+        iface.set_mac_address("")
+    return link
 
 
 def _patch_os(
@@ -344,3 +360,59 @@ def test_start_p4_controller_uses_injected_process_runner(
     assert daemon.start_p4_controller() is True
     assert runner.calls
     assert runner.calls[0][0] == [str(tmp_path / "controller" / "run_controller.sh")]
+
+
+def test_update_before_init_is_a_documented_noop(daemon, caplog):
+    assert daemon.graph_shared_memory is None
+
+    with caplog.at_level(logging.WARNING):
+        assert daemon.update([]) is None
+
+    assert "not initialized" in caplog.text
+    assert daemon.graph_shared_memory is None
+
+
+def test_update_exports_only_active_links_not_pending_removal(daemon, monkeypatch):
+    graph = MagicMock()
+    daemon.graph_shared_memory = graph
+    active = SimpleNamespace(is_active=True, to_remove=False, tag="active")
+    inactive = SimpleNamespace(is_active=False, to_remove=False, tag="inactive")
+    pending_removal = SimpleNamespace(is_active=True, to_remove=True, tag="pending")
+    daemon.topology.links = {0: active, 1: inactive, 2: pending_removal}
+    monkeypatch.setattr(p4_daemon, "build_edge_from_link", lambda link: link.tag)
+
+    daemon.update([])
+
+    assert graph.write_edges.call_args.args[0] == ["active"]
+
+
+def test_update_grows_shared_memory_when_links_exceed_init_capacity(
+    topology, tmp_path, monkeypatch
+):
+    name = f"satgonetem-test-p4-{os.getpid()}-{uuid4().hex}"
+    daemon = P4Daemon(topology, str(tmp_path / "controller"), shared_memory_name=name)
+    topology.links = {
+        0: _make_export_link(make_satellite("Sat0"), make_satellite("Sat1"))
+    }
+    monkeypatch.setattr(daemon, "start_p4_controller", lambda timeout=10: True)
+
+    try:
+        assert daemon.init() is True
+        graph = daemon.graph_shared_memory
+        assert graph.max_edges == 1
+
+        topology.links[1] = _make_export_link(
+            make_satellite("Sat2"), make_satellite("Sat3")
+        )
+        daemon.update([])
+
+        graph = daemon.graph_shared_memory
+        assert graph.max_edges >= 2
+        assert graph.header[0]["num_edges"] == 2
+        assert graph.header[0]["max_edges"] == graph.max_edges
+        assert {int(edge["src_name"]) for edge in graph.edges[:2]} == {0, 2}
+    finally:
+        graph = daemon.graph_shared_memory
+        if graph is not None:
+            graph.close()
+            graph.unlink()

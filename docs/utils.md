@@ -344,6 +344,15 @@ overridden with the `shared_memory_name` constructor argument. Re-initializing
 the daemon, failing to start the controller, or calling `remove()` closes and
 unlinks the owned segment.
 
+`P4Daemon.update()` exports only links that are active and not pending removal.
+It is a logged no-op before initialization (or after a failed initialization
+released the segment) instead of raising. When topology growth exceeds the
+segment capacity, the owner unlinks the old segment and creates a larger one
+under the same name, keeping the header `version` monotonic; consumers must
+reattach after observing the recreation. Calling `ensure_capacity()` on a
+read-only (non-owning) segment raises `ValueError` because a reader cannot
+replace the owner's segment.
+
 ## Interactive terminal bridge
 
 `node_terminal_bridge.py` is a command-line helper, not an API. It lives in
