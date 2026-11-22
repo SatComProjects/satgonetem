@@ -190,7 +190,11 @@ def _attach_ground_object_domain(
         return
 
     domain = None
-    with contextlib.suppress(GroundObjectDomainNotFoundError):
+    # A simulation may hold several domains with the same identifier, for
+    # example the generic "public" domain and a "public" ground-station domain
+    # created for an earlier object. Ambiguity is not an error here: fall back
+    # to a compatible ground-station domain below.
+    with contextlib.suppress(GroundObjectDomainNotFoundError, ValueError):
         domain = simulation_manager.get_ground_object_domain(ground_object.domain)
 
     # The ownership ``domain`` string may resolve to a generic domain with no

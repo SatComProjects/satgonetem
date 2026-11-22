@@ -47,6 +47,7 @@ from satgonetem.services.mixins.traffic_testing import TrafficTestingMixin
 from satgonetem.services.topology_link_plan import ensure_inter_satellite_directions
 from satgonetem.traffic import PingConfig, PingFlow
 from satgonetem.utils.project_builder import (
+    _attach_ground_object_domain,
     add_custom_ground_station,
     create_and_load_simulation,
     create_custom_ground_station,
@@ -536,6 +537,7 @@ class TopologyManager(
                 longitude=ut_data["longitude"],
                 altitude=ut_data.get("altitude", 0),
             )
+            _attach_ground_object_domain(user_terminal, sim_manager)
             sim_manager.add_user_terminals(user_terminal)
 
         for pop_data in runtime_state.get("points_of_presence", []):
@@ -548,6 +550,7 @@ class TopologyManager(
                 longitude=pop_data["longitude"],
                 altitude=pop_data.get("altitude", 0),
             )
+            _attach_ground_object_domain(point_of_presence, sim_manager)
             sim_manager.add_point_of_presence(point_of_presence)
 
         from sat_com_model.models import InterSatelliteLinkDirection
