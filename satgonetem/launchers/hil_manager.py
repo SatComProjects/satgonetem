@@ -833,12 +833,26 @@ class HILManager:
             RuntimeError: If any link cannot be fully set up, so a failed
                 initial wiring is not reported as a successful start.
         """
-        for link in links:
-            if not self.setup_link(link):
-                raise RuntimeError(
-                    "HIL: failed to set up link "
-                    f"{link.source.name}<->{link.target.name}"
-                )
+        wired: list = []
+        try:
+            for link in links:
+                if not self.setup_link(link):
+                    raise RuntimeError(
+                        "HIL: failed to set up link "
+                        f"{link.source.name}<->{link.target.name}"
+                    )
+                wired.append(link)
+        except BaseException:
+            for wired_link in reversed(wired):
+                try:
+                    self.teardown_link(wired_link)
+                except Exception:  # noqa: BLE001 - preserve the setup error
+                    logging.exception(
+                        "HIL: failed to roll back link %s<->%s",
+                        wired_link.source.name,
+                        wired_link.target.name,
+                    )
+            raise
 
     def teardown_all(self) -> None:
         """

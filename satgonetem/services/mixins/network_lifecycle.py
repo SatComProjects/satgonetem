@@ -91,8 +91,19 @@ class NetworkLifecycleMixin:
             if hil is not None:
                 hil.wire_links(hil_links)
         except Exception:
-            # Startup failed after the project may have been opened. Close it
-            # best-effort and reset state so a retry does not leak a project.
+            # Startup failed after the project may have been opened. Tear down
+            # any HIL bridges/veths wired before the failure so the physical
+            # hardware is not left enslaved to a bridge with no satellite.
+            if hil is not None:
+                try:
+                    hil.teardown_all()
+                except Exception as hil_exc:  # noqa: BLE001 - preserve primary error
+                    logging.error(
+                        "Failed to tear down HIL links after startup failure: %s",
+                        hil_exc,
+                    )
+            # Close it best-effort and reset state so a retry does not leak a
+            # project.
             cleanup_failed = False
             try:
                 cleanup_confirmed = launcher.force_close_project() is True

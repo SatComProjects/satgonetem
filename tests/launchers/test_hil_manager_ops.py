@@ -1295,6 +1295,25 @@ def test_wire_links_raises_when_setup_fails(monkeypatch: pytest.MonkeyPatch) -> 
 # wire_links / teardown_all
 
 
+def test_wire_links_rolls_back_links_wired_before_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = HILManager({"Gnd0": "eth1"})
+    links = [
+        _link("Sat1", "Gnd0", src_pid=111),
+        _link("Sat2", "Gnd0", src_pid=222),
+    ]
+    setup = MagicMock(side_effect=[True, False])
+    teardown = MagicMock()
+    monkeypatch.setattr(manager, "setup_link", setup)
+    monkeypatch.setattr(manager, "teardown_link", teardown)
+
+    with pytest.raises(RuntimeError, match="failed to set up link Sat2<->Gnd0"):
+        manager.wire_links(links)
+
+    teardown.assert_called_once_with(links[0])
+
+
 def test_wire_links_sets_up_every_link(monkeypatch: pytest.MonkeyPatch) -> None:
     manager = HILManager({"Gnd0": "eth1"})
     links = [

@@ -104,6 +104,8 @@ def test_wiring_failure_closes_project_and_resets_state(failing_step):
         with pytest.raises(RuntimeError, match=expected_error):
             topology.start_gonetem()
 
+    if failing_step == "hil_wire_links":
+        topology.hil_manager.teardown_all.assert_called_once_with()
     launcher.force_close_project.assert_called_once_with()
     assert_clean_failure(topology)
 
