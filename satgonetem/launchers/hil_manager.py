@@ -28,9 +28,10 @@ TopologyManager calls teardown_link on the old link and setup_link on the
 new one. HILManager tears down the bridge, rebuilds it with the same
 hardware interface enslaved to the new satellite's veth.
 
-PID resolution: satellite container PIDs are read from node.container_pid,
-which any launcher sets during start_containers. HILManager does not
-depend on any launcher class internally.
+PID resolution: satellite container PIDs are resolved from node.container
+at call time and refreshed into node.container_pid. When no container is
+attached, node.container_pid (set during start_containers) is used as a
+fallback. HILManager does not depend on any launcher class internally.
 
 Privileges required:
   CAP_SYS_ADMIN (setns into container namespaces, nsenter)
@@ -113,8 +114,10 @@ class HILManager:
       - Calling HILManager.wire_links(), setup_link(), teardown_link(),
         update_link(), and teardown_all() for HIL-managed links.
 
-    Satellite container PIDs are resolved from node.container_pid, which is
-    set by any launcher during start_containers. No launcher reference is
+    Satellite container PIDs are resolved from node.container at call time
+    and refreshed into node.container_pid, so a restarted container is not
+    mistaken for a stale PID. Without an attached container, the
+    launcher-populated node.container_pid is used. No launcher reference is
     held internally.
 
     Attributes:
@@ -256,6 +259,58 @@ class HILManager:
                     return modeled
 
         return self._gnd_capacity_kbps
+
+    def _resolve_sat_pid(self, sat) -> int | None:
+        """Return the satellite container's current network-namespace PID.
+
+        Reads ``node.container`` at call time and refreshes
+        ``node.container_pid`` so a restarted container (possibly with a
+        recycled PID) is not confused with a stale snapshot. Without an
+        attached container, the launcher-populated ``container_pid`` is used
+        as a fallback.
+
+        Args:
+            sat: Satellite node endpoint of the HIL link.
+
+        Returns:
+            The current PID, or None when the container is missing, stopped,
+            or its state cannot be refreshed.
+        """
+        container = getattr(sat, "container", None)
+        attrs = getattr(container, "attrs", None) if container is not None else None
+        if isinstance(attrs, dict):
+            reload = getattr(container, "reload", None)
+            if callable(reload):
+                try:
+                    reload()
+                except Exception as exc:
+                    logging.error(
+                        "HIL: could not refresh container state for %s: %s",
+                        sat.name,
+                        exc,
+                    )
+                    return None
+                attrs = getattr(container, "attrs", None)
+                if not isinstance(attrs, dict):
+                    logging.error(
+                        "HIL: no container state for %s after refresh", sat.name
+                    )
+                    return None
+
+            state = attrs.get("State") or {}
+            pid = self._positive_int(state.get("Pid"))
+            if state.get("Running") is False or not pid:
+                logging.error(
+                    "HIL: container for %s is not running (pid=%r)",
+                    sat.name,
+                    state.get("Pid"),
+                )
+                return None
+            sat.container_pid = pid
+            return pid
+
+        pid = self._positive_int(getattr(sat, "container_pid", 0))
+        return pid or None
 
     def _create_veth(self, sat_name: str, sat_pid: int, gnd_id: int) -> bool:
         """
@@ -558,8 +613,9 @@ class HILManager:
         Called by TopologyManager for HIL ground station links during
         initial wiring (wire_links) and on handover arrival (add_link).
 
-        Requires node.container_pid to be set on the satellite node,
-        which any launcher sets during start_containers.
+        Requires a running satellite container: the PID is resolved from
+        node.container at call time (refreshing node.container_pid), or
+        falls back to node.container_pid when no container is attached.
 
         Args:
             link: A GroundStationLink whose ground station endpoint is
@@ -567,7 +623,7 @@ class HILManager:
         """
         gnd = self._get_hil_gnd(link)
         sat = self._get_sat(link)
-        sat_pid = int(getattr(sat, "container_pid", 0) or 0)
+        sat_pid = self._resolve_sat_pid(sat)
 
         if not sat_pid:
             logging.error(
@@ -603,7 +659,7 @@ class HILManager:
         """
         gnd = self._get_hil_gnd(link)
         sat = self._get_sat(link)
-        sat_pid = int(getattr(sat, "container_pid", 0) or 0)
+        sat_pid = self._resolve_sat_pid(sat)
 
         self._teardown_bridge(gnd.name)
 
@@ -630,7 +686,7 @@ class HILManager:
         """
         gnd = self._get_hil_gnd(link)
         sat = self._get_sat(link)
-        sat_pid = int(getattr(sat, "container_pid", 0) or 0)
+        sat_pid = self._resolve_sat_pid(sat)
         sat_iface = f"eth{gnd.id}"
 
         if not sat_pid:

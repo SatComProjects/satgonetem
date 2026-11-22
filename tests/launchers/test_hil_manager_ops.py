@@ -822,6 +822,103 @@ def test_delete_sat_veth_logs_debug_on_success(
 # setup_link lifecycle
 
 
+def _tracked_container(pid: int, *, running: bool = True) -> SimpleNamespace:
+    """Container stand-in exposing the docker ``attrs`` state dict."""
+    container = SimpleNamespace(
+        attrs={"State": {"Running": running, "Pid": pid}},
+    )
+    container.reload = MagicMock()
+    return container
+
+
+def test_setup_link_refreshes_stale_pid_from_container(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = HILManager({"Gnd0": "eth1"})
+    link = _link("Sat1", "Gnd0", src_pid=1111)
+    container = _tracked_container(1111)
+    container.reload.side_effect = lambda: setattr(
+        container, "attrs", {"State": {"Running": True, "Pid": 2222}}
+    )
+    link.source.container = container
+    create_veth = MagicMock(return_value=False)
+    monkeypatch.setattr(manager, "_create_veth", create_veth)
+
+    manager.setup_link(link)
+
+    container.reload.assert_called_once_with()
+    create_veth.assert_called_once_with("Sat1", 2222, 0)
+    assert link.source.container_pid == 2222
+
+
+def test_setup_link_fails_when_container_is_not_running(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    manager = HILManager({"Gnd0": "eth1"})
+    link = _link("Sat1", "Gnd0", src_pid=1111)
+    link.source.container = _tracked_container(1111, running=False)
+    create_veth = MagicMock()
+    monkeypatch.setattr(manager, "_create_veth", create_veth)
+    caplog.set_level(logging.ERROR)
+
+    manager.setup_link(link)
+
+    create_veth.assert_not_called()
+    assert "HIL: container for Sat1 is not running" in caplog.text
+
+
+def test_setup_link_fails_when_container_reload_fails(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    manager = HILManager({"Gnd0": "eth1"})
+    link = _link("Sat1", "Gnd0", src_pid=1111)
+    container = _tracked_container(1111)
+    container.reload.side_effect = RuntimeError("container gone")
+    link.source.container = container
+    create_veth = MagicMock()
+    monkeypatch.setattr(manager, "_create_veth", create_veth)
+    caplog.set_level(logging.ERROR)
+
+    manager.setup_link(link)
+
+    create_veth.assert_not_called()
+    assert (
+        "HIL: could not refresh container state for Sat1: container gone" in caplog.text
+    )
+
+
+def test_teardown_link_uses_refreshed_pid_for_veth_delete(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = HILManager({"Gnd0": "eth1"})
+    link = _link("Sat1", "Gnd0", src_pid=1111)
+    link.source.container = _tracked_container(3333)
+    teardown_bridge = MagicMock()
+    delete_veth = MagicMock()
+    monkeypatch.setattr(manager, "_teardown_bridge", teardown_bridge)
+    monkeypatch.setattr(manager, "_delete_sat_veth", delete_veth)
+
+    manager.teardown_link(link)
+
+    delete_veth.assert_called_once_with("Sat1", 3333, 0)
+    assert link.source.container_pid == 3333
+
+
+def test_update_link_uses_refreshed_pid_for_tc(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = HILManager({"Gnd0": "eth1"})
+    link = _link("Sat1", "Gnd0", src_pid=1111)
+    link.source.container = _tracked_container(4444)
+    tc = MagicMock()
+    monkeypatch.setattr(hil_manager, "_run_tc_batch", tc)
+
+    manager.update_link(link)
+
+    assert tc.call_args.args[0] == 4444
+    assert link.source.container_pid == 4444
+
+
 def test_setup_link_logs_error_and_returns_without_pid(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
