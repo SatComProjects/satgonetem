@@ -127,7 +127,7 @@ class TestRuntimeStateShape:
 
 
 class TestPayloadKeys:
-    def test_simulation_property_payload_has_no_runtime_state(self, tmp_path):
+    def test_simulation_property_payload_adds_only_a_runtime_overlay(self, tmp_path):
         topology = TopologyManager.from_file(TEST_TOPOLOGY)
         path = tmp_path / "project.json"
 
@@ -138,7 +138,9 @@ class TestPayloadKeys:
             "simulation_property",
             "network_config",
             "ground_files",
+            "runtime_overlay",
         }
+        assert "runtime_state" not in payload
         assert isinstance(payload["simulation_property"], dict)
         assert isinstance(payload["ground_files"], dict)
 
@@ -192,6 +194,8 @@ class TestTolerantRestore:
                 "jitter": 0,
                 "admin_up": True,
                 "use_budget": False,
+                "disabled": False,
+                "is_active": True,
             }
         ]
         links["inter_satellite"].append(
