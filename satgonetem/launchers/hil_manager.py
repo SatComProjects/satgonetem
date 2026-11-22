@@ -366,6 +366,9 @@ class HILManager:
         try:
             with IPRoute() as ipr:
                 ipr.link("add", ifname=br_name, kind="bridge")
+                # Track the bridge as soon as it exists. A later failure must
+                # be able to delete it, or retry deleting it at teardown.
+                self._hil_bridges[gnd_name] = br_name
                 br_links = ipr.link("get", ifname=br_name)
                 br_idx = br_links[0]["index"]
                 ipr.link("set", index=br_idx, state="up")
@@ -377,7 +380,6 @@ class HILManager:
                 ipr.link("set", index=hw_links[0]["index"], master=br_idx)
                 ipr.link("set", index=hw_links[0]["index"], state="up")
 
-            self._hil_bridges[gnd_name] = br_name
             self._hil_veths[gnd_name] = host_veth
             logging.info(
                 "HIL: bridge %s up for %s (veth=%s hw=%s)",
@@ -390,6 +392,9 @@ class HILManager:
 
         except Exception as exc:
             logging.error("HIL: failed to create bridge for %s: %s", gnd_name, exc)
+            # Delete the partial bridge. If that also fails, _teardown_bridge
+            # keeps it tracked so a later teardown can retry.
+            self._teardown_bridge(gnd_name)
             return False
 
     def _apply_qos(
@@ -458,10 +463,10 @@ class HILManager:
         Args:
             gnd_name: Ground station node name (e.g. "Gnd0").
         """
-        br_name = self._hil_bridges.pop(gnd_name, None)
-        self._hil_veths.pop(gnd_name, None)
+        br_name = self._hil_bridges.get(gnd_name)
 
         if not br_name:
+            self._hil_veths.pop(gnd_name, None)
             return
 
         try:
@@ -471,7 +476,12 @@ class HILManager:
                     ipr.link("del", index=br_links[0]["index"])
             logging.info("HIL: bridge %s torn down for %s", br_name, gnd_name)
         except Exception as exc:
+            # Keep the tracking entry: a failed delete must be retryable.
             logging.error("HIL: failed to teardown bridge %s: %s", br_name, exc)
+            return
+
+        self._hil_bridges.pop(gnd_name, None)
+        self._hil_veths.pop(gnd_name, None)
 
     def _delete_sat_veth(self, sat_name: str, sat_pid: int, gnd_id: int) -> None:
         """
@@ -538,6 +548,9 @@ class HILManager:
         if not self._create_veth(sat.name, sat_pid, gnd.id):
             return
         if not self._create_bridge(gnd.name, gnd.id):
+            # The bridge failed; remove the veth pair created above rather
+            # than leaking it until container teardown.
+            self._delete_sat_veth(sat.name, sat_pid, gnd.id)
             return
 
         delay_ms = max(int(link.delay), 1)

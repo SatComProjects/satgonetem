@@ -431,6 +431,64 @@ def test_create_bridge_returns_false_and_leaves_state_untracked(
     assert "HIL: failed to create bridge for Gnd0: bridge add failed" in caplog.text
 
 
+def _partial_bridge_body_iproute() -> MagicMock:
+    """IPRoute that creates the bridge but fails to enslave the hardware iface."""
+    indexes = {"brhil0": 30, "hil0": 31, "eth1": 32}
+
+    def link(action, **kwargs):
+        if action == "get":
+            index = indexes.get(kwargs.get("ifname"))
+            return [{"index": index}] if index is not None else []
+        if action == "set" and kwargs.get("index") == 32:
+            raise RuntimeError("attach failed")
+        return None
+
+    ipr = MagicMock()
+    ipr.__enter__.return_value = ipr
+    ipr.__exit__.return_value = False
+    ipr.link.side_effect = link
+    return ipr
+
+
+def test_create_bridge_rolls_back_partial_bridge_when_attach_fails(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    manager = HILManager({"Gnd0": "eth1"})
+    body_ipr = _partial_bridge_body_iproute()
+    cleanup_ipr = _fake_iproute({"brhil0": 30})
+    monkeypatch.setattr(
+        hil_manager, "IPRoute", MagicMock(side_effect=[body_ipr, cleanup_ipr])
+    )
+    caplog.set_level(logging.ERROR)
+
+    assert manager._create_bridge("Gnd0", 0) is False
+
+    # The bridge created before the failure must be deleted again.
+    cleanup_ipr.link.assert_any_call("get", ifname="brhil0")
+    cleanup_ipr.link.assert_any_call("del", index=30)
+    assert manager._hil_bridges == {}
+    assert manager._hil_veths == {}
+    assert "HIL: failed to create bridge for Gnd0: attach failed" in caplog.text
+
+
+def test_create_bridge_keeps_partial_bridge_tracked_when_rollback_fails(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    manager = HILManager({"Gnd0": "eth1"})
+    body_ipr = _partial_bridge_body_iproute()
+    cleanup_ipr = _fake_iproute({}, fail=RuntimeError("delete failed"))
+    monkeypatch.setattr(
+        hil_manager, "IPRoute", MagicMock(side_effect=[body_ipr, cleanup_ipr])
+    )
+    caplog.set_level(logging.ERROR)
+
+    assert manager._create_bridge("Gnd0", 0) is False
+
+    # The partial bridge stays tracked so a later teardown can retry.
+    assert manager._hil_bridges == {"Gnd0": "brhil0"}
+    assert "HIL: failed to teardown bridge brhil0: delete failed" in caplog.text
+
+
 # _apply_qos
 
 
@@ -460,7 +518,7 @@ def test_apply_qos_warns_when_tc_fails(
 # _teardown_bridge
 
 
-def test_teardown_bridge_logs_error_and_clears_tracking(
+def test_teardown_bridge_logs_error_and_keeps_tracking_for_retry(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     manager = HILManager({"Gnd0": "eth1"})
@@ -472,9 +530,25 @@ def test_teardown_bridge_logs_error_and_clears_tracking(
 
     manager._teardown_bridge("Gnd0")
 
+    # A failed delete must remain tracked so teardown can be retried.
+    assert manager._hil_bridges == {"Gnd0": "brhil0"}
+    assert manager._hil_veths == {"Gnd0": "hil0"}
+    assert "HIL: failed to teardown bridge brhil0: delete failed" in caplog.text
+
+
+def test_teardown_bridge_retry_clears_tracking_after_delete_succeeds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = HILManager({"Gnd0": "eth1"})
+    manager._hil_bridges["Gnd0"] = "brhil0"
+    manager._hil_veths["Gnd0"] = "hil0"
+    ipr = _fake_iproute({"brhil0": 40})
+    monkeypatch.setattr(hil_manager, "IPRoute", MagicMock(return_value=ipr))
+
+    manager._teardown_bridge("Gnd0")
+
     assert manager._hil_bridges == {}
     assert manager._hil_veths == {}
-    assert "HIL: failed to teardown bridge brhil0: delete failed" in caplog.text
 
 
 # _delete_sat_veth
@@ -515,14 +589,18 @@ def test_setup_link_stops_when_bridge_creation_fails(
     create_veth = MagicMock(return_value=True)
     create_bridge = MagicMock(return_value=False)
     apply_qos = MagicMock()
+    delete_veth = MagicMock()
     monkeypatch.setattr(manager, "_create_veth", create_veth)
     monkeypatch.setattr(manager, "_create_bridge", create_bridge)
     monkeypatch.setattr(manager, "_apply_qos", apply_qos)
+    monkeypatch.setattr(manager, "_delete_sat_veth", delete_veth)
 
     manager.setup_link(link)
 
     create_veth.assert_called_once_with("Sat1", 4321, 0)
     create_bridge.assert_called_once_with("Gnd0", 0)
+    # The veth pair created before the bridge failure must be rolled back.
+    delete_veth.assert_called_once_with("Sat1", 4321, 0)
     apply_qos.assert_not_called()
 
 
