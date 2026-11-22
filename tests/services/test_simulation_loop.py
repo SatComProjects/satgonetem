@@ -2,6 +2,7 @@
 
 import threading
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -100,3 +101,67 @@ def test_concurrent_start_stop_does_not_hang():
     assert not thread.is_alive(), "start/stop deadlocked"
     assert errors == []
     harness.stop()
+
+
+class _FakeSimulationManager:
+    """Record link removals without touching a real sat_com simulation."""
+
+    def __init__(self) -> None:
+        self.removed: list = []
+
+    def remove_inter_satellite_link(self, link) -> None:
+        self.removed.append(link)
+
+    def remove_ground_station_link(self, link) -> None:
+        self.removed.append(link)
+
+    def remove_user_terminal_link(self, link) -> None:
+        self.removed.append(link)
+
+
+class LinkFailureHarness(SimulationLoopMixin):
+    """Minimal host for simulate_link_failure with an observed update call."""
+
+    def __init__(self) -> None:
+        self.project_name = "test"
+        self.update_time = 60
+        self.simulation_manager = _FakeSimulationManager()
+        self.updates = 0
+
+    def update_simulation(self, advance_timestep: bool = True) -> None:
+        self.updates += 1
+
+
+def _batch_link(link_type: str) -> SimpleNamespace:
+    return SimpleNamespace(
+        satcom_object=SimpleNamespace(type=link_type),
+        source=SimpleNamespace(name="Sat0"),
+        target=SimpleNamespace(name="Sat1"),
+    )
+
+
+def test_invalid_link_in_batch_leaves_earlier_links_untouched():
+    """Validation must cover the whole batch before any link is removed."""
+    harness = LinkFailureHarness()
+    valid = _batch_link("InterSatelliteLink")
+    invalid = _batch_link("UnsupportedLink")
+
+    with pytest.raises(AttributeError):
+        harness.simulate_link_failure([valid, invalid])
+
+    assert harness.simulation_manager.removed == []
+    assert harness.updates == 0
+
+
+def test_valid_batch_removes_every_link_and_updates_once():
+    harness = LinkFailureHarness()
+    first = _batch_link("InterSatelliteLink")
+    second = _batch_link("GroundStationLink")
+
+    harness.simulate_link_failure([first, second])
+
+    assert harness.simulation_manager.removed == [
+        first.satcom_object,
+        second.satcom_object,
+    ]
+    assert harness.updates == 1
