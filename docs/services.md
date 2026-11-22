@@ -600,6 +600,13 @@ GoNetEm frames pcap bytes in `CaptureSrvMsg.STDOUT` and always applies a
 deadline. See [Network Launchers](launchers.md#backend-controls) for the
 backend-level contract and unverified server semantics.
 
+`link.admin_up` and the persisted `disabled`/`is_active` flags survive a
+runtime-state save and are applied to the manager and its interfaces on load.
+`LinkAdd` has no admin flag, so a link restored with `admin_up=False` still
+comes up in the emulator until the first topology tick or explicit
+`set_link_state()` pushes the down state. Treat startup admin state as
+manager-local until that push happens.
+
 ## ControllerMixin
 
 The controller plane is an out-of-band management network and is independent

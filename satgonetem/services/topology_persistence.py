@@ -74,12 +74,15 @@ def _find_link_wrapper(manager: Any, satcom_link: object) -> Any | None:
 def _link_state_record(manager: Any, satcom_link: object) -> dict[str, Any]:
     """Return the persisted impairment/admin/capacity-mode state for a link."""
     wrapper = _find_link_wrapper(manager, satcom_link)
+    disabled = bool(getattr(satcom_link, "disabled", False))
     if wrapper is None:
         return {
             "loss": float(getattr(manager, "link_loss_percent", 0.0)),
             "jitter": int(getattr(manager, "link_jitter_ms", 0)),
             "admin_up": True,
             "use_budget": bool(getattr(manager, "use_budget", False)),
+            "disabled": disabled,
+            "is_active": not disabled,
         }
 
     return {
@@ -87,6 +90,8 @@ def _link_state_record(manager: Any, satcom_link: object) -> dict[str, Any]:
         "jitter": int(getattr(wrapper, "jitter", 0)),
         "admin_up": bool(getattr(wrapper, "admin_up", True)),
         "use_budget": bool(getattr(wrapper, "use_budget", False)),
+        "disabled": disabled,
+        "is_active": bool(getattr(wrapper, "is_active", not disabled)),
     }
 
 
@@ -170,6 +175,18 @@ def _apply_link_record(wrapper: Any, record: dict[str, Any]) -> None:
         use_budget = (
             bool(record["use_budget"]) if "use_budget" in record else wrapper.use_budget
         )
+        disabled = (
+            bool(record["disabled"])
+            if "disabled" in record
+            else bool(
+                getattr(getattr(wrapper, "satcom_object", None), "disabled", False)
+            )
+        )
+        is_active = (
+            bool(record["is_active"])
+            if "is_active" in record
+            else bool(getattr(wrapper, "is_active", not disabled))
+        )
     except (TypeError, ValueError) as exc:
         logging.warning(
             "Ignoring invalid persisted state for link %s--%s: %s",
@@ -183,6 +200,10 @@ def _apply_link_record(wrapper: Any, record: dict[str, Any]) -> None:
     wrapper.jitter = jitter
     wrapper.admin_up = admin_up
     wrapper.use_budget = use_budget
+    satcom = getattr(wrapper, "satcom_object", None)
+    if satcom is not None:
+        satcom.disabled = disabled
+    wrapper.is_active = is_active and not disabled
     wrapper.update_link_capacities()
     wrapper.update_interfaces_state()
 

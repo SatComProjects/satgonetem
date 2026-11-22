@@ -256,6 +256,8 @@ def test_runtime_state_roundtrip_preserves_link_impairments_and_addressability(
     link.jitter = 7
     link.admin_up = False
     link.use_budget = True
+    link.satcom_object.disabled = True
+    link.is_active = False
     topology.get_satellites()[0].set_addressable(True)
 
     path = tmp_path / "runtime_link_state.json"
@@ -269,6 +271,8 @@ def test_runtime_state_roundtrip_preserves_link_impairments_and_addressability(
     assert link_record["jitter"] == 7
     assert link_record["admin_up"] is False
     assert link_record["use_budget"] is True
+    assert link_record["disabled"] is True
+    assert link_record["is_active"] is False
 
     reloaded = TopologyManager.from_file(str(path))
     restored_link = next(
@@ -283,6 +287,8 @@ def test_runtime_state_roundtrip_preserves_link_impairments_and_addressability(
     assert restored_link.jitter == 7
     assert restored_link.admin_up is False
     assert restored_link.use_budget is True
+    assert restored_link.is_active is False
+    assert restored_link.satcom_object.disabled is True
     assert restored_link.peer_interfaces
     assert all(not interface.is_active for interface in restored_link.peer_interfaces)
 
