@@ -1041,8 +1041,13 @@ class SRMPLSDaemon(RoutingDaemon):
         for entry in new_entries:
             route_commands.append(entry.to_iproute2_command())
 
-        if route_commands:
-            batch_cmd = "set -e; " + "; ".join(route_commands)
+        stale, _ = _route_changes(
+            self._prev_sr_gs_routes.get(source_id, []), route_commands, set()
+        )
+        batch_lines = [_route_delete_command(line) for line in stale] + route_commands
+
+        if batch_lines:
+            batch_cmd = "set -e; " + "; ".join(batch_lines)
             try:
                 gs_src.execute_command(["sh", "-lc", batch_cmd])
                 self._prev_sr_gs_routes[source_id] = route_commands
