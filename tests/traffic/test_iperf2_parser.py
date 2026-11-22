@@ -133,6 +133,30 @@ def test_intervals_longer_than_one_second_are_not_summaries(tmp_path, capsys) ->
     assert _printed_total_mb(capsys) == pytest.approx(2.50, abs=0.01)
 
 
+def test_same_span_stream_rows_are_both_intervals(tmp_path, capsys) -> None:
+    """Two genuine 1-second stream rows must not lose one as a summary.
+
+    Both rows span the same interval, but the last one's transfer is its own
+    stream's bytes, not the sum of the other rows, so it is an interval.
+    """
+    log = _write_log(
+        tmp_path,
+        """\
+[  3]  0.00-1.00  sec  1.25 MBytes  10.50 Mbits/sec    0    sender
+[  4]  0.00-1.00  sec  2.50 MBytes  21.00 Mbits/sec    0    sender
+""",
+    )
+
+    _protocol, rows, summary = _parse(log.read_text().splitlines())
+    generate_iperf2_plots(str(log), use_tmp_dir=False)
+
+    assert len(rows) == 2
+    assert summary is None
+    assert {row["_label"] for row in rows} == {"Socket 3", "Socket 4"}
+    assert sum(row["bytes"] for row in rows) == pytest.approx(3.75 * _MIB)
+    assert _printed_total_mb(capsys) == pytest.approx(3.75, abs=0.01)
+
+
 def test_one_second_summary_row_is_detected(tmp_path, capsys) -> None:
     log = _write_log(
         tmp_path,

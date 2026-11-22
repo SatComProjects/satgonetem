@@ -30,15 +30,40 @@ _IPERF2_INTERVAL = re.compile(
 )
 
 
+_SUMMARY_TRANSFER_TOLERANCE = 0.01
+
+
+def _is_unlabelled_summary(rows: list[dict]) -> bool:
+    """Whether the last row summarises every preceding interval row.
+
+    iperf2 prints the single-stream final summary in the interval line format
+    without a ``[SUM]`` label. A genuine interval row of another stream can
+    share that final row's span, so the span is not sufficient: the last
+    row's transfer must also be approximately the sum of the preceding rows.
+    """
+    if len(rows) < 2:
+        return False
+    intervals = rows[:-1]
+    last = rows[-1]
+    if last["start"] != min(row["start"] for row in intervals):
+        return False
+    if last["end"] != max(row["end"] for row in intervals):
+        return False
+    interval_bytes = sum(row["bytes"] for row in intervals)
+    tolerance = max(interval_bytes * _SUMMARY_TRANSFER_TOLERANCE, 1.0)
+    return abs(last["bytes"] - interval_bytes) <= tolerance
+
+
 def _parse_iperf2_log(
     lines: list[str],
 ) -> tuple[str, list[dict], dict | None]:
     """Parse iperf2 interval lines into data rows and a final summary.
 
     A row is a summary when it is explicitly labelled ``[SUM]`` or when it is
-    the last interval row and spans the whole test (start of the first row to
-    end of the last row). Span length is never used as the discriminator:
-    iperf2 intervals may legitimately be longer than one second.
+    the last row, spans the union of the preceding interval rows, and its
+    transfer is approximately their sum. Span length alone is never used as
+    the discriminator: iperf2 intervals may legitimately be longer than one
+    second, and several streams can share a one-second span.
 
     Args:
         lines: iperf2 log lines (newlines optional).
@@ -84,16 +109,10 @@ def _parse_iperf2_log(
     if not parsed:
         return protocol, [], None
 
-    min_start = min(row["start"] for row in parsed)
-    max_end = max(row["end"] for row in parsed)
     sum_rows = [i for i, row in enumerate(parsed) if row["_stream"] == "SUM"]
     if sum_rows:
         summary_index = sum_rows[-1]
-    elif (
-        len(parsed) > 1
-        and parsed[-1]["start"] == min_start
-        and parsed[-1]["end"] == max_end
-    ):
+    elif _is_unlabelled_summary(parsed):
         summary_index = len(parsed) - 1
     else:
         summary_index = None
