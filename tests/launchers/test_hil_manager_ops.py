@@ -192,10 +192,12 @@ def test_create_veth_returns_false_when_setns_fails(
     assert sat_ns.closed is True
 
 
-def test_create_veth_returns_false_when_namespace_restore_fails(
+def test_create_veth_raises_and_rolls_back_when_namespace_restore_fails(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    manager = HILManager({"Gnd0": "eth1"})
+    runner = MagicMock()
+    runner.run.return_value = subprocess.CompletedProcess(args=[], returncode=0)
+    manager = HILManager({"Gnd0": "eth1"}, command_runner=runner)
     libc = MagicMock()
     libc.setns.side_effect = [0, -1, -1]
     monkeypatch.setattr(
@@ -214,7 +216,8 @@ def test_create_veth_returns_false_when_namespace_restore_fails(
     monkeypatch.setattr(hil_manager, "IPRoute", iproute_factory)
     caplog.set_level(logging.ERROR)
 
-    assert manager._create_veth("Sat1", 4242, 3) is False
+    with pytest.raises(RuntimeError, match="failed to restore host network namespace"):
+        manager._create_veth("Sat1", 4242, 3)
 
     assert libc.setns.call_args_list == [
         call(22, CLONE_NEWNET),
@@ -223,7 +226,99 @@ def test_create_veth_returns_false_when_namespace_restore_fails(
     ]
     # Host-side setup must not run after a failed restore.
     iproute_factory.assert_called_once()
+    # The created veth pair must be deleted so the failure leaves no residue.
+    runner.run.assert_called_once_with(
+        ["nsenter", "--net=/proc/4242/ns/net", "ip", "link", "delete", "eth3"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
     assert "failed to restore host network namespace" in caplog.text
+    assert saved_ns.closed is True
+    assert sat_ns.closed is True
+
+
+def test_create_veth_returns_false_and_rolls_back_when_sat_setup_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner = MagicMock()
+    runner.run.return_value = subprocess.CompletedProcess(args=[], returncode=0)
+    manager = HILManager({"Gnd0": "eth1"}, command_runner=runner)
+    libc = MagicMock()
+    libc.setns.return_value = 0
+    monkeypatch.setattr(
+        hil_manager, "ctypes", SimpleNamespace(CDLL=MagicMock(return_value=libc))
+    )
+
+    saved_ns = _FakeNsFile(11)
+    sat_ns = _FakeNsFile(22)
+    _install_fake_open(
+        monkeypatch,
+        {"/proc/self/ns/net": saved_ns, "/proc/4242/ns/net": sat_ns},
+    )
+
+    sat_ipr = MagicMock()
+    sat_ipr.__enter__.return_value = sat_ipr
+    sat_ipr.__exit__.return_value = False
+
+    def link(action, **kwargs):
+        if action == "add":
+            return None
+        raise RuntimeError("link lookup failed")
+
+    sat_ipr.link.side_effect = link
+    iproute_factory = MagicMock(side_effect=[sat_ipr])
+    monkeypatch.setattr(hil_manager, "IPRoute", iproute_factory)
+
+    assert manager._create_veth("Sat1", 4242, 3) is False
+
+    # The pair was added before the failure, so it must be removed again.
+    runner.run.assert_called_once_with(
+        ["nsenter", "--net=/proc/4242/ns/net", "ip", "link", "delete", "eth3"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    assert libc.setns.call_args_list == [
+        call(22, CLONE_NEWNET),
+        call(11, CLONE_NEWNET),
+    ]
+    assert saved_ns.closed is True
+    assert sat_ns.closed is True
+
+
+def test_create_veth_returns_false_and_rolls_back_when_host_setup_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner = MagicMock()
+    runner.run.return_value = subprocess.CompletedProcess(args=[], returncode=0)
+    manager = HILManager({"Gnd0": "eth1"}, command_runner=runner)
+    libc = MagicMock()
+    libc.setns.return_value = 0
+    monkeypatch.setattr(
+        hil_manager, "ctypes", SimpleNamespace(CDLL=MagicMock(return_value=libc))
+    )
+
+    saved_ns = _FakeNsFile(11)
+    sat_ns = _FakeNsFile(22)
+    _install_fake_open(
+        monkeypatch,
+        {"/proc/self/ns/net": saved_ns, "/proc/4242/ns/net": sat_ns},
+    )
+    sat_ipr = _fake_iproute({"eth3": 101})
+    host_ipr = _fake_iproute({}, fail=RuntimeError("host setup failed"))
+    iproute_factory = MagicMock(side_effect=[sat_ipr, host_ipr])
+    monkeypatch.setattr(hil_manager, "IPRoute", iproute_factory)
+
+    assert manager._create_veth("Sat1", 4242, 3) is False
+
+    runner.run.assert_called_once_with(
+        ["nsenter", "--net=/proc/4242/ns/net", "ip", "link", "delete", "eth3"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    assert iproute_factory.call_count == 2
     assert saved_ns.closed is True
     assert sat_ns.closed is True
 
