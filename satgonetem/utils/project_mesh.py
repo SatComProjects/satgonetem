@@ -290,11 +290,14 @@ def add_mesh_links(
             n = len(sorted_plane)
             if n < 2:
                 continue
-            seen_edges: set[frozenset[object]] = set()
+            seen_edges: set[frozenset[int]] = set()
             for i in range(n):
                 sat_a = sorted_plane[i][0]
                 sat_b = sorted_plane[(i + 1) % n][0]
-                edge = frozenset((sat_a, sat_b))
+                # Real sat_com satellites are unhashable (__eq__ without
+                # __hash__). Both objects stay alive in the plane, so their
+                # identities are stable for this ring.
+                edge = frozenset((id(sat_a), id(sat_b)))
                 if edge in seen_edges:
                     # A two-satellite "ring" wraps back onto the same pair;
                     # do not emit the reverse ISL as a second link.

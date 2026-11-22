@@ -55,6 +55,53 @@ def test_delete_sync_skips_unsupported_links_and_keeps_supported_ones():
     assert stale_link.to_remove is True
 
 
+def test_main_sync_clears_stale_removal_for_active_reappeared_link():
+    from unittest.mock import MagicMock
+
+    existing = SimpleNamespace(
+        satcom_object=SimpleNamespace(type="GroundStationLink"),
+        is_active=True,
+        to_add=False,
+        to_remove=True,
+        to_delete=True,
+        sync_distance_from_satcom_and_delay=MagicMock(),
+    )
+    satcom_link = SimpleNamespace(source="Sat0", destination="Gnd0", disabled=False)
+    dummy = DummySync(
+        [satcom_link],
+        links={frozenset(("Sat0", "Gnd0")): existing},
+    )
+
+    changes = dummy._sync_links()
+
+    assert existing.to_remove is False
+    assert existing.to_delete is False
+    assert changes["links_to_remove"] == []
+
+
+def test_main_sync_keeps_removal_for_inactive_link():
+    from unittest.mock import MagicMock
+
+    existing = SimpleNamespace(
+        satcom_object=SimpleNamespace(type="GroundStationLink"),
+        is_active=False,
+        to_add=False,
+        to_remove=True,
+        to_delete=True,
+        sync_distance_from_satcom_and_delay=MagicMock(),
+    )
+    satcom_link = SimpleNamespace(source="Sat0", destination="Gnd0", disabled=True)
+    dummy = DummySync(
+        [satcom_link],
+        links={frozenset(("Sat0", "Gnd0")): existing},
+    )
+
+    changes = dummy._sync_links()
+
+    assert existing.to_remove is True
+    assert changes["links_to_remove"] == [existing]
+
+
 def test_main_sync_refreshes_existing_satcom_object():
     from unittest.mock import MagicMock
 

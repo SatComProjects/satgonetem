@@ -412,6 +412,35 @@ def test_failing_tick_still_writes_artifacts(tmp_path):
     assert "tick boom" in (result.run_dir / "report.md").read_text()
 
 
+class _InterruptTopology(_FakeTopology):
+    def next_step(self):
+        raise KeyboardInterrupt()
+
+
+def test_interrupt_still_finalizes_artifacts_and_stops_backend(tmp_path):
+    topology = _InterruptTopology()
+    scenario = _scenario(tmp_path, traffic=[], events=[])
+
+    with pytest.raises(KeyboardInterrupt):
+        ExperimentRunner(
+            scenario,
+            topology_factory=lambda path, config: topology,
+            collector_factory=lambda topo: _Collector(),
+        ).run(output_dir=tmp_path / "run", live=True, realtime=False)
+
+    for name in (
+        "manifest.yaml",
+        "metrics.jsonl",
+        "flows.json",
+        "errors.json",
+        "summary.json",
+        "report.md",
+    ):
+        assert (tmp_path / "run" / name).is_file(), name
+    assert ("stop",) in topology.calls
+    assert ("stop_gonetem",) in topology.calls
+
+
 def test_reused_runner_resets_per_run_state(tmp_path):
     topology = _FakeTopology()
     link = SimpleNamespace(

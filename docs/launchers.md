@@ -287,19 +287,23 @@ channel, and clears the client. It is a no-op if no project is open.
    match every project on the host).
 3. `docker stop -t 0` and `docker rm` those containers.
 4. Call `ProjectClose`, drain the server-streaming response with a 10-second
-   deadline (`FORCE_CLOSE_TIMEOUT_SECONDS`), and close the channel. Draining
-   lets the server finish the close before the transport disappears. The RPC
-   is skipped when the client was already cleared by a failed
-   `close_project()`; container cleanup still runs from the retained project
-   id.
+   deadline (`FORCE_CLOSE_TIMEOUT_SECONDS`). Draining lets the server finish the
+   close before the transport disappears. The RPC is skipped when the client was
+   already cleared by a failed `close_project()`; container cleanup still runs
+   from the retained project id. On success the channel is closed; a failed
+   `ProjectClose` retains the transport so the RPC can be retried, while a
+   Docker-only failure closes it because only container cleanup remains.
 
 It is used by `start_gonetem()` after a failed launch and by
 `TopologyManager.force_stop_gonetem()`. When the project ID is empty,
-container cleanup is skipped rather than risking a host-wide match. The method
-is best-effort and returns `bool`: Docker and RPC failures are logged rather
-than raised, and `False` means at least one cleanup step failed, so callers
-must not assume the project closed cleanly. It returns `True` when cleanup is
-confirmed, including when there was nothing to clean (no retained request or
+container cleanup is skipped rather than risking a host-wide match, and the
+transport is closed because no retry can target a project. The method is
+best-effort and returns `bool`: Docker and RPC failures are logged rather than
+raised, and `False` means at least one cleanup step failed, so callers must not
+assume the project closed cleanly. A failed `ProjectClose` retains the request
+and transport for a retry; a Docker-only failure keeps the request (container
+cleanup can be retried) but closes the transport. It returns `True` when cleanup
+is confirmed, including when there was nothing to clean (no retained request or
 no matching containers).
 
 ## Using the launcher directly

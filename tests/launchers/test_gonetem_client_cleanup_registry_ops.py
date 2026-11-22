@@ -164,7 +164,7 @@ def test_force_close_without_request_only_closes_transport():
     client.ProjectClose.assert_not_called()
 
 
-def test_force_close_logs_project_close_failure_and_closes_transport(caplog):
+def test_force_close_logs_project_close_failure_and_retains_transport(caplog):
     launcher = _launcher()
     launcher._command_runner = MagicMock()
     launcher._command_runner.run.return_value = _completed()
@@ -177,10 +177,10 @@ def test_force_close_logs_project_close_failure_and_closes_transport(caplog):
         assert launcher.force_close_project() is False
 
     assert "force_close_project failed: close exploded" in caplog.text
-    connection.close.assert_called_once()
-    assert launcher._connection is None
-    assert launcher._channel is None
-    assert launcher._client is None
+    connection.close.assert_not_called()
+    assert launcher._connection is connection
+    assert launcher._client is not None
+    assert launcher._request is not None
 
 
 def test_force_close_drains_stream_before_closing_transport():
@@ -215,7 +215,7 @@ def test_force_close_drains_stream_before_closing_transport():
     assert launcher._channel is None
 
 
-def test_force_close_still_closes_transport_when_stream_raises(caplog):
+def test_force_close_retains_transport_when_stream_raises(caplog):
     launcher = _launcher()
     launcher._client = MagicMock()
     launcher._command_runner = MagicMock()
@@ -233,9 +233,9 @@ def test_force_close_still_closes_transport_when_stream_raises(caplog):
         launcher.force_close_project()
 
     assert "force_close_project failed: stream exploded" in caplog.text
-    channel.close.assert_called_once()
-    assert launcher._client is None
-    assert launcher._channel is None
+    channel.close.assert_not_called()
+    assert launcher._client is not None
+    assert launcher._channel is channel
 
 
 # Registry
