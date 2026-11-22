@@ -231,6 +231,13 @@ compatible alias. `network` returns the `IPv4Network` or `None` when no
 address is set. Interfaces compare and hash by `name`: equal names yield equal
 hashes, and interfaces can be used as set members or dict keys.
 
+**Rename before hashing.** Because the hash is derived from `name`, renaming an
+`Interface` after it has been inserted into a `set` or used as a `dict` key
+changes its hash and makes the existing entry unreachable. Finish renaming
+first, then insert. `InterfaceMgrMixin` follows this order: it renames each
+node's loopback to `lo_<node>` and only then appends it to the interface list,
+so do not rename loopbacks again after they have been indexed.
+
 `get_iname()` returns `"lo"` for loopbacks and `"eth" + name.split(".")[1]`
 otherwise. This is the name tools should use inside the container. A
 non-loopback name without the expected `<iface>.<id>` form raises

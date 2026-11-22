@@ -2,8 +2,9 @@
 
 These use only ``generate_iperf2_plots`` (the API that existed before the
 parser fix) and assert the values users see. They fail against the pre-fix
-implementation because it assumed decimal units, double-counted the final
-TCP summary row, and ignored KBytes/Gbits rows.
+implementation because it assumed decimal transfer units, double-counted the
+final TCP summary row, and ignored KBytes/Gbits rows. Transfer units are
+binary (MBytes), while bit rates stay decimal (Gbits/sec).
 """
 
 from __future__ import annotations
@@ -89,4 +90,5 @@ def test_public_kbytes_and_gbits_rows_are_recognized(tmp_path, capsys):
     assert total_match is not None
     assert float(total_match.group(1)) == pytest.approx(4.00, abs=0.01)
     assert throughput_match is not None
-    assert float(throughput_match.group(1)) == pytest.approx(1024.00, abs=0.01)
+    # 1 Gbit/s is 1000 Mbit/s; bit rates are decimal in iperf2 output.
+    assert float(throughput_match.group(1)) == pytest.approx(1000.00, abs=0.01)

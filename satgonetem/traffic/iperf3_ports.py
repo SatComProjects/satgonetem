@@ -66,7 +66,12 @@ class _Iperf3PortAllocator:
         Raises:
             RuntimeError: If every port in the range is already in use.
         """
-        with self._lock:
+        # A plain allocator can be installed in place of the pool by tests or
+        # embedders. Taking the reconfiguration lock here keeps an allocation
+        # from racing the in-use snapshot and rebind in
+        # set_iperf3_port_range(). The lock is reentrant, so the pool's own
+        # allocate() can hold it while delegating here.
+        with _RECONFIG_LOCK, self._lock:
             span = self._max_port - self._base_port + 1
             for _ in range(span):
                 port = self._next_port
@@ -82,7 +87,7 @@ class _Iperf3PortAllocator:
 
     def release(self, port: int) -> None:
         """Return *port* to the pool. Idempotent for unknown ports."""
-        with self._lock:
+        with _RECONFIG_LOCK, self._lock:
             self._in_use.discard(port)
 
     @property
@@ -173,6 +178,24 @@ class _Iperf3PortPool:
 
 
 _IPERF3_PORT_ALLOCATOR: _Iperf3PortPool | _Iperf3PortAllocator = _Iperf3PortPool()
+
+
+def _allocate_port() -> int:
+    """Reserve a port from the active allocator under the reconfiguration lock.
+
+    Resolving the process-wide allocator and allocating from it in one
+    critical section is what keeps a concurrent range change from rebinding
+    the pool between the two steps; a bare
+    ``_IPERF3_PORT_ALLOCATOR.allocate()`` could otherwise use the old pool.
+    """
+    with _RECONFIG_LOCK:
+        return _IPERF3_PORT_ALLOCATOR.allocate()
+
+
+def _release_port(port: int) -> None:
+    """Release a port to the active allocator under the reconfiguration lock."""
+    with _RECONFIG_LOCK:
+        _IPERF3_PORT_ALLOCATOR.release(port)
 
 
 def set_iperf3_port_range(base_port: int, max_port: int) -> None:

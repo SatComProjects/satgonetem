@@ -12,10 +12,13 @@ import importlib.util
 import threading
 import time
 from types import ModuleType
+from unittest.mock import MagicMock
 
 import pytest
 
 import satgonetem.traffic.iperf3_ports as iperf3_ports
+from satgonetem.traffic.iperf3_config import Iperf3Config
+from satgonetem.traffic.iperf3_flow import FlowStatus, Iperf3Flow
 from satgonetem.traffic.iperf3_ports import (
     _Iperf3PortAllocator,
     get_iperf3_port_range,
@@ -102,3 +105,86 @@ def test_reconfiguration_cannot_race_with_allocation(monkeypatch) -> None:
     assert reconfigured.is_set()
     assert allocated == [7000]
     assert get_iperf3_port_range() == (7000, 7000)
+
+
+def _hold_reconfiguration_lock():
+    """Hold the reconfiguration lock in a thread until the returned event is set."""
+    held = threading.Event()
+    proceed = threading.Event()
+
+    def hold() -> None:
+        with iperf3_ports._RECONFIG_LOCK:
+            held.set()
+            assert proceed.wait(2.0), "test did not release the reconfiguration lock"
+
+    thread = threading.Thread(target=hold)
+    thread.start()
+    assert held.wait(2.0), "test could not acquire the reconfiguration lock"
+    return thread, proceed
+
+
+def test_plain_allocator_allocation_waits_for_reconfiguration() -> None:
+    """A plain allocator's allocate must not escape a concurrent pool swap."""
+    allocator = _Iperf3PortAllocator(base_port=5201, max_port=5201)
+    holder, proceed = _hold_reconfiguration_lock()
+    allocated: list[int] = []
+    allocate_thread = threading.Thread(
+        target=lambda: allocated.append(allocator.allocate())
+    )
+
+    try:
+        allocate_thread.start()
+        time.sleep(0.05)
+        assert allocate_thread.is_alive(), (
+            "allocation ran while reconfiguration was active"
+        )
+    finally:
+        proceed.set()
+        holder.join(timeout=2.0)
+        allocate_thread.join(timeout=2.0)
+
+    assert allocated == [5201]
+
+
+def test_plain_allocator_release_waits_for_reconfiguration() -> None:
+    """A plain allocator's release must not race the in-use snapshot."""
+    allocator = _Iperf3PortAllocator(base_port=5201, max_port=5201)
+    allocator.allocate()
+    holder, proceed = _hold_reconfiguration_lock()
+    release_thread = threading.Thread(target=lambda: allocator.release(5201))
+
+    try:
+        release_thread.start()
+        time.sleep(0.05)
+        assert release_thread.is_alive(), "release ran while reconfiguration was active"
+        assert allocator.in_use_ports == {5201}
+    finally:
+        proceed.set()
+        holder.join(timeout=2.0)
+        release_thread.join(timeout=2.0)
+
+    assert allocator.in_use_ports == set()
+
+
+def test_stop_during_delay_does_not_leave_a_port_reserved(monkeypatch) -> None:
+    """A flow cancelled before its delay elapses must not exhaust the pool."""
+    monkeypatch.setattr(
+        iperf3_ports,
+        "_IPERF3_PORT_ALLOCATOR",
+        _Iperf3PortAllocator(base_port=5201, max_port=5201),
+    )
+    node = MagicMock()
+    node.loopback.ipv4 = "10.0.0.1"
+    flow = Iperf3Flow(node, node, Iperf3Config(duration=1), delay=30.0)
+
+    flow.start()
+    assert flow._port is None
+    assert iperf3_ports._IPERF3_PORT_ALLOCATOR.in_use_ports == set()
+
+    flow.stop()
+
+    assert flow.status() == FlowStatus.ERROR
+    assert iperf3_ports._IPERF3_PORT_ALLOCATOR.in_use_ports == set()
+    # A leaked reservation would make this reconfiguration fail.
+    set_iperf3_port_range(7000, 7001)
+    assert get_iperf3_port_range() == (7000, 7001)

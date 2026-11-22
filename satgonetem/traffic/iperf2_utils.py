@@ -10,12 +10,31 @@ import matplotlib.pyplot as plt
 
 from satgonetem.ports import default_runner
 
-# iperf2 prints binary units: 1 MBytes = 2**20 bytes and 1 Mbits/sec =
-# 2**20 bits/sec. Both labels are scaled consistently for display below.
+# iperf2 prints transfer sizes in binary units (1 MBytes = 2**20 bytes) but
+# bit rates in decimal units (1 Mbits/sec = 1e6 bit/s): the label differs
+# even though both are printed with the same K/M/G prefixes.
 _BYTES_PER_MIB = 1024 * 1024
-_BITS_PER_MIB = 1024 * 1024
+_BITS_PER_MEGABIT = 1_000_000
 _BYTE_UNITS = {"": 1, "K": 1024, "M": 1024**2, "G": 1024**3}
-_BIT_UNITS = {"": 1, "K": 1024, "M": 1024**2, "G": 1024**3}
+_BIT_UNITS = {"": 1, "K": 1_000, "M": 1_000_000, "G": 1_000_000_000}
+
+_UDP_HEADER_MARKERS = ("udp buffer size", "udp port", "total datagrams")
+
+
+def _looks_like_udp_header(line: str) -> bool:
+    """Whether an iperf2 header line identifies a UDP run.
+
+    Sender-side UDP interval rows do not carry jitter/loss columns, so the
+    interval format alone cannot tell UDP from TCP. iperf2 prints the
+    protocol in the connection header, the UDP buffer line, the ``[ ID]``
+    column layout, and the command line.
+    """
+    text = line.strip()
+    lowered = text.lower()
+    if any(marker in lowered for marker in _UDP_HEADER_MARKERS):
+        return True
+    return "iperf" in lowered and re.search(r"(?:^|\s)-u(?:\s|$)", text) is not None
+
 
 _IPERF2_INTERVAL = re.compile(
     r"^\[\s*(?P<stream>\d+|SUM)\]\s*"
@@ -29,15 +48,43 @@ _IPERF2_INTERVAL = re.compile(
 )
 
 
+_SUMMARY_TRANSFER_TOLERANCE = 0.01
+
+
+def _is_unlabelled_summary(rows: list[dict]) -> bool:
+    """Whether the last row summarises every preceding interval row.
+
+    iperf2 prints the single-stream final summary in the interval line format
+    without a ``[SUM]`` label. A genuine interval row of another stream can
+    share that final row's span, so the span is not sufficient: the last
+    row's transfer must also be approximately the sum of the preceding rows.
+    """
+    if len(rows) < 2:
+        return False
+    intervals = rows[:-1]
+    last = rows[-1]
+    if last["start"] != min(row["start"] for row in intervals):
+        return False
+    if last["end"] != max(row["end"] for row in intervals):
+        return False
+    interval_bytes = sum(row["bytes"] for row in intervals)
+    tolerance = max(interval_bytes * _SUMMARY_TRANSFER_TOLERANCE, 1.0)
+    return abs(last["bytes"] - interval_bytes) <= tolerance
+
+
 def _parse_iperf2_log(
     lines: list[str],
 ) -> tuple[str, list[dict], dict | None]:
     """Parse iperf2 interval lines into data rows and a final summary.
 
     A row is a summary when it is explicitly labelled ``[SUM]`` or when it is
-    the last interval row and spans the whole test (start of the first row to
-    end of the last row). Span length is never used as the discriminator:
-    iperf2 intervals may legitimately be longer than one second.
+    the last row, spans the union of the preceding interval rows, and its
+    transfer is approximately their sum. Span length alone is never used as
+    the discriminator: iperf2 intervals may legitimately be longer than one
+    second, and several streams can share a one-second span.
+
+    UDP is detected from the log header because sender-side UDP interval
+    rows do not include jitter/loss columns.
 
     Args:
         lines: iperf2 log lines (newlines optional).
@@ -47,7 +94,7 @@ def _parse_iperf2_log(
         displayed ``_label``; ``summary`` is a dict or None.
     """
     parsed: list[dict] = []
-    protocol = "TCP"
+    protocol = "UDP" if any(_looks_like_udp_header(line) for line in lines) else "TCP"
 
     for line in lines:
         match = _IPERF2_INTERVAL.match(line.strip())
@@ -73,7 +120,9 @@ def _parse_iperf2_log(
                     "lost_percent": float(fields["loss_pct"]),
                 }
             )
-        else:
+        elif protocol == "TCP":
+            # The bare column after the bandwidth is Retr for TCP and the
+            # datagram count for UDP; only the former is a retransmit metric.
             retransmits = re.match(r"\s*(\d+)", fields["rest"] or "")
             row["retransmits"] = (
                 int(retransmits.group(1)) if retransmits is not None else 0
@@ -83,16 +132,10 @@ def _parse_iperf2_log(
     if not parsed:
         return protocol, [], None
 
-    min_start = min(row["start"] for row in parsed)
-    max_end = max(row["end"] for row in parsed)
     sum_rows = [i for i, row in enumerate(parsed) if row["_stream"] == "SUM"]
     if sum_rows:
         summary_index = sum_rows[-1]
-    elif (
-        len(parsed) > 1
-        and parsed[-1]["start"] == min_start
-        and parsed[-1]["end"] == max_end
-    ):
+    elif _is_unlabelled_summary(parsed):
         summary_index = len(parsed) - 1
     else:
         summary_index = None
@@ -253,7 +296,7 @@ def generate_iperf2_plots(
     print(f"           {protocol} IPERF2 TEST STATISTICS")
     print("=" * 60)
     # Throughput
-    avg_throughput_mbps = df["bits_per_second"].mean() / _BITS_PER_MIB
+    avg_throughput_mbps = df["bits_per_second"].mean() / _BITS_PER_MEGABIT
     print(f"Average Throughput:      {avg_throughput_mbps:.2f} Mbps")
     # Retransmits / Loss
     if protocol == "TCP":
@@ -262,16 +305,25 @@ def generate_iperf2_plots(
             print(f"Total Retransmits:       {total_retransmits}")
     else:
         if summary_data:
-            total_lost = summary_data["lost_packets"]
-            avg_loss = summary_data["lost_percent"]
-            avg_jitter = summary_data["jitter_ms"]
+            loss_stats = (
+                summary_data["lost_packets"],
+                summary_data["lost_percent"],
+                summary_data["jitter_ms"],
+            )
+        elif {"lost_packets", "lost_percent", "jitter_ms"}.issubset(df.columns):
+            loss_stats = (
+                df["lost_packets"].sum(),
+                df["lost_percent"].mean(),
+                df["jitter_ms"].mean(),
+            )
         else:
-            total_lost = df["lost_packets"].sum()
-            avg_loss = df["lost_percent"].mean()
-            avg_jitter = df["jitter_ms"].mean()
-        print(f"Total Lost Packets:      {total_lost}")
-        print(f"Packet Loss %:           {avg_loss:.2f}%")
-        print(f"Average Jitter:          {avg_jitter:.2f} ms")
+            # Sender-side UDP rows have no jitter/loss columns to report.
+            loss_stats = None
+        if loss_stats is not None:
+            total_lost, avg_loss, avg_jitter = loss_stats
+            print(f"Total Lost Packets:      {total_lost}")
+            print(f"Packet Loss %:           {avg_loss:.2f}%")
+            print(f"Average Jitter:          {avg_jitter:.2f} ms")
     # Total data: the final summary row covers the whole test when present,
     # so it is not double-counted with the interval rows.
     if summary_data:

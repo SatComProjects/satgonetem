@@ -136,7 +136,7 @@ def run_iperf3_flow(
     src_ip = source.loopback.ipv4
 
     # Reserve an exclusive port for this run; config.port is not modified.
-    port = iperf3_ports._IPERF3_PORT_ALLOCATOR.allocate()
+    port = iperf3_ports._allocate_port()
     run_config = replace(config, port=port)
     try:
         server_cmd = (
@@ -182,4 +182,4 @@ def run_iperf3_flow(
         _kill_server(destination, dst_ip, port)
         _remove_temp_file(source, client_json)
         _remove_temp_file(destination, server_json)
-        iperf3_ports._IPERF3_PORT_ALLOCATOR.release(port)
+        iperf3_ports._release_port(port)

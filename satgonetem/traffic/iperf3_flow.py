@@ -96,9 +96,9 @@ class Iperf3Flow(ThreadedFlow):
                 this wait period.
         """
         super().__init__(source, destination, config, delay)
-        # Reserved on start so flows constructed up-front (for a scheduler
-        # with hundreds of entries) do not exhaust the port pool. config.port
-        # is left untouched so shared configs remain safe to reuse.
+        # Reserved lazily on first use inside _execute so a flow cancelled
+        # during its pre-run delay never holds a port. config.port is left
+        # untouched so shared configs remain safe to reuse.
         self._port: int | None = None
         self._port_lock = threading.Lock()
 
@@ -106,19 +106,8 @@ class Iperf3Flow(ThreadedFlow):
         """Reserve this flow's exclusive server port on first use."""
         with self._port_lock:
             if self._port is None:
-                self._port = iperf3_ports._IPERF3_PORT_ALLOCATOR.allocate()
+                self._port = iperf3_ports._allocate_port()
             return self._port
-
-    def start(self) -> None:
-        """Start the iperf3 flow in a background daemon thread.
-
-        Returns immediately; use status() to poll for completion.
-
-        Raises:
-            RuntimeError: If the flow has already been started.
-        """
-        self._reserve_port()
-        super().start()
 
     def _stop_process(self) -> None:
         """Send SIGTERM to the running iperf3 client and server.
@@ -126,8 +115,14 @@ class Iperf3Flow(ThreadedFlow):
         The bracket expression ``[i]perf3`` matches the real processes but
         not the wrapper ``sh -c`` command line that carries the pattern, so
         pkill cannot signal its own parent shell.
+
+        A flow stopped before ``_execute`` reserved a port has not launched
+        any process, so there is nothing to kill (and matching config.port
+        could hit an unrelated flow's server).
         """
-        port = self._port if self._port is not None else self.config.port
+        port = self._port
+        if port is None:
+            return
         kill_cmd = f"pkill -f '[i]perf3 .*-p {port} ' 2>/dev/null; true"
         self.source.execute_command(kill_cmd, detach=True)
         self.destination.execute_command(kill_cmd, detach=True)
@@ -313,8 +308,13 @@ class Iperf3Flow(ThreadedFlow):
             raise
         finally:
             # Cleanup is best-effort and runs on every path so a failed flow
-            # never leaks temp files or keeps a port reserved.
+            # never leaks temp files or keeps a port reserved. The reservation
+            # is made inside this method, so clearing it here (rather than in
+            # start()) also covers failures before the first command runs.
             self._remove_temp_file(self.source, client_json)
             self._remove_temp_file(self.destination, server_json)
-            if self._port is not None:
-                iperf3_ports._IPERF3_PORT_ALLOCATOR.release(self._port)
+            with self._port_lock:
+                port = self._port
+                self._port = None
+            if port is not None:
+                iperf3_ports._release_port(port)

@@ -143,7 +143,6 @@ class TestUniqueFlowPorts:
 
         assert flow_a.status() == FlowStatus.DONE
         assert flow_b.status() == FlowStatus.DONE
-        assert flow_a._port != flow_b._port
         # Shared config is untouched by both flows.
         assert config.port == 5201
 
@@ -154,14 +153,15 @@ class TestUniqueFlowPorts:
         assert len(client_a_cmds) == 1
         assert len(client_b_cmds) == 1
 
-        assert any(f"-p {flow_a._port} " in cmd for cmd in server_cmds)
-        assert any(f"-p {flow_b._port} " in cmd for cmd in server_cmds)
-        assert f"-p {flow_a._port} " in client_a_cmds[0]
-        assert f"-p {flow_b._port} " in client_b_cmds[0]
-
-        # Results report the effective port, not the shared config port.
-        assert flow_a.results().to_json()["config"]["port"] == flow_a._port
-        assert flow_b.results().to_json()["config"]["port"] == flow_b._port
+        # The reservation is released after completion, so read the effective
+        # port from the commands/results the flow produced.
+        port_a = flow_a.results().to_json()["config"]["port"]
+        port_b = flow_b.results().to_json()["config"]["port"]
+        assert port_a != port_b
+        assert any(f"-p {port_a} " in cmd for cmd in server_cmds)
+        assert any(f"-p {port_b} " in cmd for cmd in server_cmds)
+        assert f"-p {port_a} " in client_a_cmds[0]
+        assert f"-p {port_b} " in client_b_cmds[0]
 
     @patch("satgonetem.traffic.iperf3_flow.time.sleep")
     def test_stop_pkill_uses_flow_port(self, _mock_sleep):
@@ -234,14 +234,48 @@ class TestServerReadinessWait:
         assert mock_sleep.call_count == 1
 
     def test_keeps_fallback_when_probe_unavailable(self):
+        """An unavailable probe must not fail flows that the grace period covers."""
         node = MagicMock()
         node.execute_command.return_value = None
 
         with patch("satgonetem.traffic.iperf3_flow.time.sleep") as mock_sleep:
             ready = iperf3_flow._wait_for_iperf3_server(node, "10.0.0.2", 5201)
 
-        assert ready is False
+        assert ready is True
         mock_sleep.assert_called_once_with(0.5)
+
+    @patch("satgonetem.traffic.iperf3_flow.time.sleep")
+    def test_flow_proceeds_when_readiness_probe_unavailable(self, _mock_sleep):
+        """Reduced execute_command fakes must keep the legacy grace period."""
+        source = _make_node("sat0", "10.0.0.1")
+        destination = _make_node("gnd0", "10.0.0.2")
+        source.execute_command.side_effect = lambda command, **_kwargs: (
+            _TCP_JSON if command.startswith("cat ") else ""
+        )
+        # No listener output: the probe cannot tell whether the server started.
+        destination.execute_command.return_value = None
+
+        flow = Iperf3Flow(source, destination, Iperf3Config(duration=1))
+        flow._run()
+
+        assert flow.status() == FlowStatus.DONE
+        assert flow.results().protocol == "TCP"
+
+    @patch(
+        "satgonetem.traffic.iperf3_flow._wait_for_iperf3_server",
+        return_value=False,
+    )
+    def test_flow_fails_when_probe_reports_not_listening(self, _mock_ready):
+        """An explicit not-listening result after the timeout must still fail."""
+        source = _make_node("sat0", "10.0.0.1")
+        destination = _make_node("gnd0", "10.0.0.2")
+        destination.execute_command.return_value = ""
+
+        flow = Iperf3Flow(source, destination, Iperf3Config(duration=1))
+        flow._run()
+
+        assert flow.status() == FlowStatus.ERROR
+        assert "iperf3 server did not start" in str(flow._error)
 
     def test_wait_is_bounded(self):
         node = MagicMock()
