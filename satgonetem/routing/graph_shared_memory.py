@@ -60,7 +60,9 @@ class GraphSharedMemory:
     def __init__(self, name, max_edges, create=False):
         self.name = name
         self._owns_segment = create
+        self._version_floor = 0
         self._attach(max_edges)
+        self._version_floor = int(self.header[0]["version"])
 
     def _attach(self, max_edges):
         """Map the segment and expose it through the numpy views."""
@@ -124,8 +126,9 @@ class GraphSharedMemory:
         with contextlib.suppress(FileNotFoundError):
             self.unlink()
         self._attach(new_max_edges)
-        # Keep the version monotonic for consumers that reattach.
-        self.header[0]["version"] = version
+        # Leave version zero until write_edges publishes a complete graph.
+        # Readers treat zero as "owner is publishing" and retry.
+        self._version_floor = version
         return True
 
     @classmethod
@@ -229,6 +232,21 @@ class GraphSharedMemory:
                     offset=header_size,
                 )[:num_edges].copy()
 
+                header_after = np.frombuffer(shm.buf, dtype=HEADER_DTYPE, count=1)[
+                    0
+                ].copy()
+                if (
+                    int(header_after["version"]) != version
+                    or int(header_after["num_edges"]) != num_edges
+                ):
+                    if attempt == retries:
+                        raise TimeoutError(
+                            f"Graph shared memory {name!r} changed while it was "
+                            "being read"
+                        )
+                    time.sleep(retry_delay)
+                    continue
+
                 return GraphSnapshot(
                     version=version,
                     num_edges=num_edges,
@@ -248,7 +266,11 @@ class GraphSharedMemory:
         if num_edges > self.max_edges:
             raise ValueError(f"Too many edges {num_edges}")
 
-        self.clear()
+        # Mark the write in progress before touching records. A reader that
+        # copies during the write sees a different version on its second
+        # header read and retries instead of accepting a torn graph.
+        start_version = max(int(self.header[0]["version"]) + 1, self._version_floor + 1)
+        self.header[0]["version"] = start_version
 
         for i, edge in enumerate(edge_list):
             self.edges[i] = (
@@ -265,7 +287,11 @@ class GraphSharedMemory:
             )
 
         self.header[0]["num_edges"] = num_edges
-        self.header[0]["version"] += 1
+        end_version = max(start_version + 1, self._version_floor + 2)
+        self.header[0]["version"] = end_version
+        self._version_floor = end_version
+        if num_edges < self.max_edges:
+            self.edges[num_edges:] = (0, 0, 0, 0, 0, 0, 0, 0, 0, -1.0)
 
     def clear(self):
         self.edges[:] = (0, 0, 0, 0, 0, 0, 0, 0, 0, -1.0)
