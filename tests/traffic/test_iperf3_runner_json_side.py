@@ -98,6 +98,10 @@ def _no_real_waits():
     with (
         patch("satgonetem.traffic.iperf3_runner._wait_for_iperf3_server"),
         patch("satgonetem.traffic.iperf3_runner.time.sleep"),
+        patch(
+            "satgonetem.traffic.iperf3_runner._IPERF3_RESULT_WAIT_TIMEOUT",
+            0.05,
+        ),
     ):
         yield
 
@@ -152,6 +156,28 @@ def test_tcp_bidir_keeps_the_client_json_first():
     )
 
     assert result.total_bytes_sent == 111_000
+
+
+def test_tcp_reverse_waits_for_server_json_before_falling_back():
+    """The preferred server JSON may appear after the client exits."""
+    src = _make_node_serving("gs0", "10.0.0.1", _CLIENT_TCP_RECEIVER_JSON)
+    dst = _make_node("gs1", "10.0.0.2")
+    reads = 0
+
+    def destination_command(cmd, **_kwargs):
+        nonlocal reads
+        if not cmd.startswith("cat "):
+            return ""
+        reads += 1
+        return _SERVER_TCP_SENDER_JSON if reads > 1 else ""
+
+    dst.execute_command.side_effect = destination_command
+
+    result = run_iperf3_flow(src, dst, Iperf3Config(duration=1, reverse=True))
+
+    assert reads > 1
+    assert result.total_retransmits == 7
+    assert result.total_bytes_sent == 999_000
 
 
 def test_udp_reverse_falls_back_to_the_server_sender_json():
