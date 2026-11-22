@@ -650,7 +650,8 @@ class Iperf3Results:
                 <output_dir>/<file_stem>_<metric>.<fmt>.
             use_summary: When True, prefers interval summary rows
                 (sum/sum_sent) over per-stream rows. Falls back to per-stream
-                data when summaries are absent.
+                data when summaries are absent or when the requested metric
+                is only present in stream rows.
             fmt: File format for the output image. E.g. 'png', 'pdf'.
 
         Returns:
@@ -664,11 +665,16 @@ class Iperf3Results:
         if metric not in mmap:
             return None
 
-        df = (
-            self._df_summaries
-            if (use_summary and not self._df_summaries.empty)
-            else self._df_streams
-        )
+        df = self._df_streams
+        if (
+            use_summary
+            and not self._df_summaries.empty
+            and metric in self._df_summaries.columns
+            and self._df_summaries[metric].notna().any()
+        ):
+            # Summary rows only carry the shared TCP/UDP metrics; TCP-only
+            # series (RTT, cwnd, PMTU) must still fall back to stream rows.
+            df = self._df_summaries
         if df.empty or metric not in df.columns or df[metric].isna().all():
             return None
 
