@@ -9,6 +9,15 @@ import tempfile
 
 import yaml
 
+# YAML treats these as line breaks even inside double-quoted scalars, but
+# json.dumps leaves them raw. Go's yaml.v2/v3 then normalizes them to spaces
+# while parsing, silently changing the value.
+_YAML_LINE_BREAK_ESCAPES = {
+    "\u0085": "\\u0085",  # NEL
+    "\u2028": "\\u2028",  # LINE SEPARATOR
+    "\u2029": "\\u2029",  # PARAGRAPH SEPARATOR
+}
+
 
 def _yaml_scalar(value: object) -> str:
     """Return *value* as a single-line, YAML-safe scalar.
@@ -22,16 +31,21 @@ def _yaml_scalar(value: object) -> str:
 
     ``ensure_ascii=False`` keeps non-BMP characters literal: Go's yaml.v2/v3
     rejects the UTF-16 surrogate-pair escapes that ``json.dumps`` produces by
-    default.
+    default. NEL, LINE SEPARATOR, and PARAGRAPH SEPARATOR are escaped as
+    ``\\uXXXX`` because YAML parses them as line breaks even in quoted scalars.
     """
     text = str(value)
-    try:
-        parsed = yaml.safe_load(f"{{value: {text}}}")
-    except yaml.YAMLError:
-        parsed = None
-    if parsed == {"value": text}:
-        return text
-    return json.dumps(text, ensure_ascii=False)
+    if not any(char in text for char in _YAML_LINE_BREAK_ESCAPES):
+        try:
+            parsed = yaml.safe_load(f"{{value: {text}}}")
+        except yaml.YAMLError:
+            parsed = None
+        if parsed == {"value": text}:
+            return text
+    quoted = json.dumps(text, ensure_ascii=False)
+    for char, escape in _YAML_LINE_BREAK_ESCAPES.items():
+        quoted = quoted.replace(char, escape)
+    return quoted
 
 
 def _tbf_qos(rate_kbps: int, delay_ms: int) -> tuple[int, float]:
