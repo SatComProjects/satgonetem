@@ -8,6 +8,7 @@ implements the base lifecycle contract keeps working unchanged.
 
 from __future__ import annotations
 
+import struct
 from typing import Any
 
 import grpc
@@ -30,11 +31,31 @@ _PCAPNG_MAGIC = b"\x0a\x0d\x0d\x0a"
 _PCAPNG_MIN_LEN = 28
 
 
-def _is_valid_pcap_prefix(data: bytes) -> bool:
-    """Return True when *data* starts with a complete capture file header."""
-    if len(data) >= _PCAP_MIN_LEN and data[:4] in _PCAP_MAGICS:
-        return True
-    return len(data) >= _PCAPNG_MIN_LEN and data[:4] == _PCAPNG_MAGIC
+def _pcap_is_complete(data: bytes) -> bool:
+    """Return True when *data* is a complete classic pcap file.
+
+    A clean stream without an ``OK`` marker is accepted only when every
+    record header and body is present. Header-only or partially written
+    records are rejected instead of being saved as a successful capture.
+    """
+    if len(data) < _PCAP_MIN_LEN or data[:4] not in _PCAP_MAGICS:
+        return False
+    if data[:4] == _PCAPNG_MAGIC:
+        # pcapng block validation is not implemented; require the OK marker.
+        return False
+    endian = "<" if data[:4] in {b"\xd4\xc3\xb2\xa1", b"\x4d\x3c\xb2\xa1"} else ">"
+    offset = _PCAP_MIN_LEN
+    records = 0
+    while offset < len(data):
+        if offset + 16 > len(data):
+            return False
+        incl_len = struct.unpack_from(f"{endian}I", data, offset + 8)[0]
+        offset += 16
+        if offset + incl_len > len(data):
+            return False
+        offset += incl_len
+        records += 1
+    return records > 0 and offset == len(data)
 
 
 class GoNetEmControlMixin:
@@ -201,10 +222,10 @@ class GoNetEmControlMixin:
             raise RuntimeError(
                 f"GoNetEmLauncher: {action} failed: server returned no capture data"
             )
-        if not completed and not _is_valid_pcap_prefix(data):
+        if not completed and not _pcap_is_complete(data):
             raise RuntimeError(
                 f"GoNetEmLauncher: {action} failed: capture stream ended "
-                "without a completion marker or a valid pcap header"
+                "without a completion marker or a complete pcap file"
             )
         return data
 
