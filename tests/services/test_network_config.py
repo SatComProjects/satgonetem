@@ -65,6 +65,16 @@ class TestQueueLengthFields:
             NetworkConfig(link_txqueuelen=value)
 
 
+class TestUpdateTime:
+    @pytest.mark.parametrize("value", [0, -1, -60])
+    def test_rejects_non_positive_update_time(self, value):
+        with pytest.raises(ValueError, match="update_time"):
+            NetworkConfig(update_time=value)
+
+    def test_accepts_positive_update_time(self):
+        assert NetworkConfig(update_time=1).update_time == 1
+
+
 class TestApplyNetworkConfig:
     @pytest.fixture
     def manager(self):

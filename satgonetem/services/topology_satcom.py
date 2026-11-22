@@ -169,13 +169,19 @@ class NetworkConfig:
     controller_node_iface_pattern: str = "eth{node_id}"
 
     def __post_init__(self) -> None:
-        """Validate the queue-length fields.
+        """Validate the queue-length fields and the tick interval.
 
         Raises:
             TypeError: If a queue-length field is not an integer.
             ValueError: If a queue-length field is outside
-                ``[0, MAX_LINK_QUEUE_PACKETS]``.
+                ``[0, MAX_LINK_QUEUE_PACKETS]``, or if ``update_time`` is not
+                positive.
         """
+        if self.update_time <= 0:
+            raise ValueError(
+                f"NetworkConfig.update_time must be positive, got {self.update_time}"
+            )
+
         for name in ("link_netem_limit", "link_txqueuelen"):
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, int):
