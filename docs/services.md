@@ -404,7 +404,7 @@ types raise `AttributeError`.
 
 ## RoutingManagerMixin
 
-- `init_routing(max_workers=MAX_WORKERS, routing_method="")` tears down any
+- `init_routing(routing_method="", max_workers=MAX_WORKERS)` tears down any
   existing daemon, instantiates the requested one (built-in or registered),
   calls `init()`, and stores it on `routing_daemon`. It returns elapsed
   seconds or `-1.0` on failure. A failed init never leaves a half-initialized

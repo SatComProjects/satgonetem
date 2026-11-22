@@ -52,15 +52,15 @@ class RoutingManagerMixin:
             return []
 
     def init_routing(
-        self, max_workers: int = MAX_WORKERS, routing_method: str = ""
+        self, routing_method: str = "", max_workers: int = MAX_WORKERS
     ) -> float:
         """
         Initialize routing based on the configured routing method.
 
         Args:
-            max_workers: Maximum number of worker threads to use for parallel operations.
             routing_method: Optional routing method to initialize for this call
                 only. It does not change self.routing.
+            max_workers: Maximum number of worker threads to use for parallel operations.
         Returns:
             float: Elapsed initialization time, or -1.0 if initialization failed.
         """
