@@ -71,18 +71,29 @@ class SRMPLSTeardown:
 
         cached_commands: list[str] = []
         for cache in self._caches:
-            cached_commands.extend(cache.pop(node.id, []))
+            cached_commands.extend(cache.get(node.id, []))
 
+        succeeded = True
         for prefix in cached_prefixes(cached_commands):
             try:
                 node.execute_command(["sh", "-lc", f"ip route del {prefix}"])
             except Exception as e:
+                message = str(e).lower()
+                if "no such process" in message or "cannot find" in message:
+                    # Already gone on a retry after a partial flush.
+                    continue
+                succeeded = False
                 logging.error(f"Failed to delete SR route {prefix} on {node.name}: {e}")
 
         try:
             node.execute_command(["sh", "-lc", "ip -f mpls route flush table all"])
         except Exception as e:
+            succeeded = False
             logging.error(f"Failed to flush MPLS routes on {node.name}: {e}")
+
+        if succeeded:
+            for cache in self._caches:
+                cache.pop(node.id, None)
 
     def flush_all_nodes(
         self,
