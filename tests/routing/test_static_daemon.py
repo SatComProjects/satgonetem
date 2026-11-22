@@ -177,6 +177,51 @@ class TestStaticRoutingDaemonUpdate:
 
         mock_apply.assert_called_once_with(max_workers=2)
 
+    def test_inactive_update_does_not_skip_next_active_install(self):
+        """A skipped update must not turn the next active update into a no-op."""
+        topo, gnd0, gnd1, sat0, sat1 = _make_line_topology()
+        nodes = [gnd0, gnd1, sat0, sat1]
+        connected_graph = topo.get_current_graph.return_value
+        client = FakeRouteInstallClient()
+        for node in nodes:
+            node.grpc_client = client
+            node.project_id = "prj"
+
+        disconnected_graph = nx.Graph()
+        for node in nodes:
+            disconnected_graph.add_node(node.id)
+        # igraph requires the weight edge attribute to exist even when no
+        # usable path is available; a self-loop provides it without creating
+        # routes between nodes.
+        disconnected_graph.add_edge(gnd0.id, gnd0.id, weight=1)
+
+        daemon = StaticRoutingDaemon(topo)
+        topo.get_current_graph.return_value = disconnected_graph
+        daemon.init()
+        assert client.requests == []
+
+        # The topology is changed while it is not active.  Nothing may be
+        # installed, and the updated tables must not be mistaken for the
+        # already-installed state.
+        topo.get_current_graph.return_value = connected_graph
+        topo.status = False
+        daemon.update([])
+        assert client.requests == []
+
+        topo.status = True
+        daemon.update([])
+
+        assert len(client.requests) == 1
+        request = client.requests[0]
+        assert set(request.nodes) == {node.name for node in nodes}
+        for node in nodes:
+            assert request.nodes[node.name].routes
+            assert node.ipv4_routing_table
+
+        # Once the routes are installed, an unchanged topology is a no-op.
+        daemon.update([])
+        assert len(client.requests) == 1
+
 
 class TestStaticRoutingDaemonRemoveSingleNode:
     """Tests for StaticRoutingDaemon.remove(node=<node>)."""

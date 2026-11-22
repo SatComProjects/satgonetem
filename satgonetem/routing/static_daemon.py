@@ -168,24 +168,28 @@ class StaticRoutingDaemon(RoutingDaemon):
 
         Recomputes shortest-path routing tables and pushes incremental route
         changes to all nodes. The new_links argument is accepted for interface
-        consistency but is not used by static routing.
+        consistency but is not used by static routing. When the topology is not
+        active the tables are left untouched: rotating and rebuilding them
+        would make the un-applied table look like the installed state, and the
+        next active update would incorrectly emit no operations.
 
         Args:
             new_links: Newly added links (unused for static routing).
             max_workers: Maximum number of worker threads for parallel route
                 updates.
         """
-        self._populate_routing_tables()
-        if self.topology.status:
-            outcome = self._apply_all_routes(max_workers=max_workers)
-            if outcome.error_nodes:
-                logging.warning(
-                    "Static routing update failed on %d node(s): %s",
-                    len(outcome.error_nodes),
-                    ", ".join(sorted(outcome.error_nodes)),
-                )
-        else:
+        if not self.topology.status:
             logging.warning("Static routing update skipped: topology not yet active")
+            return
+
+        self._populate_routing_tables()
+        outcome = self._apply_all_routes(max_workers=max_workers)
+        if outcome.error_nodes:
+            logging.warning(
+                "Static routing update failed on %d node(s): %s",
+                len(outcome.error_nodes),
+                ", ".join(sorted(outcome.error_nodes)),
+            )
 
     def remove(self, node: Node | None = None, max_workers: int = 128) -> None:
         """Remove all installed static IP routes.
