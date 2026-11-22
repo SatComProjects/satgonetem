@@ -1,6 +1,8 @@
 """Tests for satgonetem.traffic.flow_scheduler."""
 
-from unittest.mock import MagicMock
+import threading
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -59,3 +61,61 @@ class TestFlowSchedulerSaveResults:
         assert scheduler.status() == FlowSchedulerStatus.DONE
         assert len(scheduler.errors()) == 1
         assert "boom" in str(scheduler.errors()[0])
+
+
+class _ThreadFactory:
+    """Return a fake thread for the debug progress printer only."""
+
+    def __init__(self) -> None:
+        self.progress_threads: list[MagicMock] = []
+
+    def __call__(self, *args, **kwargs):
+        target = kwargs.get("target")
+        if getattr(target, "__name__", "") == "_progress_printer":
+            thread = MagicMock()
+            self.progress_threads.append(thread)
+            return thread
+        return threading.Thread(*args, **kwargs)
+
+
+class _FailingExecutor:
+    """Executor whose first submit fails after the progress thread starts."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        return False
+
+    def submit(self, *args, **kwargs):
+        raise RuntimeError("submit failed")
+
+
+def test_scheduler_error_stops_the_debug_progress_thread():
+    """A fatal scheduler error must not leave the daemon printer running."""
+    flow = _make_flow("flow0")
+    scheduler = FlowScheduler([flow], max_workers=1, debug=True)
+    progress_event = MagicMock()
+    thread_factory = _ThreadFactory()
+
+    with (
+        patch(
+            "satgonetem.traffic.flow_scheduler.threading",
+            SimpleNamespace(Event=lambda: progress_event, Thread=thread_factory),
+        ),
+        patch(
+            "satgonetem.traffic.flow_scheduler.ThreadPoolExecutor",
+            _FailingExecutor,
+        ),
+    ):
+        scheduler.run()
+        scheduler.join(timeout=5.0)
+
+    assert scheduler.status() == FlowSchedulerStatus.ERROR
+    assert "submit failed" in str(scheduler._scheduler_error)
+    assert thread_factory.progress_threads, "progress thread was not started"
+    progress_event.set.assert_called_once_with()
+    thread_factory.progress_threads[0].join.assert_called_once_with(timeout=2.0)

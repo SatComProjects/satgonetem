@@ -63,7 +63,6 @@ def test_set_iperf3_port_range_rejects_an_invalid_range():
 
 
 def test_range_from_environment(monkeypatch):
-    # read once, when the pool is created at import time
     monkeypatch.setenv("SATGONETEM_IPERF3_PORT_RANGE", "8000-8499")
     assert iperf3_ports._port_range_from_env() == (8000, 8499)
     monkeypatch.delenv("SATGONETEM_IPERF3_PORT_RANGE")
