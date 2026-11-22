@@ -474,6 +474,7 @@ class ExperimentRunner:
         samples: list[dict[str, Any]] = []
         flows: list[dict[str, Any]] = []
 
+        interrupted: BaseException | None = None
         try:
             if live:
                 topology.start_gonetem()
@@ -517,12 +518,17 @@ class ExperimentRunner:
                             time.sleep(delay)
         except Exception as exc:  # noqa: BLE001 - finalize artifacts first
             self._record_error(f"simulation failed: {exc}")
+        except BaseException as exc:  # noqa: BLE001 - finalize before re-raising
+            interrupted = exc
 
         flows, summary = self._finalize_run(run_dir, topology, live)
-        return RunResult(
+        result = RunResult(
             run_dir=run_dir,
             summary=summary,
             samples=samples,
             flows=flows,
             errors=list(self._errors),
         )
+        if interrupted is not None:
+            raise interrupted
+        return result
