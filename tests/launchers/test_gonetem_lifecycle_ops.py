@@ -182,7 +182,7 @@ def test_start_containers_logs_unlink_oserror_and_keeps_running(
     assert project_file.exists()
 
 
-def test_cleanup_failed_start_logs_force_close_failure_and_clears_state(caplog):
+def test_cleanup_failed_start_retains_state_when_force_close_fails(caplog):
     launcher = _new_launcher()
     launcher._client = MagicMock()
     launcher._request = netem_pb2.ProjectRequest(id="prj-1")
@@ -194,9 +194,30 @@ def test_cleanup_failed_start_logs_force_close_failure_and_clears_state(caplog):
     )
 
     with caplog.at_level(logging.ERROR):
-        launcher._cleanup_failed_start()
+        assert launcher._cleanup_failed_start() is False
 
     assert "cleanup after failed start failed: forced close failed" in caplog.text
+    connection.close.assert_not_called()
+    assert launcher._request is not None
+    assert launcher._client is not None
+
+
+def test_cleanup_failed_start_clears_state_after_successful_retry():
+    launcher = _new_launcher()
+    launcher._client = MagicMock()
+    launcher._request = netem_pb2.ProjectRequest(id="prj-1")
+    connection = SimpleNamespace(close=MagicMock())
+    launcher._connection = connection
+    launcher._channel = MagicMock()
+    launcher.force_close_project = MagicMock(return_value=False)
+
+    assert launcher._cleanup_failed_start() is False
+    assert launcher._request is not None
+    connection.close.assert_not_called()
+
+    launcher.force_close_project.return_value = True
+    assert launcher._cleanup_failed_start() is True
+
     connection.close.assert_called_once()
     assert launcher._request is None
     assert launcher._client is None

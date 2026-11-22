@@ -179,16 +179,37 @@ class GoNetEmLifecycleMixin(GoNetEmClientMixin):
                         exc,
                     )
 
-    def _cleanup_failed_start(self) -> None:
-        """Best-effort cleanup after a failed start_containers() call."""
-        try:
-            if self._request is not None:
-                self.force_close_project()
-        except Exception as exc:
-            logging.error("GoNetEmLauncher: cleanup after failed start failed: %s", exc)
-        finally:
+    def _cleanup_failed_start(self) -> bool:
+        """Best-effort cleanup after a failed start_containers() call.
+
+        Returns:
+            True when cleanup completed or there was nothing retryable;
+            False when the project handles must be retained for a retry.
+        """
+        request = self._request
+        if request is None:
+            self._close_transport()
+            return True
+        if not str(getattr(request, "id", "") or ""):
+            # An empty project id cannot target a server-side project, so
+            # retaining the transport would only leak it.
             self._close_transport()
             self._request = None
+            return True
+        try:
+            cleaned = self.force_close_project()
+        except Exception as exc:
+            logging.error("GoNetEmLauncher: cleanup after failed start failed: %s", exc)
+            return False
+        if cleaned:
+            self._close_transport()
+            self._request = None
+            return True
+        logging.error(
+            "GoNetEmLauncher: force-close after failed start did not complete; "
+            "retaining the project handle for retry"
+        )
+        return False
 
     def _attach_containers(self, nodes: list, project_id: str) -> None:
         """Resolve container objects and PIDs for each node after TopologyRun."""

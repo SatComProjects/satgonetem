@@ -92,12 +92,15 @@ class GoNetEmCleanupMixin:
             True when cleanup completed (or there was nothing to clean),
             False when the project id is missing, a Docker command failed, or
             ``ProjectClose`` raised. The caller can use this to decide whether
-            to retain project handles for a retry.
+            to retain project handles for a retry. On failure the gRPC transport
+            is retained so a retry can reuse it; an empty project id is
+            terminal because no retry can target a project.
         """
         succeeded = True
         try:
             request = self._request
             if request is None:
+                self._close_transport()
                 return True
 
             project_id = str(getattr(request, "id", "") or "")
@@ -105,6 +108,7 @@ class GoNetEmCleanupMixin:
                 logging.warning(
                     "GoNetEmLauncher: project id is empty; skipping Docker cleanup"
                 )
+                self._close_transport()
                 return False
 
             container_ids = self._list_project_containers(project_id)
@@ -126,9 +130,9 @@ class GoNetEmCleanupMixin:
                 # server can process the request before the transport closes.
                 for _ in response:
                     pass
+            if succeeded:
+                self._close_transport()
             return succeeded
         except Exception as exc:
             logging.error("GoNetEmLauncher: force_close_project failed: %s", exc)
             return False
-        finally:
-            self._close_transport()
