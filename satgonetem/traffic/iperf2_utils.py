@@ -18,6 +18,24 @@ _BITS_PER_MEGABIT = 1_000_000
 _BYTE_UNITS = {"": 1, "K": 1024, "M": 1024**2, "G": 1024**3}
 _BIT_UNITS = {"": 1, "K": 1_000, "M": 1_000_000, "G": 1_000_000_000}
 
+_UDP_HEADER_MARKERS = ("udp buffer size", "udp port", "total datagrams")
+
+
+def _looks_like_udp_header(line: str) -> bool:
+    """Whether an iperf2 header line identifies a UDP run.
+
+    Sender-side UDP interval rows do not carry jitter/loss columns, so the
+    interval format alone cannot tell UDP from TCP. iperf2 prints the
+    protocol in the connection header, the UDP buffer line, the ``[ ID]``
+    column layout, and the command line.
+    """
+    text = line.strip()
+    lowered = text.lower()
+    if any(marker in lowered for marker in _UDP_HEADER_MARKERS):
+        return True
+    return "iperf" in lowered and re.search(r"(?:^|\s)-u(?:\s|$)", text) is not None
+
+
 _IPERF2_INTERVAL = re.compile(
     r"^\[\s*(?P<stream>\d+|SUM)\]\s*"
     r"(?P<start>\d+(?:\.\d+)?)-\s*(?P<end>\d+(?:\.\d+)?)\s*sec\s*"
@@ -65,6 +83,9 @@ def _parse_iperf2_log(
     the discriminator: iperf2 intervals may legitimately be longer than one
     second, and several streams can share a one-second span.
 
+    UDP is detected from the log header because sender-side UDP interval
+    rows do not include jitter/loss columns.
+
     Args:
         lines: iperf2 log lines (newlines optional).
 
@@ -73,7 +94,7 @@ def _parse_iperf2_log(
         displayed ``_label``; ``summary`` is a dict or None.
     """
     parsed: list[dict] = []
-    protocol = "TCP"
+    protocol = "UDP" if any(_looks_like_udp_header(line) for line in lines) else "TCP"
 
     for line in lines:
         match = _IPERF2_INTERVAL.match(line.strip())
@@ -99,7 +120,9 @@ def _parse_iperf2_log(
                     "lost_percent": float(fields["loss_pct"]),
                 }
             )
-        else:
+        elif protocol == "TCP":
+            # The bare column after the bandwidth is Retr for TCP and the
+            # datagram count for UDP; only the former is a retransmit metric.
             retransmits = re.match(r"\s*(\d+)", fields["rest"] or "")
             row["retransmits"] = (
                 int(retransmits.group(1)) if retransmits is not None else 0
@@ -282,16 +305,25 @@ def generate_iperf2_plots(
             print(f"Total Retransmits:       {total_retransmits}")
     else:
         if summary_data:
-            total_lost = summary_data["lost_packets"]
-            avg_loss = summary_data["lost_percent"]
-            avg_jitter = summary_data["jitter_ms"]
+            loss_stats = (
+                summary_data["lost_packets"],
+                summary_data["lost_percent"],
+                summary_data["jitter_ms"],
+            )
+        elif {"lost_packets", "lost_percent", "jitter_ms"}.issubset(df.columns):
+            loss_stats = (
+                df["lost_packets"].sum(),
+                df["lost_percent"].mean(),
+                df["jitter_ms"].mean(),
+            )
         else:
-            total_lost = df["lost_packets"].sum()
-            avg_loss = df["lost_percent"].mean()
-            avg_jitter = df["jitter_ms"].mean()
-        print(f"Total Lost Packets:      {total_lost}")
-        print(f"Packet Loss %:           {avg_loss:.2f}%")
-        print(f"Average Jitter:          {avg_jitter:.2f} ms")
+            # Sender-side UDP rows have no jitter/loss columns to report.
+            loss_stats = None
+        if loss_stats is not None:
+            total_lost, avg_loss, avg_jitter = loss_stats
+            print(f"Total Lost Packets:      {total_lost}")
+            print(f"Packet Loss %:           {avg_loss:.2f}%")
+            print(f"Average Jitter:          {avg_jitter:.2f} ms")
     # Total data: the final summary row covers the whole test when present,
     # so it is not double-counted with the interval rows.
     if summary_data:

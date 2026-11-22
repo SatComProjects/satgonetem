@@ -174,6 +174,51 @@ def test_one_second_summary_row_is_detected(tmp_path, capsys) -> None:
     assert _printed_total_mb(capsys) == pytest.approx(1.25, abs=0.01)
 
 
+@pytest.mark.parametrize(
+    "header",
+    [
+        "Client connecting to 10.0.0.2, UDP port 5001\n",
+        "UDP buffer size:  208 KByte (default)\n",
+        "Command: iperf -c 10.0.0.2 -u -t 2\n",
+        "[ ID] Interval       Transfer     Bandwidth       Total Datagrams\n",
+    ],
+)
+def test_udp_is_detected_from_header_lines(header: str) -> None:
+    protocol, rows, _summary = _parse(
+        [
+            header,
+            "[  3]  0.00-1.00  sec  1.25 MBytes  10.50 Mbits/sec  10\n",
+            "[  3]  1.00-2.00  sec  1.25 MBytes  10.50 Mbits/sec  10\n",
+        ]
+    )
+
+    assert protocol == "UDP"
+    assert len(rows) == 2
+    assert "retransmits" not in rows[0]
+
+
+def test_udp_without_jitter_plots_as_udp_not_tcp(tmp_path) -> None:
+    """Sender-side UDP rows have no jitter/loss; the header still marks UDP."""
+    log = _write_log(
+        tmp_path,
+        """\
+Client connecting to 10.0.0.2, UDP port 5001
+UDP buffer size:  208 KByte (default)
+[ ID] Interval       Transfer     Bandwidth       Total Datagrams
+[  3]  0.00-1.00  sec  1.25 MBytes  10.50 Mbits/sec  10
+[  3]  1.00-2.00  sec  1.25 MBytes  10.50 Mbits/sec  10
+""",
+    )
+
+    protocol, rows, _summary = _parse(log.read_text().splitlines())
+
+    assert protocol == "UDP"
+    assert len(rows) == 2
+    saved = generate_iperf2_plots(str(log), use_tmp_dir=False)
+    assert any("_udp_throughput.png" in path for path in saved)
+    assert not any("_tcp_" in path for path in saved)
+
+
 def test_bare_retr_column_is_parsed(tmp_path, capsys) -> None:
     log = _write_log(
         tmp_path,
