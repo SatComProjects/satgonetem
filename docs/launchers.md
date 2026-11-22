@@ -242,9 +242,11 @@ Unary responses are checked for `Status.code == ERROR` and raise
 
 `CaptureSrvMsg` has no `DATA` code. The launcher treats `STDOUT` as capture
 payload and concatenates those chunks, ignores `STDERR` (diagnostics) and `OK`
-(completion marker), and raises on `ERROR`. This framing assumption matches
-the current server implementation. `ProjectSave` only accepts `DATA` messages
-and ignores `NODE_COUNT`/`NODE_SAVE` progress messages.
+(completion marker), and raises on `ERROR`. Because `NodeCapture` is a live
+stream, the deadline bounds it; if the deadline expires after payload arrived,
+the launcher returns the partial pcap prefix instead of discarding it. This
+framing matches the observed server behavior. `ProjectSave` only accepts
+`DATA` messages and ignores `NODE_COUNT`/`NODE_SAVE` progress messages.
 
 `BackendControlMixin` wraps these methods for `TopologyManager` (the
 integrator composes it into the manager). It is deliberately optional:

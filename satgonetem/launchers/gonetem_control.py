@@ -155,6 +155,15 @@ class GoNetEmControlMixin:
                     )
                 # STDERR is diagnostic and OK only marks completion.
         except grpc.RpcError as exc:
+            # NodeCapture is a live stream: the server keeps capturing until
+            # the client stops or the deadline expires. Return the valid pcap
+            # prefix produced so far instead of discarding a bounded capture.
+            if (
+                getattr(exc, "code", lambda: None)()
+                == grpc.StatusCode.DEADLINE_EXCEEDED
+                and chunks
+            ):
+                return b"".join(chunks)
             raise RuntimeError(f"GoNetEmLauncher: {action} failed: {exc}") from exc
         return b"".join(chunks)
 

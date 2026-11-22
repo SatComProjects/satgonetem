@@ -95,13 +95,15 @@ python -c "import satgonetem; import satgonetem.cli.main"
 
 ### Verification record — 2026-11-22
 
-- `pytest -q` — 1957 passed, 1 skipped, 9 deselected (Python 3.14).
+- `pytest -q` — 1958 passed, 1 skipped, 9 deselected (Python 3.14).
 - `pytest -q tests/cli tests/experiment tests/telemetry tests/test_connectivity.py tests/test_packaging.py` — 37 passed under Python 3.10.
 - `ruff check satgonetem tests` — pass; `ruff format --check` — pass.
 - `mypy` — pass (116 files).
 - `uv lock --check` — pass.
 - `uv build` — wheel contains the CLI, `py.typed`, and bundled topology data;
   a wheel installed in a clean venv resolves `test_topology.json`.
-- Unverified: live Docker/GoNetEm RPC effects (restart, capture framing,
-  interface state, snapshot) and live IPv6 address assignment inside the
-  container images.
+- Unverified: live Docker/GoNetEm behavior for the full RPC surface. A live
+  three-node check validated `ProjectGetStatus`, `NodeSetIfState` (both
+  directions), `LinkUpdate` loss/jitter, `ProjectSave`, bounded `NodeCapture`
+  (1208 bytes returned on deadline), and `NodeRestart`; `TopologyStopAll`/
+  `TopologyStartAll` were not exercised live.

@@ -211,6 +211,22 @@ def test_capture_interface_concatenates_stdout_and_ignores_other_stream_codes():
     assert launcher._client.NodeCapture.call_args.kwargs["timeout"] == 5.5
 
 
+def test_capture_interface_returns_partial_data_on_deadline():
+    launcher = _open_launcher()
+
+    class _Deadline(grpc.RpcError):
+        def code(self):
+            return grpc.StatusCode.DEADLINE_EXCEEDED
+
+    def stream(*args, **kwargs):
+        yield netem_pb2.CaptureSrvMsg(code=netem_pb2.CaptureSrvMsg.STDOUT, data=b"pcap")
+        raise _Deadline()
+
+    launcher._client.NodeCapture.side_effect = stream
+
+    assert launcher.capture_interface("Sat0", 1, timeout_s=0.1) == b"pcap"
+
+
 def test_capture_interface_raises_on_error_message():
     launcher = _open_launcher()
     launcher._client.NodeCapture.return_value = [

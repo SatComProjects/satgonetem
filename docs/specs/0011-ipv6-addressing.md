@@ -83,8 +83,11 @@ uv run --frozen --extra dev mypy
 - `pytest -q tests/addressing tests/models tests/services/test_interface_mgr.py
   tests/services/test_network_config.py
   tests/services/test_topology_satcom_persistence.py` — 435 passed.
-- `pytest -q` — 1957 passed, 1 skipped, 9 deselected (Python 3.14).
+- `pytest -q` — 1958 passed, 1 skipped, 9 deselected (Python 3.14).
 - `ruff check satgonetem tests` — pass; `mypy` — pass (116 files).
-- Unverified: `ip -6 addr replace` inside the Docker images and the
-  Python 3.10–3.13 runtime matrix (supplementary tests passed under 3.10;
-  CI runs the full matrix).
+- Live check (2026-11-22): a three-node topology with `ipv6_enabled=True`
+  pushed `fd00:1::/64` / `fd00:2::/64` blocks, `/128` loopbacks, and `/127`
+  link addresses into the containers; `ip -6 -brief address` showed the
+  expected addresses and an ICMPv6 ping over the GSL reached the peer.
+- Unverified: the Python 3.10–3.13 full runtime matrix (supplementary tests
+  passed under 3.10; CI runs the full matrix).
