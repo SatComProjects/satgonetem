@@ -114,11 +114,12 @@ def run_iperf3_flow(
         config: Full iperf3 configuration for this run.
 
     Returns:
-        Iperf3Results populated with the parsed JSON output. For UDP flows,
-        the server-side JSON is preferred because receiver metrics (jitter,
-        packet loss, out-of-order) are only reported on the receiving end;
-        the client JSON is used when the server output cannot be read. For
-        TCP, the client-side JSON is preferred, with the server as fallback.
+        Iperf3Results populated with the parsed JSON output. The JSON is read
+        from the endpoint that owns the metrics: UDP metrics (jitter, packet
+        loss, out-of-order) are reported by the receiver, and TCP metrics
+        (RTT, cwnd, retransmits) by the sender. ``config.reverse`` swaps those
+        endpoints, so UDP reverse prefers the client JSON and TCP reverse
+        prefers the server JSON. The other side is used as a fallback.
         Bidirectional runs always prefer the client JSON because it contains
         both direction streams. Text iperf3 prints around its JSON object
         (e.g. warnings) is skipped.
@@ -161,14 +162,21 @@ def run_iperf3_flow(
             raw = _read_iperf3_json(source, client_json)
             if raw is None:
                 raw = _read_iperf3_json(destination, server_json)
-        elif run_config.protocol.upper() == "UDP":
-            raw = _read_iperf3_json(destination, server_json)
-            if raw is None:
-                raw = _read_iperf3_json(source, client_json)
         else:
-            raw = _read_iperf3_json(source, client_json)
+            # UDP receiver metrics live on the receiving endpoint and TCP
+            # sender metrics on the sending one; --reverse swaps those
+            # endpoints (same rule as Iperf3Flow._json_side).
+            is_udp = run_config.protocol.upper() == "UDP"
+            use_source = run_config.reverse if is_udp else not run_config.reverse
+            if use_source:
+                preferred_node, preferred_json = source, client_json
+                fallback_node, fallback_json = destination, server_json
+            else:
+                preferred_node, preferred_json = destination, server_json
+                fallback_node, fallback_json = source, client_json
+            raw = _read_iperf3_json(preferred_node, preferred_json)
             if raw is None:
-                raw = _read_iperf3_json(destination, server_json)
+                raw = _read_iperf3_json(fallback_node, fallback_json)
 
         if raw is None:
             raise RuntimeError(

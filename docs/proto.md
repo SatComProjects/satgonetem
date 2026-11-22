@@ -23,10 +23,10 @@ The checked-in stubs were generated with:
 
 `netem_pb2_grpc.py` refuses to import if the installed `grpcio` is older than
 the plugin version, and `netem_pb2.py` validates the protobuf runtime version.
-The project declares `grpcio>=1.62.0` and `protobuf>=6.31.0`, so an environment
-that satisfies the lower bounds but not the generated bounds will fail at
-import time. Upgrade `grpcio` (and `grpcio-tools` if you regenerate) when
-working on the protocol.
+The project declares `grpcio>=1.80.0` and `protobuf>=6.31.1`, matching the
+generated stubs' runtime checks. Upgrade `grpcio` (and `grpcio-tools` if you
+regenerate) when working on the protocol, and raise the declared bounds with
+any regenerated stubs.
 
 ## Import layout
 

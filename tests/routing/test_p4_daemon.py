@@ -313,6 +313,24 @@ def test_start_reports_running_process(daemon, monkeypatch):
     assert daemon.is_p4_controller_running() is True
 
 
+def test_start_stops_a_previous_controller_before_spawning(daemon, monkeypatch):
+    _patch_os(monkeypatch, exists=True, executable=True)
+    first = FakeProcess(returncode=None)
+    second = FakeProcess(returncode=None)
+    popen = MagicMock(side_effect=[first, second])
+    monkeypatch.setattr(p4_daemon.subprocess, "Popen", popen)
+    _patch_sleep(monkeypatch)
+
+    assert daemon.start_p4_controller() is True
+    assert daemon.start_p4_controller() is True
+
+    assert first.terminate_calls == 1
+    assert first.wait_calls == 1
+    assert second.terminate_calls == 0
+    assert daemon.p4_controller_process is second
+    assert popen.call_count == 2
+
+
 def test_is_p4_controller_running_false_without_process(daemon):
     assert daemon.is_p4_controller_running() is False
 
@@ -416,6 +434,30 @@ def test_init_reinitializes_owned_shared_memory(daemon, monkeypatch):
     old_graph.close.assert_called_once_with()
     old_graph.unlink.assert_called_once_with()
     assert daemon.graph_shared_memory is new_graph
+
+
+def test_double_init_stops_the_existing_controller(daemon, monkeypatch):
+    """Re-initializing must not leak the first controller process."""
+    daemon.topology.links = {0: object()}
+    first = FakeProcess(returncode=None)
+    second = FakeProcess(returncode=None)
+    graph_cls = MagicMock(side_effect=[MagicMock(), MagicMock()])
+    monkeypatch.setattr(p4_daemon, "GraphSharedMemory", graph_cls)
+    _patch_os(monkeypatch, exists=True, executable=True)
+    popen = MagicMock(side_effect=[first, second])
+    monkeypatch.setattr(p4_daemon.subprocess, "Popen", popen)
+    _patch_sleep(monkeypatch)
+
+    assert daemon.init() is True
+    assert daemon.p4_controller_process is first
+
+    assert daemon.init() is True
+
+    assert first.terminate_calls == 1
+    assert first.wait_calls == 1
+    assert second.terminate_calls == 0
+    assert daemon.p4_controller_process is second
+    assert popen.call_count == 2
 
 
 def test_init_uses_custom_shared_memory_name(monkeypatch, topology, tmp_path):

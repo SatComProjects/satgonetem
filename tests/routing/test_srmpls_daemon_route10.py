@@ -26,13 +26,18 @@ from satgonetem.routing.srmpls_label_manager import SegmentRoutingManager
 
 
 class _FakeKernel:
-    """Route table that fails like iproute2 when deleting a missing route."""
+    """Route table that fails like iproute2 when deleting a missing route.
+
+    Tolerant deletes are generated as an existence check followed by the
+    delete, so an already-absent route is skipped.
+    """
 
     def __init__(self) -> None:
         self.mpls: dict[str, str] = {}
         self.ip: dict[str, str] = {}
         self.batches: list[str] = []
         self.failures: list[str] = []
+        self._delete_allowed = False
 
     def execute(self, command: list[str]) -> str:
         assert command[:2] == ["sh", "-lc"], command
@@ -47,9 +52,32 @@ class _FakeKernel:
         return ""
 
     def _run(self, line: str) -> None:
-        parts = line.split()
-        if parts == ["set", "-e"]:
+        line = line.strip()
+        if line in ("", "set -e"):
             return
+        if line.startswith("if "):
+            self._delete_allowed = self._route_present(line[3:])
+            return
+        if line == "fi":
+            self._delete_allowed = False
+            return
+        if line.startswith("then "):
+            if self._delete_allowed:
+                self._execute_line(line[len("then ") :])
+            return
+        self._execute_line(line)
+
+    def _route_present(self, condition: str) -> bool:
+        show = condition.removesuffix(" 2>&1 | grep -q .")
+        parts = show.split()
+        if parts[:5] == ["ip", "-f", "mpls", "route", "show"]:
+            return parts[6] in self.mpls
+        if parts[:4] == ["ip", "route", "show", "exact"]:
+            return parts[4] in self.ip
+        raise RuntimeError(f"unsupported condition: {condition!r}")
+
+    def _execute_line(self, line: str) -> None:
+        parts = line.split()
         if parts[:4] == ["ip", "-f", "mpls", "route"] and parts[4] == "del":
             if parts[5] not in self.mpls:
                 raise RuntimeError(f"mpls label {parts[5]} missing")
@@ -190,10 +218,11 @@ def _install_lines_in(batches: list[str], prefix: str) -> list[str]:
 
 def _delete_lines(kernel: _FakeKernel, prefix: str) -> list[str]:
     return [
-        line
+        line.removeprefix("then ")
         for batch in kernel.batches
         for line in batch.split("; ")
-        if line.startswith(f"ip route del {prefix}")
+        if line.startswith(f"then ip route del {prefix}")
+        or line.startswith(f"ip route del {prefix}")
     ]
 
 
@@ -219,9 +248,9 @@ def test_removed_destination_is_deleted_once_and_caches_commit():
     batches_before = len(sat.kernel.batches)
     assert daemon._rebuild_sr_mpls_routing(init_flag=False) == 0
     assert sat.kernel.failures == []
-    assert _delete_lines(sat.kernel, "10.0.0.2/32") == [
-        "ip route del 10.0.0.2/32 2>/dev/null || true"
-    ], "the prefix must be deleted exactly once"
+    assert _delete_lines(sat.kernel, "10.0.0.2/32") == ["ip route del 10.0.0.2/32"], (
+        "the prefix must be deleted exactly once"
+    )
     assert daemon._prev_sr_sat_routes[sat.id] == []
     assert daemon._prev_sr_node_sid_routes[sat.id] == [
         "ip -f mpls route replace 16001 dev lo"

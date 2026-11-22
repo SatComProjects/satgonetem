@@ -61,20 +61,31 @@ def delete_command(route_command: str) -> str:
 
 
 def tolerant_delete_command(route_command: str) -> str:
-    """Build a delete that tolerates a route the kernel no longer has.
+    """Build a delete that is tolerant only of an already-absent route.
 
     A cached route can outlive the kernel entry (container restart, or a
-    partially applied earlier batch).  These batches run with ``set -e``, so
-    an unguarded ``route del`` of an absent prefix would abort the whole batch
-    and leave the stale key in the cache, wedging every later update.
+    partially applied earlier batch), so deleting it directly under ``set -e``
+    would abort the whole batch and leave the stale key in the cache forever.
+
+    The delete is therefore guarded by an explicit ``ip ... route show``
+    existence check: an absent route is skipped, while a permission or kernel
+    failure on a route that does exist still aborts the batch. iproute2 uses
+    exit code 2 for an absent route, but it also uses it for kernel errors, so
+    the exit code alone cannot distinguish absence from a real failure.
 
     Args:
         route_command: Installed route command ending in ``replace``.
 
     Returns:
-        Matching ``ip ... route del`` command with a ``|| true`` guard.
+        Matching conditional ``ip ... route del`` command.
     """
-    return f"{delete_command(route_command)} 2>/dev/null || true"
+    family, target = route_key(route_command)
+    delete = delete_command(route_command)
+    if family == "mpls":
+        show = f"ip -f mpls route show exact {target}"
+    else:
+        show = f"ip route show exact {target}"
+    return f"if {show} 2>&1 | grep -q .; then {delete}; fi"
 
 
 def route_changes(
@@ -118,9 +129,9 @@ def cached_route_keys(commands: list[str]) -> set[tuple[str, str]]:
 def build_batch(deletes: list[str], installs: list[str]) -> str:
     """Assemble one fail-fast ``sh -lc`` batch for route deletes and installs.
 
-    Deletes are made tolerant of an already-absent kernel route; installs stay
-    fatal so a failed replacement keeps the previous cache for the next retry.
-    The output is byte-identical to the inline assembly this replaced.
+    Deletes are made tolerant of an already-absent kernel route; a delete that
+    fails while the route exists aborts the batch, so the stale cache entry is
+    kept and retried. Installs stay fatal for the same reason.
 
     Args:
         deletes: Stale route commands to remove.

@@ -207,8 +207,11 @@ timeout fails the flow before the client starts.
 For `bidir=True`, throughput and totals aggregate both directions:
 `avg_throughput_mbps` is the sum of the forward and reverse interval rates,
 `max_throughput_mbps`/`min_throughput_mbps` are per-interval sums, and byte,
-packet, retransmit, loss and jitter figures cover both endpoints. iperf3 3.11
-or newer is required for the `*_bidir_reverse` summaries.
+packet, retransmit, loss and jitter figures cover both endpoints;
+`total_packets` is the transmitted count (`received + lost`) and
+`avg_loss_percent` is `100 * lost / (received + lost)`, matching iperf3's
+`lost_percent`. iperf3 3.11 or newer is required for the
+`*_bidir_reverse` summaries.
 
 ### DataFrames and plotting
 

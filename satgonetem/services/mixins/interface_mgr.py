@@ -236,6 +236,18 @@ class InterfaceMgrMixin:
             if address_v6 is not None:
                 int1.set_ipv6(str(address_v6.source.ip), address_v6.prefix_len)
                 int2.set_ipv6(str(address_v6.target.ip), address_v6.prefix_len)
+
+            # Push the planned addresses while the rollback block still owns
+            # both the interfaces and the newly allocated slots. A transport
+            # failure here must look exactly like any other construction
+            # failure, otherwise the next tick sees peer_interfaces and
+            # clears to_add without ever retrying the push.
+            if set_ip and sync_to_node and self.get_status():
+                source.set_ipv4_to_containers(interface=int1, set_lo=False)
+                target.set_ipv4_to_containers(interface=int2, set_lo=False)
+                if address_v6 is not None:
+                    source.set_ipv6_to_containers(interface=int1, set_lo=False)
+                    target.set_ipv6_to_containers(interface=int2, set_lo=False)
         except Exception:
             for owner, created_interface in created:
                 if created_interface in owner.interfaces:
@@ -253,16 +265,6 @@ class InterfaceMgrMixin:
             if new_v6 and plan_v6 is not None and key is not None:
                 plan_v6.release_link(key)
             raise
-
-        if not set_ip:
-            return
-
-        if sync_to_node and self.get_status():
-            source.set_ipv4_to_containers(interface=int1, set_lo=False)
-            target.set_ipv4_to_containers(interface=int2, set_lo=False)
-            if address_v6 is not None:
-                source.set_ipv6_to_containers(interface=int1, set_lo=False)
-                target.set_ipv6_to_containers(interface=int2, set_lo=False)
 
     def set_ipv4s_for_all_nodes(
         self,

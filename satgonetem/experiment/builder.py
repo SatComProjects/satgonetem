@@ -90,7 +90,8 @@ def build_scenario_topology(
         for index, station in enumerate(scenario.ground_stations)
     ]
 
-    with TemporaryDirectory(prefix="satgonetem_scenario_") as temp_dir:
+    data_dir = TemporaryDirectory(prefix="satgonetem_scenario_")
+    try:
         ground_properties: list[dict[str, Any]] = []
         if ground_entries:
             ground_file = GroundObjectFile(ground_identifier, ground_entries)
@@ -109,7 +110,7 @@ def build_scenario_topology(
                         ],
                         maximum_connected_satellites=3,
                     ),
-                ).to_dict(temp_dir)
+                ).to_dict(data_dir.name)
             )
 
         shell_ids = [ground_identifier] if ground_entries else []
@@ -118,4 +119,13 @@ def build_scenario_topology(
             _walker_shell(shell, shell_ids).model_dump() for shell in scenario.shells
         ]
         simulation_property = SimulationProperty.model_validate(payload)
-        return TopologyManager.from_satcom(simulation_property, network_config)
+        topology = TopologyManager.from_satcom(simulation_property, network_config)
+    except BaseException:
+        data_dir.cleanup()
+        raise
+    # Keep the generated ground-station CSV alive for as long as the
+    # topology: to_file() embeds referenced data files, and a dangling path
+    # would make the saved topology impossible to reload. The temporary
+    # directory is removed when the topology is garbage-collected.
+    topology._scenario_data_dir = data_dir
+    return topology

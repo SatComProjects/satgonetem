@@ -58,6 +58,49 @@ def test_connectivity_matrix_bounds_pairs():
         manager.connectivity_matrix(nodes=nodes, max_pairs=4)
 
 
+def test_connectivity_matrix_deduplicates_names_before_bounding_pairs():
+    nodes = [
+        SimpleNamespace(name="Gnd0", id=0),
+        SimpleNamespace(name="Gnd1", id=1),
+        SimpleNamespace(name="Gnd0", id=2),
+        SimpleNamespace(name="Gnd1", id=3),
+    ]
+    manager = _manager(nodes)
+    expected = _Matrix()
+
+    with patch(
+        "satgonetem.connectivity.build_connectivity_matrix", return_value=expected
+    ) as build:
+        matrix = manager.connectivity_matrix(nodes=nodes, max_pairs=2)
+
+    assert matrix is expected
+    assert len(build.call_args.args[0]) == 2
+
+
+def test_test_connectivity_has_no_legacy_pair_bound():
+    """>100 nodes must keep working for the old convenience API."""
+    nodes = [SimpleNamespace(name=f"Gnd{i}", id=i) for i in range(101)]
+    manager = _manager(nodes)
+    expected = _Matrix()
+
+    with patch(
+        "satgonetem.connectivity.build_connectivity_matrix", return_value=expected
+    ) as build:
+        result = manager.test_connectivity(max_workers=2)
+
+    assert result["summary"]["pairs"] == 0
+    assert len(build.call_args.args[0]) == 101
+    build.assert_called_once()
+
+
+def test_test_connectivity_accepts_explicit_max_pairs():
+    nodes = [SimpleNamespace(name=f"Gnd{i}", id=i) for i in range(3)]
+    manager = _manager(nodes)
+
+    with pytest.raises(ValueError, match="max_pairs"):
+        manager.test_connectivity(max_pairs=4)
+
+
 def test_connectivity_matrix_delegates_to_builder():
     nodes = [SimpleNamespace(name="Gnd0", id=0), SimpleNamespace(name="Gnd1", id=1)]
     manager = _manager(nodes)

@@ -68,22 +68,27 @@ class TestTolerantDeleteCommand:
         [
             (
                 "ip -f mpls route replace 16001 via inet 10.0.0.2 dev Sat1.1",
-                "ip -f mpls route del 16001 2>/dev/null || true",
+                "if ip -f mpls route show exact 16001 2>&1 | grep -q .; "
+                "then ip -f mpls route del 16001; fi",
             ),
             (
                 "ip route replace 10.0.0.9/32 via 10.1.0.2 dev GS0.1",
-                "ip route del 10.0.0.9/32 2>/dev/null || true",
+                "if ip route show exact 10.0.0.9/32 2>&1 | grep -q .; "
+                "then ip route del 10.0.0.9/32; fi",
             ),
         ],
     )
-    def test_every_delete_carries_the_guard(self, command: str, expected: str) -> None:
+    def test_delete_runs_only_when_the_route_exists(
+        self, command: str, expected: str
+    ) -> None:
         assert tolerant_delete_command(command) == expected
 
-    def test_guard_follows_the_delete_command_exactly(self) -> None:
+    def test_guard_does_not_suppress_delete_failures(self) -> None:
         guard = tolerant_delete_command("ip -f mpls route replace 16001 dev lo")
 
-        assert guard.endswith(" 2>/dev/null || true")
-        assert guard.startswith("ip -f mpls route del 16001 ")
+        assert guard.startswith("if ip -f mpls route show exact 16001 ")
+        assert guard.endswith("then ip -f mpls route del 16001; fi")
+        assert "|| true" not in guard
 
 
 class TestCachedRouteKeys:
@@ -143,15 +148,17 @@ class TestBuildBatch:
         install = "ip -f mpls route replace 16001 dev lo"
 
         assert build_batch([stale], [install]) == (
-            "set -e; ip -f mpls route del 16009 2>/dev/null || true; "
+            "set -e; if ip -f mpls route show exact 16009 2>&1 | grep -q .; "
+            "then ip -f mpls route del 16009; fi; "
             "ip -f mpls route replace 16001 dev lo"
         )
 
-    def test_deletes_only_batch_still_has_the_guard(self) -> None:
+    def test_deletes_only_batch_still_checks_for_absence(self) -> None:
         stale = "ip route replace 10.0.0.9/32 via 10.0.0.2 dev Sat1.1"
 
         assert build_batch([stale], []) == (
-            "set -e; ip route del 10.0.0.9/32 2>/dev/null || true"
+            "set -e; if ip route show exact 10.0.0.9/32 2>&1 | grep -q .; "
+            "then ip route del 10.0.0.9/32; fi"
         )
 
     def test_empty_batch_has_no_command(self) -> None:

@@ -169,3 +169,83 @@ def test_build_report_writes_summary_and_markdown(tmp_path):
 def test_build_report_rejects_missing_manifest(tmp_path):
     with pytest.raises(FileNotFoundError):
         build_report(tmp_path)
+
+
+def test_build_report_includes_topology_counts(tmp_path):
+    root = _run_dir(tmp_path)
+    (root / "metrics.jsonl").write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "step": 0,
+                        "sim_time_s": 0,
+                        "topology": {
+                            "satellites": 9,
+                            "ground_stations": 1,
+                            "links": 12,
+                        },
+                        "links": [],
+                    }
+                ),
+                json.dumps(
+                    {
+                        "step": 1,
+                        "sim_time_s": 1,
+                        "topology": {
+                            "satellites": 9,
+                            "ground_stations": 2,
+                            "links": 13,
+                        },
+                        "links": [],
+                    }
+                ),
+            ]
+        )
+    )
+
+    summary = build_report(root)
+
+    assert summary["topology"]["first"] == {
+        "satellites": 9,
+        "ground_stations": 1,
+        "links": 12,
+    }
+    assert summary["topology"]["last"] == {
+        "satellites": 9,
+        "ground_stations": 2,
+        "links": 13,
+    }
+    report = (root / "report.md").read_text()
+    assert "Satellites" in report
+    assert "Ground stations" in report
+    assert "Links" in report
+
+
+def test_build_report_tolerates_truncated_flows_json(tmp_path):
+    root = _run_dir(tmp_path)
+    (root / "flows.json").write_text('[{"source": "Gnd0", "destina')
+
+    summary = build_report(root)
+
+    assert summary["flows"]["count"] == 0
+    assert summary["flows"]["read_error"]
+    assert "flows.json" in summary["flows"]["read_error"]
+    report = (root / "report.md").read_text()
+    assert "flows.json" in report
+
+
+class _Unserializable:
+    def __str__(self):
+        raise RuntimeError("cannot serialize")
+
+
+def test_write_json_is_atomic_on_failure(tmp_path):
+    target = tmp_path / "summary.json"
+    target.write_text("original\n")
+
+    with pytest.raises(RuntimeError, match="cannot serialize"):
+        write_json(target, {"bad": _Unserializable()})
+
+    assert target.read_text() == "original\n"
+    assert list(tmp_path.glob(".summary.json*")) == []

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from satgonetem.experiment import GroundStationSpec, Scenario, ShellSpec
 from satgonetem.experiment.builder import build_scenario_topology
-from satgonetem.services.topology_satcom import NetworkConfig
+from satgonetem.services.topology_satcom import NetworkConfig, TopologyManager
 
 
 def test_builds_walker_shell_and_ground_station():
@@ -23,6 +23,24 @@ def test_builds_walker_shell_and_ground_station():
     assert topology.get_ground_stations()[0].name == "Gnd9"
     assert topology.address_plan is not None
     assert topology.get_links()
+
+
+def test_scenario_topology_round_trips_through_file(tmp_path):
+    scenario = Scenario(
+        name="round-trip",
+        topology=None,
+        duration_s=60,
+        shells=(ShellSpec("LEO", planes=3, satellites_per_plane=3),),
+        ground_stations=(GroundStationSpec("Berlin", 52.52, 13.405, 0.034),),
+    )
+    topology = build_scenario_topology(scenario, NetworkConfig(update_time=1))
+    target = tmp_path / "topology.json"
+
+    topology.to_file(str(target))
+    restored = TopologyManager.from_file(str(target))
+
+    assert len(restored.get_ground_stations()) == 1
+    assert restored.get_ground_stations()[0].name == "Gnd9"
 
 
 def test_builder_rejects_file_backed_scenario():

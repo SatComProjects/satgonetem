@@ -210,7 +210,7 @@ for dynamic updates, forwards `link.loss` (default 0.0) and `link.jitter`
 
 | Method | RPC | Notes |
 |---|---|---|
-| `update_link(link)` | `LinkUpdate` | Logs and swallows errors; does not raise |
+| `update_link(link)` | `LinkUpdate` | Raises `RuntimeError` on transport or non-OK application status |
 | `update_links(links)` | `LinkUpdateMany` | Chunks of `LINK_UPDATE_CHUNK_SIZE = 512`; returns a merged response; preserves `grpc.RpcError` for `UNIMPLEMENTED` fallback |
 | `add_link(link)` | `LinkAdd` | Raises `RuntimeError` on backend failure |
 | `delete_link(link)` | `LinkDel` | Raises `RuntimeError` on backend failure |
@@ -241,12 +241,13 @@ Unary responses are checked for `Status.code == ERROR` and raise
 | `save_project(timeout_s=60.0)` | `ProjectSave` | Returns archive bytes; rejects an empty stream |
 
 `CaptureSrvMsg` has no `DATA` code. The launcher treats `STDOUT` as capture
-payload and concatenates those chunks, ignores `STDERR` (diagnostics) and `OK`
-(completion marker), and raises on `ERROR`. Because `NodeCapture` is a live
-stream, the deadline bounds it; if the deadline expires after payload arrived,
-the launcher returns the partial pcap prefix instead of discarding it. This
-framing matches the observed server behavior. `ProjectSave` only accepts
-`DATA` messages and ignores `NODE_COUNT`/`NODE_SAVE` progress messages.
+payload, ignores `STDERR` (diagnostics), requires `OK` as the completion marker
+or a valid pcap/pcapng header, and raises on `ERROR`, an empty capture, or a
+truncated clean EOF. Because `NodeCapture` is a live stream, the deadline bounds
+it; if the deadline expires after non-empty payload arrived, the launcher returns
+the partial pcap prefix instead of discarding it. This framing matches the
+observed server behavior. `ProjectSave` only accepts `DATA` messages and ignores
+`NODE_COUNT`/`NODE_SAVE` progress messages.
 
 `BackendControlMixin` wraps these methods for `TopologyManager` (the
 integrator composes it into the manager). It is deliberately optional:
@@ -266,9 +267,12 @@ backend lacks it.
 | `save_snapshot(path)` | Calls `ProjectSave` and atomically replaces `path` via a temporary file |
 | `set_link_impairment(link, loss_percent=None, jitter_ms=None)` | Updates `link.loss` / `link.jitter`, marks `to_update`, calls `update_links([link])`, and inspects both the batch status and the per-link result; on any failure it raises and leaves `to_update=True` for retry |
 
-`set_link_impairment()` intentionally does not use `update_link()`, which logs
-and swallows backend errors. If the backend has no `update_links` capability,
+`set_link_impairment()` intentionally uses the verified `update_links()` batch
+rather than the singular path. If the backend has no `update_links` capability,
 the method raises rather than silently accepting an unverified impairment.
+`add_link`/`delete_link`/`update_link` now raise on a non-OK
+`AckResponse.status` and on a closed project; HIL setup/teardown return failure
+so LinkOps keeps the operation pending for retry.
 
 ### Teardown
 

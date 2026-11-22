@@ -156,7 +156,7 @@ def test_start_refuses_to_overwrite_a_retained_launcher():
     assert topology.gonetem_status is False
 
 
-def test_force_close_failure_does_not_mask_startup_error():
+def test_force_close_failure_retains_launcher_and_masks_nothing():
     topology = DummyTopology()
     launcher = make_launcher()
     launcher.start_containers.side_effect = RuntimeError("container start failed")
@@ -167,7 +167,13 @@ def test_force_close_failure_does_not_mask_startup_error():
             topology.start_gonetem()
 
     launcher.force_close_project.assert_called_once_with()
-    assert_clean_failure(topology)
+    # An exception is not a confirmed cleanup: keep the only handle that can
+    # retry the forced close rather than dropping it.
+    assert topology.launcher is launcher
+    assert topology._pending_force_close is True
+    assert topology.status is False
+    assert topology.gonetem_status is False
+    assert topology.routing_initiated is False
 
 
 def test_startup_failure_retains_launcher_when_force_close_reports_failure():

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 from types import SimpleNamespace
 from unittest.mock import MagicMock, call
 
@@ -254,6 +255,107 @@ def test_set_link_state_raises_when_an_endpoint_interface_is_missing():
         host.set_link_state(link, False)
 
     launcher.set_interface_state.assert_not_called()
+
+
+def test_set_link_state_failure_leaves_previous_local_state_intact():
+    """A failed endpoint RPC must not pin admin_up or either interface."""
+    link, source_interface, target_interface = _link_with_interfaces()
+    link.admin_up = True
+    source_interface.is_active = True
+    target_interface.is_active = True
+    calls = []
+
+    def set_state(node_name, if_index, up):
+        calls.append((node_name, if_index, up))
+        if len(calls) == 2:
+            raise RuntimeError("second endpoint failed")
+
+    launcher = SimpleNamespace(set_interface_state=MagicMock(side_effect=set_state))
+    host = _ControlHost(launcher)
+    host.satellites[link.source.id] = link.source
+    host.satellites[link.target.id] = link.target
+
+    with pytest.raises(RuntimeError, match="second endpoint failed"):
+        host.set_link_state(link, False)
+
+    assert len(calls) == 2
+    assert link.admin_up is True
+    assert source_interface.is_active is True
+    assert target_interface.is_active is True
+
+    # A later topology tick must not propagate an admin-down that the backend
+    # never confirmed.
+    link.update_interfaces_state()
+    assert source_interface.is_active is True
+    assert target_interface.is_active is True
+
+
+def test_set_link_state_holds_the_simulation_lock_across_both_backend_calls():
+    link, _source_interface, _target_interface = _link_with_interfaces()
+    entered = threading.Event()
+    release = threading.Event()
+
+    def set_state(*_args):
+        entered.set()
+        assert release.wait(timeout=2.0)
+
+    launcher = SimpleNamespace(set_interface_state=MagicMock(side_effect=set_state))
+    host = _ControlHost(launcher)
+    host.satellites[link.source.id] = link.source
+    host.satellites[link.target.id] = link.target
+
+    worker = threading.Thread(target=host.set_link_state, args=(link, False))
+    worker.start()
+    try:
+        assert entered.wait(timeout=2.0)
+        # The mutation must be serialized against the loop/API lock, and the
+        # local pin must not be visible before both endpoint RPCs finish.
+        assert host._simulation_lock.acquire(blocking=False) is False
+        assert link.admin_up is True
+    finally:
+        release.set()
+        worker.join(timeout=2.0)
+
+    assert not worker.is_alive()
+    assert link.admin_up is False
+
+
+def test_concurrent_link_impairment_updates_do_not_overlap():
+    link, _source_interface, _target_interface = _link_with_interfaces()
+    state_lock = threading.Lock()
+    active = 0
+    max_active = 0
+
+    def update_links(_links):
+        nonlocal active, max_active
+        with state_lock:
+            active += 1
+            max_active = max(max_active, active)
+        time.sleep(0.02)
+        with state_lock:
+            active -= 1
+        return _ok_update_response()
+
+    launcher = SimpleNamespace(update_links=MagicMock(side_effect=update_links))
+    host = _ControlHost(launcher)
+    errors = []
+
+    def worker(loss):
+        try:
+            host.set_link_impairment(link, loss_percent=loss)
+        except Exception as exc:  # pragma: no cover - failure path
+            errors.append(exc)
+
+    threads = [threading.Thread(target=worker, args=(loss,)) for loss in (1.0, 2.0)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=5.0)
+
+    assert not any(thread.is_alive() for thread in threads)
+    assert errors == []
+    assert max_active == 1
+    assert link.to_update is False
 
 
 # stop_all_nodes / start_all_nodes

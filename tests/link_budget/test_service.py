@@ -1,6 +1,9 @@
 """Tests for satgonetem.link_budget.service."""
 
+import math
 from unittest.mock import patch
+
+import pytest
 
 from satgonetem.link_budget.antenna import Antenna
 from satgonetem.link_budget.service import LinkBudgetInputs, LinkBudgetService
@@ -28,6 +31,52 @@ class TestLinkBudgetInputs:
 
 
 class TestLinkBudgetServiceComputeOneWay:
+    @staticmethod
+    def _valid_inputs(**overrides) -> LinkBudgetInputs:
+        values = {
+            "tx_antenna": Antenna(
+                diameter=1.0, efficiency=0.6, sspa_output_power_db=30.0
+            ),
+            "rx_antenna": Antenna(diameter=2.0, efficiency=0.6),
+            "frequency_ghz": 19.0,
+            "distance_km": 1000.0,
+            "elevation_angle": 45.0,
+            "gs_lat": 43.6,
+            "gs_lon": 1.44,
+            "gs_diameter": 2.0,
+            "bandwidth_hz": 100e6,
+        }
+        values.update(overrides)
+        return LinkBudgetInputs(**values)
+
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            ("distance_km", 0.0),
+            ("distance_km", -1.0),
+            ("distance_km", math.nan),
+            ("distance_km", math.inf),
+            ("frequency_ghz", 0.0),
+            ("frequency_ghz", -19.0),
+            ("frequency_ghz", math.nan),
+            ("frequency_ghz", math.inf),
+            ("bandwidth_hz", 0.0),
+            ("bandwidth_hz", -100e6),
+            ("bandwidth_hz", math.nan),
+            ("bandwidth_hz", math.inf),
+        ],
+    )
+    def test_invalid_numeric_inputs_return_zero(self, field, value):
+        inputs = self._valid_inputs(**{field: value})
+
+        assert LinkBudgetService().compute_one_way(inputs) == 0
+
+    @pytest.mark.parametrize("missing", ["tx_antenna", "rx_antenna"])
+    def test_missing_antenna_returns_zero(self, missing):
+        inputs = self._valid_inputs(**{missing: None})
+
+        assert LinkBudgetService().compute_one_way(inputs) == 0
+
     def test_missing_tx_antenna_returns_zero(self):
         service = LinkBudgetService()
         inputs = LinkBudgetInputs(

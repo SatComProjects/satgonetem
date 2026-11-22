@@ -249,9 +249,20 @@ class LinkBudgetCalculator:
             else float(attenuations)
         )
 
-        eirp_db = getattr(getattr(sat_node, "antenna", None), "eirp_db", None)
-        if eirp_db is None:
+        sat_antenna = getattr(sat_node, "antenna", None)
+        if sat_antenna is None:
             raise ValueError("Satellite antenna EIRP is not available")
+        eirp_db = getattr(sat_antenna, "eirp_db", None)
+        if eirp_db is None:
+            # Derive the EIRP from the antenna's component model when it was
+            # not pre-computed (mirrors Antenna.get_eirp_db()).
+            get_eirp_db = getattr(sat_antenna, "get_eirp_db", None)
+            if not callable(get_eirp_db):
+                raise ValueError("Satellite antenna EIRP is not available")
+            try:
+                eirp_db = float(get_eirp_db(self.frequency_ghz_downlink))
+            except (AttributeError, TypeError, ValueError) as exc:
+                raise ValueError("Satellite antenna EIRP is not available") from exc
 
         g_over_t_db: float | None = getattr(gnd_node, "g_over_t_db", None)
         if g_over_t_db is None:

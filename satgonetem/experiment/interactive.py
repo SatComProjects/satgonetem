@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import shlex
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -339,13 +340,15 @@ class ScenarioShell:
         if pattern not in {"star", "delta"}:
             raise ScenarioError("shell pattern must be star or delta")
         self.draft.shells.append(
-            ShellSpec(
-                identifier=identifier,
-                planes=_as_int(args[2], "planes"),
-                satellites_per_plane=_as_int(args[3], "satellites_per_plane"),
-                inclination_deg=_as_float(args[4], "inclination"),
-                revs_per_day=_as_float(args[5], "revs_per_day"),
-                pattern=pattern,
+            ShellSpec.from_mapping(
+                {
+                    "identifier": identifier,
+                    "planes": _as_int(args[2], "planes"),
+                    "satellites_per_plane": _as_int(args[3], "satellites_per_plane"),
+                    "inclination_deg": _as_float(args[4], "inclination"),
+                    "revs_per_day": _as_float(args[5], "revs_per_day"),
+                    "pattern": pattern,
+                }
             )
         )
 
@@ -395,13 +398,15 @@ class ScenarioShell:
         if not -180.0 <= longitude <= 180.0:
             raise ScenarioError("longitude must be in [-180, 180]")
         self.draft.ground_stations.append(
-            GroundStationSpec(
-                name=name,
-                latitude=latitude,
-                longitude=longitude,
-                elevation_km=(
-                    _as_float(args[4], "elevation_km") if len(args) > 4 else 0.0
-                ),
+            GroundStationSpec.from_mapping(
+                {
+                    "name": name,
+                    "latitude": latitude,
+                    "longitude": longitude,
+                    "elevation_km": (
+                        _as_float(args[4], "elevation_km") if len(args) > 4 else 0.0
+                    ),
+                }
             )
         )
 
@@ -455,17 +460,23 @@ class ScenarioShell:
         if parsed_duration <= 0:
             raise ScenarioError("duration must be > 0")
         self.draft.traffic.append(
-            TrafficSpec(
-                src=src,
-                dst=dst,
-                tool=tool,
-                start_s=_as_float(start, "start") if start is not None else 0.0,
-                duration_s=parsed_duration,
-                count=parsed_count,
-                protocol=parsed_protocol,
-                bandwidth_mbps=(
-                    _as_float(bandwidth, "bandwidth") if bandwidth is not None else 0.0
-                ),
+            TrafficSpec.from_mapping(
+                {
+                    "src": src,
+                    "dst": dst,
+                    "tool": tool,
+                    "start_s": (
+                        _as_float(start, "start") if start is not None else 0.0
+                    ),
+                    "duration_s": parsed_duration,
+                    "count": parsed_count,
+                    "protocol": parsed_protocol,
+                    "bandwidth_mbps": (
+                        _as_float(bandwidth, "bandwidth")
+                        if bandwidth is not None
+                        else 0.0
+                    ),
+                }
             )
         )
 
@@ -525,9 +536,12 @@ def _as_float(value: str | None, label: str) -> float:
     if value is None:
         raise ScenarioError(f"{label} is required")
     try:
-        return float(value)
+        number = float(value)
     except ValueError as exc:
         raise ScenarioError(f"{label} must be a number, got {value!r}") from exc
+    if not math.isfinite(number):
+        raise ScenarioError(f"{label} must be finite, got {value!r}")
+    return number
 
 
 def _as_bool(value: str, label: str) -> bool:

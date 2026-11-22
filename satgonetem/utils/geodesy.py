@@ -62,13 +62,18 @@ def gmst_from_jd(JD_utc):
 def ecef_to_eci(r_ecef, gmst):
     """
     Rotate ECEF coordinates to ECI at a given GMST (radians).
+
+    The transformation is a right-handed rotation about the z-axis by
+    ``+GMST`` (``Rz(+gmst)``), because the ECI frame is fixed in inertial
+    space while the ECEF frame rotates with the Earth.
+
     :param r_ecef: ECEF coordinates as a numpy array [x, y, z] in kilometers.
     :param gmst: Greenwich Mean Sidereal Time in radians.
     :return: ECI coordinates as a numpy array [x, y, z] in kilometers.
     """
     cos_g = np.cos(gmst)
     sin_g = np.sin(gmst)
-    R = np.array([[cos_g, sin_g, 0], [-sin_g, cos_g, 0], [0, 0, 1]])
+    R = np.array([[cos_g, -sin_g, 0], [sin_g, cos_g, 0], [0, 0, 1]])
     return R.dot(r_ecef)
 
 
@@ -80,11 +85,22 @@ def geodetic_to_orbital_sgp4(lat_deg, lon_deg, alt_km, inc_deg, epoch):
       - and also return the computed classical elements:
         mean motion (rev/day), RAAN (rad), argument of perigee (rad),
         mean anomaly (rad).
+
+    Raises:
+        ValueError: If ``inc_deg`` is zero.  The RAAN solution divides by
+            ``sin(inclination)``, so an equatorial (zero-inclination) orbit
+            would produce NaN.
     """
     # 1) Convert inputs to radians/units
     lat = np.radians(lat_deg)
     lon = np.radians(lon_deg)
     inc = np.radians(inc_deg)
+
+    if float(inc_deg) == 0.0:
+        raise ValueError(
+            "inc_deg must be non-zero: the RAAN solution divides by "
+            "sin(inclination) and is undefined for equatorial orbits"
+        )
 
     # 2) Geodetic to ECEF
     r_ecef = geodetic_to_ecef(lat, lon, alt_km)

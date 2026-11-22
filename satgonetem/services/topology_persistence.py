@@ -19,6 +19,7 @@ from sat_com_application.simulation_manager import SimulationManager
 from sat_com_builder.models import SimulationProperty
 from sat_com_model.models import PointOfPresence, UserTerminal
 
+from satgonetem.models.link import validate_admin_up, validate_jitter, validate_loss
 from satgonetem.services.network_config import NetworkConfig, config_from_instance
 from satgonetem.utils.project_builder import (
     _attach_ground_object_domain,
@@ -32,6 +33,153 @@ from satgonetem.utils.project_fixtures import create_empty_project
 # Serialised simulation dates must use the format accepted by
 # satgonetem.utils.project_fixtures.create_empty_project() on restore.
 RUNTIME_DATE_FORMAT = "%d/%m/%Y %H:%M:%S"
+
+_LINK_TYPE_CATEGORIES: dict[str, str] = {
+    "InterSatelliteLink": "inter_satellite",
+    "GroundStationLink": "ground_station",
+    "UserTerminalLink": "user_terminal",
+    "GroundObjectLink": "ground_object",
+}
+
+
+def _endpoint_names(link: object | None) -> tuple[str, str]:
+    """Return the serialized source/destination names for a satcom link."""
+
+    def name_of(endpoint: object | None) -> str:
+        if endpoint is None:
+            return ""
+        return str(getattr(endpoint, "satellite_name", getattr(endpoint, "label", "")))
+
+    return (
+        name_of(getattr(link, "source", None)),
+        name_of(getattr(link, "destination", None)),
+    )
+
+
+def _find_link_wrapper(manager: Any, satcom_link: object) -> Any | None:
+    """Return the emulator ``Link`` wrapper for *satcom_link*, if present."""
+    wrappers = getattr(manager, "links", {}) or {}
+    for wrapper in wrappers.values():
+        if getattr(wrapper, "satcom_object", None) is satcom_link:
+            return wrapper
+
+    # Runtime links created after the last sync may not have a wrapper yet.
+    endpoint_names = _endpoint_names(satcom_link)
+    for wrapper in wrappers.values():
+        if _endpoint_names(getattr(wrapper, "satcom_object", None)) == endpoint_names:
+            return wrapper
+    return None
+
+
+def _link_state_record(manager: Any, satcom_link: object) -> dict[str, Any]:
+    """Return the persisted impairment/admin/capacity-mode state for a link."""
+    wrapper = _find_link_wrapper(manager, satcom_link)
+    if wrapper is None:
+        return {
+            "loss": float(getattr(manager, "link_loss_percent", 0.0)),
+            "jitter": int(getattr(manager, "link_jitter_ms", 0)),
+            "admin_up": True,
+            "use_budget": bool(getattr(manager, "use_budget", False)),
+        }
+
+    return {
+        "loss": float(getattr(wrapper, "loss", 0.0)),
+        "jitter": int(getattr(wrapper, "jitter", 0)),
+        "admin_up": bool(getattr(wrapper, "admin_up", True)),
+        "use_budget": bool(getattr(wrapper, "use_budget", False)),
+    }
+
+
+def _find_satellite_wrapper(manager: Any, name: str) -> Any | None:
+    """Return the emulator ``Satellite`` wrapper matching a persisted name."""
+    for wrapper in (getattr(manager, "satellites", {}) or {}).values():
+        satcom = getattr(wrapper, "satcom_object", None)
+        if getattr(satcom, "satellite_name", None) == name:
+            return wrapper
+        if getattr(wrapper, "name", None) == name:
+            return wrapper
+    return None
+
+
+def apply_runtime_state(manager: Any, runtime_state: dict[str, Any]) -> None:
+    """Apply per-link and per-satellite state saved in a runtime payload.
+
+    Node and link topology is rebuilt by :func:`restore_runtime_state`; this
+    second pass restores state that only exists on the emulator wrappers:
+    satellite addressability and per-link loss, jitter, admin state and
+    link-budget mode.
+
+    Args:
+        manager: Rebuilt ``TopologyManager`` with synchronized wrappers.
+        runtime_state: Dictionary produced by :func:`serialize_runtime_state`.
+    """
+    for sat_data in runtime_state.get("satellites", []):
+        if "addressable" not in sat_data:
+            continue
+        wrapper = _find_satellite_wrapper(manager, sat_data.get("name", ""))
+        if wrapper is not None:
+            wrapper.set_addressable(bool(sat_data["addressable"]))
+
+    persisted: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for category, records in (runtime_state.get("links", {}) or {}).items():
+        if not isinstance(records, list):
+            continue
+        for record in records:
+            if not isinstance(record, dict):
+                continue
+            key = (
+                category,
+                str(record.get("source", "")),
+                str(record.get("destination", "")),
+            )
+            persisted[key] = record
+
+    for wrapper in (getattr(manager, "links", {}) or {}).values():
+        satcom = getattr(wrapper, "satcom_object", None)
+        if satcom is None:
+            continue
+        link_type = getattr(wrapper, "type", None)
+        if not isinstance(link_type, str):
+            continue
+        category = _LINK_TYPE_CATEGORIES.get(link_type)
+        if category is None:
+            continue
+        record = persisted.get((category, *_endpoint_names(satcom)))
+        if record is None:
+            continue
+        _apply_link_record(wrapper, record)
+
+
+def _apply_link_record(wrapper: Any, record: dict[str, Any]) -> None:
+    """Restore one link wrapper's persisted state, tolerating bad values."""
+    try:
+        loss = validate_loss(record["loss"]) if "loss" in record else wrapper.loss
+        jitter = (
+            validate_jitter(record["jitter"]) if "jitter" in record else wrapper.jitter
+        )
+        admin_up = (
+            validate_admin_up(record["admin_up"])
+            if "admin_up" in record
+            else wrapper.admin_up
+        )
+        use_budget = (
+            bool(record["use_budget"]) if "use_budget" in record else wrapper.use_budget
+        )
+    except (TypeError, ValueError) as exc:
+        logging.warning(
+            "Ignoring invalid persisted state for link %s--%s: %s",
+            getattr(getattr(wrapper, "source", None), "name", "?"),
+            getattr(getattr(wrapper, "target", None), "name", "?"),
+            exc,
+        )
+        return
+
+    wrapper.loss = loss
+    wrapper.jitter = jitter
+    wrapper.admin_up = admin_up
+    wrapper.use_budget = use_budget
+    wrapper.update_link_capacities()
+    wrapper.update_interfaces_state()
 
 
 def ground_file_restore_path(ground_dir: str, basename: object) -> str:
@@ -99,6 +247,7 @@ def serialize_runtime_state(manager: Any) -> dict[str, Any]:
 
     for sat in manager.simulation_manager.get_satellites():
         mm = sat.get_movement_model()
+        wrapper = _find_satellite_wrapper(manager, sat.satellite_name)
         state["satellites"].append(
             {
                 "name": sat.satellite_name,
@@ -106,6 +255,9 @@ def serialize_runtime_state(manager: Any) -> dict[str, Any]:
                 "tle_line2": getattr(mm, "line2", ""),
                 "object_id": sat.object_id,
                 "domain": sat.domain,
+                "addressable": (
+                    bool(wrapper.is_addressable()) if wrapper is not None else False
+                ),
             }
         )
 
@@ -150,13 +302,13 @@ def serialize_runtime_state(manager: Any) -> dict[str, Any]:
 
     for link in manager.simulation_manager.get_inter_satellites_links():
         direction = getattr(link.inter_satellite_direction, "name", "UNDEFINED")
-        state["links"]["inter_satellite"].append(
-            {
-                "source": getattr(link.source, "satellite_name", ""),
-                "destination": getattr(link.destination, "satellite_name", ""),
-                "direction": direction,
-            }
-        )
+        record = {
+            "source": getattr(link.source, "satellite_name", ""),
+            "destination": getattr(link.destination, "satellite_name", ""),
+            "direction": direction,
+        }
+        record.update(_link_state_record(manager, link))
+        state["links"]["inter_satellite"].append(record)
 
     for link in manager.simulation_manager.get_ground_stations_links():
         src = getattr(link.source, "satellite_name", getattr(link.source, "label", ""))
@@ -165,7 +317,9 @@ def serialize_runtime_state(manager: Any) -> dict[str, Any]:
             "satellite_name",
             getattr(link.destination, "label", ""),
         )
-        state["links"]["ground_station"].append({"source": src, "destination": dst})
+        record = {"source": src, "destination": dst}
+        record.update(_link_state_record(manager, link))
+        state["links"]["ground_station"].append(record)
 
     for link in manager.simulation_manager.get_user_terminal_links():
         src = getattr(link.source, "satellite_name", getattr(link.source, "label", ""))
@@ -174,12 +328,16 @@ def serialize_runtime_state(manager: Any) -> dict[str, Any]:
             "satellite_name",
             getattr(link.destination, "label", ""),
         )
-        state["links"]["user_terminal"].append({"source": src, "destination": dst})
+        record = {"source": src, "destination": dst}
+        record.update(_link_state_record(manager, link))
+        state["links"]["user_terminal"].append(record)
 
     for link in manager.simulation_manager.get_static_ground_object_links():
         src = getattr(link.source, "label", "")
         dst = getattr(link.destination, "label", "")
-        state["links"]["ground_object"].append({"source": src, "destination": dst})
+        record = {"source": src, "destination": dst}
+        record.update(_link_state_record(manager, link))
+        state["links"]["ground_object"].append(record)
 
     return state
 

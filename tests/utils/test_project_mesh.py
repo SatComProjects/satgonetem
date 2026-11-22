@@ -500,6 +500,28 @@ def test_add_mesh_links_creates_intra_plane_ring_and_skips_singleton(caplog) -> 
     assert singleton not in {sat for pair in manager.isl_calls for sat in pair}
 
 
+def test_add_mesh_links_two_satellite_plane_creates_one_isl(caplog) -> None:
+    # A two-satellite plane's ring wraps back to the same pair; it must not
+    # emit (A, B) and (B, A) as two separate ISLs.
+    plane = [_sat(0.0, 0.0), _sat(0.0, 180.0)]
+    manager = _FakeSimulationManager(plane)
+
+    with caplog.at_level(logging.INFO):
+        add_mesh_links(
+            manager,
+            add_orbital=True,
+            add_adjacent=False,
+            add_ground=False,
+        )
+
+    assert manager.isl_calls == [(plane[0], plane[1])]
+    assert len(manager.isl_links) == 1
+    assert manager.isl_links[0].inter_satellite_direction is (
+        InterSatelliteLinkDirection.ORBITAL
+    )
+    assert "Mesh links created: 1 ISLs, 0 GSLs" in caplog.text
+
+
 def test_add_mesh_links_connects_adjacent_planes_by_sorted_phase() -> None:
     plane_a = [_sat(0.0, 270.0), _sat(0.0, 30.0), _sat(0.0, 150.0)]
     plane_b = [_sat(10.0, 150.0), _sat(10.0, 270.0), _sat(10.0, 30.0)]

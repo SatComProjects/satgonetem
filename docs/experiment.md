@@ -137,15 +137,18 @@ Each run directory contains:
 
 | File | Contents |
 |---|---|
-| `manifest.yaml` | Validated scenario plus run directory and start time |
+| `manifest.yaml` | Validated scenario plus run directory and start time; reloadable with `Scenario.from_file()` |
 | `metrics.jsonl` | One metrics sample per interval |
-| `flows.json` | Serialized ping/iperf3/hping3 results and errors |
+| `flows.json` | Serialized ping/iperf3 results and errors |
+| `errors.json` | Run, event, flow and teardown errors |
 | `connectivity.json` | Optional all-pairs connectivity matrix (`connectivity: true`) |
-| `summary.json` | Machine-readable aggregate summary |
-| `report.md` | Human-readable report |
+| `summary.json` | Machine-readable aggregate summary, including topology counts |
+| `report.md` | Human-readable report, including topology counts and errors |
 
-Failed flows and simulator errors are recorded in the artifacts rather than
-silently dropped.
+Failed flows, event/traffic failures and simulator errors are recorded in
+`errors.json`, `summary.json`, `report.md` and `RunResult.errors` rather than
+silently dropped. Artifact writes are atomic; a truncated `flows.json` is
+reported instead of aborting `satgonetem report`.
 
 ## Metrics
 
@@ -168,7 +171,9 @@ loss, and RTT min/avg/max. `ConnectivityMatrix.to_dict()` and `to_json()`
 serialize the result for reports or CI. `TopologyManager.connectivity_matrix()`
 is the convenience wrapper for the current addressable nodes.
 
-`test_connectivity()` remains as a printing wrapper for compatibility.
+`test_connectivity()` remains as a printing wrapper for compatibility. It is
+unbounded by default so the legacy API keeps working for large topologies; pass
+`max_pairs=` to opt into the safety bound.
 
 ## Known limitations
 
