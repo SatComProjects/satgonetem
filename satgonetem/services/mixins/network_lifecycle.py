@@ -7,6 +7,7 @@ import time
 import warnings
 from typing import TYPE_CHECKING, Any
 
+from satgonetem.services.mixins.simulation_loop import ensure_simulation_lock
 from satgonetem.utils.constants import MAX_WORKERS
 
 if TYPE_CHECKING:
@@ -175,17 +176,21 @@ class NetworkLifecycleMixin:
 
         Routes live inside the project containers, so the daemon is removed
         while the containers still exist and then dropped regardless of the
-        removal outcome.
+        removal outcome. The simulation lock serializes the removal with
+        ``init_routing()``/``delete_routing()`` and in-flight ticks.
         """
-        daemon = getattr(self, "routing_daemon", None)
-        if daemon is not None:
-            try:
-                daemon.remove(max_workers=MAX_WORKERS)
-            except Exception as exc:
-                logging.error("Failed to remove routing daemon during stop: %s", exc)
-            finally:
-                self.routing_daemon = None
-        self.set_routing_initiated(False)
+        with ensure_simulation_lock(self):
+            daemon = getattr(self, "routing_daemon", None)
+            if daemon is not None:
+                try:
+                    daemon.remove(max_workers=MAX_WORKERS)
+                except Exception as exc:
+                    logging.error(
+                        "Failed to remove routing daemon during stop: %s", exc
+                    )
+                finally:
+                    self.routing_daemon = None
+            self.set_routing_initiated(False)
 
     def stop_gonetem(self) -> float:
         """Stop GoNetEm and clean up resources.

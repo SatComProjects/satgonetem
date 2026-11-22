@@ -211,6 +211,27 @@ def test_stop_retains_launcher_and_handles_when_force_close_also_fails():
     assert topology.routing_initiated is False
 
 
+def test_stop_routing_daemon_removal_holds_the_simulation_lock():
+    """Removal must not race init_routing/delete_routing, which hold the lock."""
+    import threading
+
+    topology = DummyTopology()
+    topology._simulation_lock = threading.RLock()
+    lock_owned_during_remove = []
+
+    class LockCheckingDaemon:
+        def remove(self, max_workers):
+            lock_owned_during_remove.append(topology._simulation_lock._is_owned())
+
+    topology.routing_daemon = LockCheckingDaemon()
+
+    topology._stop_routing_daemon()
+
+    assert lock_owned_during_remove == [True]
+    assert topology._simulation_lock._is_owned() is False
+    assert topology.routing_daemon is None
+
+
 def test_stop_removes_routing_daemon_before_clearing_it():
     topology = DummyTopology()
     topology.routing_initiated = True
