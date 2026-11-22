@@ -7,6 +7,7 @@ import time
 import warnings
 from typing import TYPE_CHECKING, Any
 
+from satgonetem.services.mixins.simulation_loop import ensure_simulation_lock
 from satgonetem.utils.constants import MAX_WORKERS
 
 if TYPE_CHECKING:
@@ -34,6 +35,13 @@ class NetworkLifecycleMixin:
         """
         if self.get_gonetem_status():
             return None
+
+        retained_launcher = getattr(self, "launcher", None)
+        if retained_launcher is not None:
+            raise RuntimeError(
+                "A GoNetEm project is still retained from a failed stop; "
+                "call stop_gonetem() to retry before starting again."
+            )
 
         from satgonetem.launchers.registry import create_launcher
 
@@ -168,17 +176,21 @@ class NetworkLifecycleMixin:
 
         Routes live inside the project containers, so the daemon is removed
         while the containers still exist and then dropped regardless of the
-        removal outcome.
+        removal outcome. The simulation lock serializes the removal with
+        ``init_routing()``/``delete_routing()`` and in-flight ticks.
         """
-        daemon = getattr(self, "routing_daemon", None)
-        if daemon is not None:
-            try:
-                daemon.remove(max_workers=MAX_WORKERS)
-            except Exception as exc:
-                logging.error("Failed to remove routing daemon during stop: %s", exc)
-            finally:
-                self.routing_daemon = None
-        self.set_routing_initiated(False)
+        with ensure_simulation_lock(self):
+            daemon = getattr(self, "routing_daemon", None)
+            if daemon is not None:
+                try:
+                    daemon.remove(max_workers=MAX_WORKERS)
+                except Exception as exc:
+                    logging.error(
+                        "Failed to remove routing daemon during stop: %s", exc
+                    )
+                finally:
+                    self.routing_daemon = None
+            self.set_routing_initiated(False)
 
     def stop_gonetem(self) -> float:
         """Stop GoNetEm and clean up resources.
@@ -217,15 +229,19 @@ class NetworkLifecycleMixin:
             close_error = exc
             logging.error("Failed to close GoNetEm project during stop: %s", exc)
             force_close = getattr(launcher, "force_close_project", None)
+            fallback_succeeded = False
             if callable(force_close):
                 try:
-                    force_close()
+                    fallback_succeeded = force_close() is True
                 except Exception as force_exc:
                     logging.error(
                         "Force-close fallback failed during stop: %s", force_exc
                     )
-                    launcher_retained = True
-            else:
+            if not fallback_succeeded:
+                logging.error(
+                    "Force-close fallback did not confirm cleanup during stop; "
+                    "retaining project handles for a retry"
+                )
                 launcher_retained = True
 
         # A failed stop must not leave the manager in a state where
@@ -284,6 +300,8 @@ class NetworkLifecycleMixin:
             except Exception as exc:
                 logging.error("Failed to stop traffic flows during force stop: %s", exc)
 
+            self._stop_routing_daemon()
+
             if self.hil_manager is not None:
                 try:
                     self.hil_manager.teardown_all()
@@ -303,6 +321,10 @@ class NetworkLifecycleMixin:
         finally:
             # A failed force stop must not leave stale state behind.
             self.launcher = None
+            self.routing_daemon = None
+            self.project_id = None
+            self.client = None
+            self.request = None
             self.set_status(False)
             self.set_gonetem_status(False)
             self.set_routing_initiated(False)

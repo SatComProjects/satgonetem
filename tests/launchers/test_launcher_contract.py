@@ -47,6 +47,7 @@ class FakeLauncher(NetworkLauncher):
 
     def force_close_project(self):
         self.closed = True
+        return True
 
     def update_link(self, link):
         pass
@@ -110,7 +111,7 @@ def test_launcher_contract_accepts_a_minimal_backend():
 
     assert isinstance(launcher, NetworkLauncher)
     assert launcher.start_containers([], links=[]) == (0.1, 0.2)
-    launcher.force_close_project()
+    assert launcher.force_close_project() is True
     assert launcher.closed is True
 
 

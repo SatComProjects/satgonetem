@@ -119,8 +119,9 @@ def test_stop_clears_project_handles_even_without_a_launcher():
 
 
 class FailingLauncher:
-    def __init__(self, force_close_error=None):
+    def __init__(self, force_close_error=None, force_close_result=True):
         self.force_close_error = force_close_error
+        self.force_close_result = force_close_result
         self.force_close_calls = 0
 
     def close_project(self):
@@ -130,6 +131,26 @@ class FailingLauncher:
         self.force_close_calls += 1
         if self.force_close_error is not None:
             raise self.force_close_error
+        return self.force_close_result
+
+
+class ClientClearingLauncher:
+    """Mimics GoNetEmLauncher: close() always drops the client in finally."""
+
+    def __init__(self, force_close_result):
+        self._client = MagicMock()
+        self.force_close_result = force_close_result
+        self.force_close_calls = 0
+
+    def close_project(self):
+        try:
+            raise RuntimeError("ProjectClose failed")
+        finally:
+            self._client = None
+
+    def force_close_project(self):
+        self.force_close_calls += 1
+        return self.force_close_result
 
 
 def test_stop_uses_force_close_fallback_and_clears_launcher():
@@ -144,6 +165,29 @@ def test_stop_uses_force_close_fallback_and_clears_launcher():
     assert launcher.force_close_calls == 1
     assert topology.launcher is None
     assert topology.project_id is None
+
+
+def test_stop_retains_handles_when_force_close_reports_failure():
+    """A fallback that reports failure must not be mistaken for success."""
+    topology = DummyTopology()
+    topology.gonetem_status = True
+    topology.project_id = "project-1"
+    topology.client = MagicMock()
+    topology.request = MagicMock()
+    launcher = ClientClearingLauncher(force_close_result=False)
+    topology.launcher = launcher
+
+    with pytest.raises(RuntimeError, match="ProjectClose failed"):
+        topology.stop_gonetem()
+
+    assert launcher.force_close_calls == 1
+    assert launcher._client is None
+    assert topology.launcher is launcher
+    assert topology.project_id == "project-1"
+    assert topology.client is not None
+    assert topology.request is not None
+    assert topology.gonetem_status is False
+    assert topology.routing_initiated is False
 
 
 def test_stop_retains_launcher_and_handles_when_force_close_also_fails():
@@ -165,6 +209,27 @@ def test_stop_retains_launcher_and_handles_when_force_close_also_fails():
     assert topology.request is not None
     assert topology.gonetem_status is False
     assert topology.routing_initiated is False
+
+
+def test_stop_routing_daemon_removal_holds_the_simulation_lock():
+    """Removal must not race init_routing/delete_routing, which hold the lock."""
+    import threading
+
+    topology = DummyTopology()
+    topology._simulation_lock = threading.RLock()
+    lock_owned_during_remove = []
+
+    class LockCheckingDaemon:
+        def remove(self, max_workers):
+            lock_owned_during_remove.append(topology._simulation_lock._is_owned())
+
+    topology.routing_daemon = LockCheckingDaemon()
+
+    topology._stop_routing_daemon()
+
+    assert lock_owned_during_remove == [True]
+    assert topology._simulation_lock._is_owned() is False
+    assert topology.routing_daemon is None
 
 
 def test_stop_removes_routing_daemon_before_clearing_it():

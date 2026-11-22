@@ -197,3 +197,30 @@ def test_runtime_state_roundtrip_preserves_user_terminals_and_pops(
     assert [
         (link.source.label, link.destination.label) for link in ground_object_links
     ] == [("AuditPoP", "AuditGS")]
+
+    satellite_before = reloaded_manager.get_satellites()[0]
+    position_before = (
+        satellite_before.spatial_position_info.latitude,
+        satellite_before.spatial_position_info.longitude,
+        satellite_before.spatial_position_info.altitude,
+    )
+    time_before = reloaded.get_current_time()
+    step_before = reloaded.get_current_time_step()
+
+    reloaded.update_simulation()
+
+    assert reloaded.get_current_time() > time_before
+    assert reloaded.get_current_time_step() == step_before + 1
+    satellite_after = reloaded_manager.get_satellites()[0]
+    position_after = (
+        satellite_after.spatial_position_info.latitude,
+        satellite_after.spatial_position_info.longitude,
+        satellite_after.spatial_position_info.altitude,
+    )
+    assert position_after != position_before
+
+    # Restored user terminals and points of presence need a ground-object
+    # domain, otherwise the next tick raises AttributeError.
+    for ground_object in (user_terminals[0], pops[0]):
+        assert ground_object.ground_object_domain is not None
+        assert ground_object.ground_object_domain.type == "ground_station"
