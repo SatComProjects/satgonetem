@@ -388,6 +388,10 @@ class GroundStationSpec:
 
     def __post_init__(self) -> None:
         _non_empty_str(self.name, "ground_station.name")
+        if any(separator in self.name for separator in (",", "\r", "\n")):
+            raise ScenarioError(
+                "ground_station.name must not contain commas or line breaks"
+            )
         _number(
             self.latitude,
             "ground_station.latitude",

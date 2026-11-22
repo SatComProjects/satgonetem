@@ -70,6 +70,12 @@ class GroundObjectFile:
         """
         safe_name = self.identifier.replace(" ", "_").lower()
         file_path = pathlib.Path(base_dir) / f"{safe_name}.txt"
+        for entry in self.entries:
+            if any(separator in entry.name for separator in (",", "\r", "\n")):
+                raise ValueError(
+                    "Ground station names must not contain commas or line "
+                    f"breaks: {entry.name!r}"
+                )
         with open(file_path, "w") as f:
             for entry in self.entries:
                 f.write(entry.to_csv_line() + "\n")
