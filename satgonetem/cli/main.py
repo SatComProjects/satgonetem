@@ -85,8 +85,7 @@ def doctor_checks(server: str = "localhost:10110") -> list[DoctorCheck]:
 
 def _print_checks(checks: Iterable[DoctorCheck], as_json: bool) -> None:
     values = [
-        {"name": check.name, "ok": check.ok, "detail": check.detail}
-        for check in checks
+        {"name": check.name, "ok": check.ok, "detail": check.detail} for check in checks
     ]
     if as_json:
         print(json.dumps(values, indent=2))
@@ -136,7 +135,9 @@ def _cmd_summary(args: argparse.Namespace) -> int:
         print(f"Satellites: {summary['satellites']}")
         print(f"Ground stations: {summary['ground_stations']}")
         print(f"Links: {summary['links']} {link_types}")
-        print(f"IPv6 addressing: {'enabled' if summary['ipv6_enabled'] else 'disabled'}")
+        print(
+            f"IPv6 addressing: {'enabled' if summary['ipv6_enabled'] else 'disabled'}"
+        )
     return 0
 
 
@@ -167,7 +168,9 @@ def _cmd_report(args: argparse.Namespace) -> int:
     else:
         print(f"Run: {summary['name']}")
         print(f"Samples: {summary['metrics']['samples']}")
-        print(f"Flows: {summary['flows']['count']} ({summary['flows']['errors']} errors)")
+        print(
+            f"Flows: {summary['flows']['count']} ({summary['flows']['errors']} errors)"
+        )
         print(Path(args.run_dir) / "report.md")
     return 0
 
