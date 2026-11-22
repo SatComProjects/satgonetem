@@ -91,6 +91,67 @@ def test_error_cleanup_kill_pattern_is_bracketed(dst_ip: str | None) -> None:
     assert "iperf3 -s -1" not in kills[0]
 
 
+def test_kill_server_never_targets_the_unreserved_config_port() -> None:
+    """Cleanup must use this flow's reserved port, never config.port."""
+    source = _make_node("gs0", "10.0.0.1")
+    destination = _make_node("gs1", "10.0.0.2")
+    flow = Iperf3Flow(source, destination, Iperf3Config(duration=1, port=6000))
+    port = flow._reserve_port()
+    assert port != flow.config.port
+
+    flow._kill_server("10.0.0.2")
+
+    kills = _commands(destination, "pkill")
+    assert len(kills) == 1
+    assert f"-p {port}" in kills[0]
+    assert f"-p {flow.config.port}" not in kills[0]
+
+
+def test_failed_allocation_does_not_kill_another_flows_server(monkeypatch) -> None:
+    """No port reserved: cleanup must not pkill whatever holds config.port."""
+    monkeypatch.setattr(
+        iperf3_ports,
+        "_IPERF3_PORT_ALLOCATOR",
+        iperf3_ports._Iperf3PortAllocator(base_port=5201, max_port=5201),
+    )
+    # Another concurrent flow owns the only port in the pool.
+    assert iperf3_ports._IPERF3_PORT_ALLOCATOR.allocate() == 5201
+
+    source = _make_node("gs0", "10.0.0.1")
+    destination = _make_node("gs1", "10.0.0.2")
+    source.execute_command.return_value = ""
+    destination.execute_command.return_value = ""
+    flow = Iperf3Flow(source, destination, Iperf3Config(duration=1))
+
+    flow.start()
+    flow.join(timeout=5.0)
+
+    assert flow.status() == FlowStatus.ERROR
+    assert "no free iperf3 port" in str(flow._error)
+    assert _commands(destination, "pkill") == []
+
+
+def test_pre_reservation_failure_does_not_kill_a_server(monkeypatch) -> None:
+    """A failure before _reserve_port must leave every process untouched."""
+
+    class _NoLoopback:
+        @property
+        def ipv4(self) -> str:
+            raise RuntimeError("loopback unavailable")
+
+    source = _make_node("gs0", "10.0.0.1")
+    destination = _make_node("gs1", "10.0.0.2")
+    destination.loopback = _NoLoopback()
+
+    flow = Iperf3Flow(source, destination, Iperf3Config(duration=1))
+    flow.start()
+    flow.join(timeout=5.0)
+
+    assert flow.status() == FlowStatus.ERROR
+    assert "loopback unavailable" in str(flow._error)
+    assert _commands(destination, "pkill") == []
+
+
 def test_server_probe_pgrep_pattern_is_bracketed() -> None:
     node = _make_node("gs1", "10.0.0.2")
     node.execute_command.return_value = ""

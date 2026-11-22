@@ -210,9 +210,13 @@ class Iperf3Flow(ThreadedFlow):
         The pattern is scoped to the flow's bind address and port so that
         servers belonging to other flows are left alone. When the bind
         address could not even be resolved, fall back to matching only the
-        one-shot server on this flow's port. Errors are suppressed.
+        one-shot server on this flow's port. A flow that never reserved a
+        port launched no server: returning early avoids signalling whichever
+        unrelated flow may own ``config.port``. Errors are suppressed.
         """
-        port = self._port if self._port is not None else self.config.port
+        port = self._port
+        if port is None:
+            return
         if dst_ip:
             pattern = f"[i]perf3 -s -1 -B {dst_ip} -p {port}"
         else:

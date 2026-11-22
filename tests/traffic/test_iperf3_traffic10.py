@@ -69,8 +69,8 @@ def _kill_calls(node: MagicMock) -> list:
     ]
 
 
-def test_missing_destination_loopback_sets_error_and_tries_server_kill():
-    """Setup failure before the try block must not leave the flow RUNNING."""
+def test_missing_destination_loopback_sets_error_without_killing():
+    """Setup failure before reservation must not kill another flow's server."""
     src = _make_node("gs0", "10.0.0.1")
     dst = _make_node("gs1", "10.0.0.2")
     del dst.loopback  # simulate an unset/missing destination loopback
@@ -86,7 +86,9 @@ def test_missing_destination_loopback_sets_error_and_tries_server_kill():
     assert status == FlowStatus.ERROR
     assert status is not FlowStatus.RUNNING
     assert flow._error is not None
-    assert _kill_calls(dst), "detached server kill was not attempted"
+    assert not _kill_calls(dst), (
+        "no port was reserved, so cleanup must not pkill a shared config port"
+    )
 
 
 def test_cleanup_failure_does_not_prevent_done_result():
