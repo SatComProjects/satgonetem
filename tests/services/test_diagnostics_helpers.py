@@ -403,17 +403,26 @@ def test_monitor_links_maps_interface_usage_to_links(monkeypatch):
 
 
 def test_node_terminal_sends_resizes_reads_and_closes():
+    import threading
     from types import SimpleNamespace
 
     from satgonetem.services.node_terminal import NodeTerminal
 
-    class FakeStream:
+    class LiveStream:
+        """Stream that yields one response and stays open until cancelled."""
+
+        def __init__(self):
+            self._cancelled = threading.Event()
+
         def __iter__(self):
-            yield SimpleNamespace(code=0, data=b"stdout")  # STDOUT
-            yield None  # sentinel? recv loop only iterates responses
+            yield SimpleNamespace(code=0, data=b"hello")
+            self._cancelled.wait(timeout=2)
+
+        def cancel(self):
+            self._cancelled.set()
 
     client = MagicMock()
-    client.NodeExec.return_value = iter([SimpleNamespace(code=0, data=b"hello")])
+    client.NodeExec.return_value = LiveStream()
     terminal = NodeTerminal(client, "project", "Sat0")
 
     with terminal:
@@ -423,4 +432,5 @@ def test_node_terminal_sends_resizes_reads_and_closes():
 
     assert code == "stdout"
     assert data == b"hello"
+    assert terminal.closed is True
     terminal.close()
