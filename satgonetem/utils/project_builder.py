@@ -200,14 +200,24 @@ def _attach_ground_object_domain(
     # The ownership ``domain`` string may resolve to a generic domain with no
     # connectivity strategy; a ground station needs a ground_station domain.
     if domain is None or getattr(domain, "type", None) != "ground_station":
+        station_domains = [
+            candidate
+            for candidate in simulation_manager.simulation.ground_object_domains
+            if getattr(candidate, "type", None) == "ground_station"
+        ]
+        # Duplicate identifiers make the lookup ambiguous. Prefer the domain
+        # whose identifier matches this object's ownership before falling back
+        # to the first compatible ground-station domain.
         domain = next(
             (
                 candidate
-                for candidate in simulation_manager.simulation.ground_object_domains
-                if getattr(candidate, "type", None) == "ground_station"
+                for candidate in station_domains
+                if getattr(candidate, "identifier", None) == ground_object.domain
             ),
             None,
         )
+        if domain is None:
+            domain = station_domains[0] if station_domains else None
 
     if domain is None:
         domain = GroundObjectDomain(
