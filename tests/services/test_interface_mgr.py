@@ -8,14 +8,17 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from satgonetem.addressing import Ipv4AddressPlan
+from satgonetem.addressing import Ipv4AddressPlan, Ipv6AddressPlan
 from satgonetem.services.mixins.interface_mgr import InterfaceMgrMixin
+from satgonetem.services.mixins.link_ops import LinkOpsMixin
+from satgonetem.services.mixins.network_lifecycle import NetworkLifecycleMixin
+from satgonetem.utils.constants import MAX_WORKERS
 from tests.support import DummyTopology, FakeCommandExecutor, add_interface
 
 pytestmark = pytest.mark.unit
 
 
-class _InterfaceMgrHost(InterfaceMgrMixin, DummyTopology):
+class _InterfaceMgrHost(InterfaceMgrMixin, LinkOpsMixin, DummyTopology):
     """Lightweight topology host exposing InterfaceMgrMixin."""
 
     def __init__(self, **attributes) -> None:
@@ -26,8 +29,16 @@ class _InterfaceMgrHost(InterfaceMgrMixin, DummyTopology):
             "ground_station_prefix_len": 20,
             "satellite_prefix_len": 27,
             "user_terminal_prefix_len": 20,
+            "ipv6_enabled": False,
+            "ipv6_ground_station_pool": "fd00:1::/40",
+            "ipv6_satellite_pool": "fd00:2::/40",
+            "ipv6_user_terminal_pool": "fd00:3::/40",
+            "ipv6_ground_station_prefix_len": 64,
+            "ipv6_satellite_prefix_len": 64,
+            "ipv6_user_terminal_prefix_len": 64,
             "interfaces": [],
             "address_plan": None,
+            "address_plan_v6": None,
             "interface_version": 0,
             "status": False,
         }
@@ -42,6 +53,10 @@ class _InterfaceMgrHost(InterfaceMgrMixin, DummyTopology):
 
     def get_status(self) -> bool:
         return self.status
+
+    @staticmethod
+    def _build_link_key(source, target):
+        return frozenset((source.name, target.name))
 
 
 @pytest.fixture
@@ -337,9 +352,11 @@ def test_build_interfaces_from_link_requires_an_address_plan(
     with pytest.raises(RuntimeError, match="IPv4 address plan is not initialized"):
         manager._build_interfaces_from_link(link)
 
-    # Interfaces are created before the missing plan is detected.
-    assert len(link.peer_interfaces) == 2
-    assert [interface.ipv4 for interface in link.peer_interfaces] == ["", ""]
+    # The plan is validated before interfaces are created.
+    assert link.peer_interfaces == []
+    assert manager.interfaces == []
+    assert satellite_0.interfaces == []
+    assert satellite_1.interfaces == []
 
 
 def test_build_interfaces_syncs_batched_address_commands_when_running(
@@ -460,3 +477,449 @@ def test_get_interface_to_peer_returns_none_for_node_without_interfaces(
     manager: _InterfaceMgrHost,
 ) -> None:
     assert manager._get_interface_to_peer(manager.add_satellite("Sat0"), 1) is None
+
+
+# ----------------------------------------------------------------------
+# IPv6 dual-stack allocation
+# ----------------------------------------------------------------------
+
+
+def _dual_stack_manager() -> _InterfaceMgrHost:
+    return _InterfaceMgrHost(ipv6_enabled=True)
+
+
+def _pushed_payloads(executor: FakeCommandExecutor) -> list[str]:
+    """Decode every base64 ``ip`` batch payload recorded by *executor*."""
+    payloads = []
+    for command, detach in executor.calls:
+        assert detach is False
+        assert command[:2] == ["sh", "-c"]
+        encoded = command[2].split()[1]
+        payloads.append(base64.b64decode(encoded).decode("utf-8"))
+    return payloads
+
+
+class _LifecycleHost(NetworkLifecycleMixin, DummyTopology):
+    """Topology host for ``set_ip_addresses`` with stubbed per-family pushes."""
+
+    def __init__(self, **attributes) -> None:
+        defaults = {
+            "address_plan": object(),
+            "address_plan_v6": None,
+            "ipv6_enabled": False,
+        }
+        defaults.update(attributes)
+        if defaults["ipv6_enabled"] and "address_plan_v6" not in attributes:
+            defaults["address_plan_v6"] = object()
+        super().__init__(**defaults)
+
+
+def test_initialize_address_plan_without_ipv6_keeps_single_stack(
+    manager: _InterfaceMgrHost,
+) -> None:
+    satellite = manager.add_satellite("Sat0")
+    peer = manager.add_satellite("Sat1")
+    manager._initialize_address_plan()
+    link = manager.add_link(satellite, peer)
+    manager._build_interfaces_from_link(link)
+
+    assert manager.address_plan_v6 is None
+    assert satellite.address_block_v6 is None
+    assert satellite.loopback.ipv6 == ""
+    assert [iface.ipv6 for iface in link.peer_interfaces] == ["", ""]
+
+
+def test_initialize_address_plan_assigns_ipv6_blocks_and_loopbacks_in_id_order():
+    manager = _dual_stack_manager()
+    satellite_1 = manager.add_satellite("Sat1")
+    ground_5 = manager.add_ground_station("Gnd5")
+    satellite_0 = manager.add_satellite("Sat0")
+    ground_2 = manager.add_ground_station("Gnd2")
+
+    manager._initialize_address_plan()
+
+    assert isinstance(manager.address_plan_v6, Ipv6AddressPlan)
+
+    assert str(satellite_0.address_block_v6) == "fd00:2::/64"
+    assert satellite_0.loopback.ipv6 == "fd00:2::1"
+    assert satellite_0.loopback.ipv6_prefix_len == 128
+    assert str(satellite_1.address_block_v6) == "fd00:2:0:1::/64"
+    assert satellite_1.loopback.ipv6 == "fd00:2:0:1::1"
+
+    assert str(ground_2.address_block_v6) == "fd00:1::/64"
+    assert ground_2.loopback.ipv6 == "fd00:1::1"
+    assert str(ground_5.address_block_v6) == "fd00:1:0:1::/64"
+
+    # IPv4 remains assigned independently.
+    assert str(satellite_0.address_block) == "10.128.0.0/27"
+    assert satellite_0.loopback.ipv4 == "10.128.0.1"
+
+
+def test_initialize_address_plan_preallocates_unique_ipv6_link_pairs():
+    def build(reverse_insertion: bool) -> _InterfaceMgrHost:
+        manager = _dual_stack_manager()
+        satellite_0 = manager.add_satellite("Sat0")
+        satellite_1 = manager.add_satellite("Sat1")
+        ground_5 = manager.add_ground_station("Gnd5")
+        if reverse_insertion:
+            manager.add_link(satellite_1, ground_5)
+            manager.add_link(satellite_0, satellite_1)
+        else:
+            manager.add_link(satellite_0, satellite_1)
+            manager.add_link(satellite_1, ground_5)
+        manager._initialize_address_plan()
+        return manager
+
+    forward = build(reverse_insertion=False)
+    reverse = build(reverse_insertion=True)
+    satellite_key = frozenset(("Sat0", "Sat1"))
+    ground_key = frozenset(("Sat1", "Gnd5"))
+
+    plan_v6 = forward.address_plan_v6
+    assert isinstance(plan_v6, Ipv6AddressPlan)
+    assert plan_v6.link_address(satellite_key) == reverse.address_plan_v6.link_address(
+        satellite_key
+    )
+    assert plan_v6.link_address(ground_key) == reverse.address_plan_v6.link_address(
+        ground_key
+    )
+
+    satellite_link = plan_v6.link_address(satellite_key)
+    ground_link = plan_v6.link_address(ground_key)
+    assert satellite_link is not None
+    assert ground_link is not None
+    assert satellite_link.prefix_len == 127
+    assert (
+        str(satellite_link.source.ip),
+        str(satellite_link.target.ip),
+    ) == ("fd00:2::4", "fd00:2::5")
+    assert ground_link.owner_id == 5
+    assert (
+        str(ground_link.source.ip),
+        str(ground_link.target.ip),
+    ) == ("fd00:1::5", "fd00:1::4")
+
+
+def test_build_interfaces_from_link_assigns_both_address_families():
+    manager = _dual_stack_manager()
+    satellite_0 = manager.add_satellite("Sat0")
+    satellite_1 = manager.add_satellite("Sat1")
+    manager._initialize_address_plan()
+    link = manager.add_link(satellite_0, satellite_1)
+
+    manager._build_interfaces_from_link(link)
+
+    interface_1, interface_2 = link.peer_interfaces
+    assert (interface_1.ipv4, interface_1.prefix_len) == ("10.128.0.4", 31)
+    assert (interface_2.ipv4, interface_2.prefix_len) == ("10.128.0.5", 31)
+    assert (interface_1.ipv6, interface_1.ipv6_prefix_len) == ("fd00:2::4", 127)
+    assert (interface_2.ipv6, interface_2.ipv6_prefix_len) == ("fd00:2::5", 127)
+    assert (
+        interface_1.network6
+        == interface_2.network6
+        == (ipaddress.ip_network("fd00:2::4/127"))
+    )
+    assert interface_1.network6.subnet_of(satellite_0.address_block_v6)
+
+
+def test_build_interfaces_syncs_both_families_when_running():
+    manager = _dual_stack_manager()
+    satellite_0 = manager.add_satellite("Sat0")
+    satellite_1 = manager.add_satellite("Sat1")
+    satellite_0_executor = FakeCommandExecutor()
+    satellite_1_executor = FakeCommandExecutor()
+    satellite_0.execute_command = satellite_0_executor
+    satellite_1.execute_command = satellite_1_executor
+    manager.status = True
+    manager._initialize_address_plan()
+    link = manager.add_link(satellite_0, satellite_1)
+
+    manager._build_interfaces_from_link(link)
+
+    interface_1, interface_2 = link.peer_interfaces
+    payloads = _pushed_payloads(satellite_0_executor)
+    assert payloads == [
+        f"addr replace {interface_1.ipv4}/{interface_1.prefix_len}"
+        f" dev {interface_1.get_iname()}",
+        f"addr replace {interface_1.ipv6}/{interface_1.ipv6_prefix_len}"
+        f" dev {interface_1.get_iname()}",
+    ]
+    ipv6_commands = [
+        call[0][2] for call in satellite_0_executor.calls if "ip -6" in call[0][2]
+    ]
+    assert len(ipv6_commands) == 1
+
+
+def test_set_ipv6s_for_all_nodes_dispatches_one_batch_per_node(
+    manager: _InterfaceMgrHost,
+) -> None:
+    nodes = [
+        manager.add_satellite("Sat0"),
+        manager.add_satellite("Sat1"),
+        manager.add_ground_station("Gnd2"),
+    ]
+    for node in nodes:
+        node.set_ipv6_to_containers = MagicMock()
+
+    manager.set_ipv6s_for_all_nodes(set_lo=False, max_workers=2)
+
+    for node in nodes:
+        node.set_ipv6_to_containers.assert_called_once_with(
+            interface=None, set_lo=False
+        )
+
+
+def test_set_ipv6s_for_all_nodes_can_filter_node_kinds(
+    manager: _InterfaceMgrHost,
+) -> None:
+    satellite = manager.add_satellite("Sat0")
+    ground = manager.add_ground_station("Gnd2")
+    satellite.set_ipv6_to_containers = MagicMock()
+    ground.set_ipv6_to_containers = MagicMock()
+
+    manager.set_ipv6s_for_all_nodes(
+        satellites=False, ground_stations=True, max_workers=1
+    )
+    satellite.set_ipv6_to_containers.assert_not_called()
+    ground.set_ipv6_to_containers.assert_called_once_with(interface=None, set_lo=True)
+
+    satellite.set_ipv6_to_containers.reset_mock()
+    ground.set_ipv6_to_containers.reset_mock()
+
+    manager.set_ipv6s_for_all_nodes(
+        satellites=True, ground_stations=False, max_workers=1
+    )
+    satellite.set_ipv6_to_containers.assert_called_once_with(
+        interface=None, set_lo=True
+    )
+    ground.set_ipv6_to_containers.assert_not_called()
+
+
+def test_set_ipv6s_for_all_nodes_attempts_every_node_before_raising(
+    manager: _InterfaceMgrHost,
+) -> None:
+    failing = manager.add_satellite("Sat0")
+    healthy = manager.add_satellite("Sat1")
+    failing.set_ipv6_to_containers = MagicMock(side_effect=RuntimeError("no ipv6"))
+    healthy.set_ipv6_to_containers = MagicMock()
+
+    with pytest.raises(
+        RuntimeError, match=r"IPv6 assignment failed on 1 node\(s\): Sat0"
+    ):
+        manager.set_ipv6s_for_all_nodes(ground_stations=False, max_workers=2)
+
+    failing.set_ipv6_to_containers.assert_called_once_with(interface=None, set_lo=True)
+    healthy.set_ipv6_to_containers.assert_called_once_with(interface=None, set_lo=True)
+
+
+def test_cleanup_removed_link_releases_ipv6_slot_for_reuse():
+    manager = _dual_stack_manager()
+    satellite_0 = manager.add_satellite("Sat0")
+    satellite_1 = manager.add_satellite("Sat1")
+    satellite_2 = manager.add_satellite("Sat2")
+    manager._initialize_address_plan()
+
+    removed = manager.add_link(satellite_0, satellite_1)
+    manager._build_interfaces_from_link(removed)
+    removed_key = frozenset(("Sat0", "Sat1"))
+    first = manager.address_plan_v6.link_address(removed_key)
+    assert first is not None
+    assert first.slot == 0
+    manager.links = {removed_key: removed}
+
+    LinkOpsMixin._cleanup_removed_links_sequential(manager, [removed])
+
+    assert manager.address_plan_v6.link_address(removed_key) is None
+
+    replacement = manager.add_link(satellite_0, satellite_2)
+    manager._build_interfaces_from_link(replacement)
+    reused = manager.address_plan_v6.link_address(frozenset(("Sat0", "Sat2")))
+    assert reused is not None
+    assert reused.slot == 0
+    assert reused.source == first.source
+    assert reused.target == first.target
+    assert manager.address_plan.link_address(removed_key) is None
+
+
+def test_set_ip_addresses_pushes_both_families_when_ipv6_is_enabled():
+    manager = _LifecycleHost(ipv6_enabled=True)
+    calls = []
+    manager.set_ipv4s_for_all_nodes = lambda **kwargs: calls.append(("ipv4", kwargs))
+    manager.set_ipv6s_for_all_nodes = lambda **kwargs: calls.append(("ipv6", kwargs))
+
+    elapsed = manager.set_ip_addresses(satellites=False, ground_stations=True)
+
+    assert elapsed >= 0.0
+    expected = {
+        "set_lo": True,
+        "max_workers": MAX_WORKERS,
+        "satellites": False,
+        "ground_stations": True,
+    }
+    assert calls == [("ipv4", expected), ("ipv6", expected)]
+
+
+def test_set_ip_addresses_skips_ipv6_when_disabled():
+    manager = _LifecycleHost(ipv6_enabled=False)
+    calls = []
+    manager.set_ipv4s_for_all_nodes = lambda **kwargs: calls.append(("ipv4", kwargs))
+    manager.set_ipv6s_for_all_nodes = lambda **kwargs: calls.append(("ipv6", kwargs))
+
+    manager.set_ip_addresses()
+
+    assert [family for family, _ in calls] == ["ipv4"]
+
+
+def test_set_ip_addresses_requires_ipv6_plan_when_enabled():
+    manager = _LifecycleHost(ipv6_enabled=True, address_plan_v6=None)
+    manager.set_ipv4s_for_all_nodes = MagicMock()
+    manager.set_ipv6s_for_all_nodes = MagicMock()
+
+    with pytest.raises(RuntimeError, match="IPv6 address plan is not initialized"):
+        manager.set_ip_addresses()
+
+    manager.set_ipv4s_for_all_nodes.assert_called_once()
+    manager.set_ipv6s_for_all_nodes.assert_not_called()
+
+
+def test_initialize_address_plan_does_not_mutate_nodes_when_ipv6_config_fails():
+    manager = _InterfaceMgrHost(ipv6_enabled=True, ipv6_satellite_pool="10.0.0.0/8")
+    satellite = manager.add_satellite("Sat0")
+
+    with pytest.raises(Exception, match="IPv6"):
+        manager._initialize_address_plan()
+
+    assert satellite.address_block is None
+    assert satellite.address_block_v6 is None
+    assert satellite.loopback.ipv4 == ""
+    assert satellite.loopback.ipv6 == ""
+    assert manager.address_plan is None
+    assert manager.address_plan_v6 is None
+
+
+def test_initialize_address_plan_does_not_mutate_nodes_when_ipv6_links_exhaust():
+    manager = _InterfaceMgrHost(
+        ipv6_enabled=True,
+        ipv6_satellite_pool="fd00:2::/123",
+        ipv6_satellite_prefix_len=125,
+    )
+    satellites = [manager.add_satellite(f"Sat{node_id}") for node_id in range(4)]
+    # A /125 block has two /127 slots; the third link from Sat0 cannot fit.
+    manager.add_link(satellites[0], satellites[1])
+    manager.add_link(satellites[0], satellites[2])
+    manager.add_link(satellites[0], satellites[3])
+
+    with pytest.raises(Exception, match="no free /127 slots"):
+        manager._initialize_address_plan()
+
+    for satellite in satellites:
+        assert satellite.address_block is None
+        assert satellite.address_block_v6 is None
+        assert satellite.loopback.ipv4 == ""
+        assert satellite.loopback.ipv6 == ""
+    assert manager.address_plan is None
+    assert manager.address_plan_v6 is None
+
+
+def test_build_interfaces_rolls_back_ipv4_when_ipv6_allocation_fails():
+    manager = _InterfaceMgrHost(
+        ipv6_enabled=True,
+        ipv6_satellite_pool="fd00:2::/123",
+        ipv6_satellite_prefix_len=125,
+    )
+    satellites = [manager.add_satellite(f"Sat{node_id}") for node_id in range(4)]
+    manager.add_link(satellites[0], satellites[1])
+    manager.add_link(satellites[0], satellites[2])
+    manager._initialize_address_plan()
+
+    link = manager.add_link(satellites[0], satellites[3])
+    key = frozenset(("Sat0", "Sat3"))
+
+    with pytest.raises(Exception, match="no free /127 slots"):
+        manager._build_interfaces_from_link(link)
+
+    assert link.peer_interfaces == []
+    assert manager.interfaces == []
+    assert manager.address_plan.link_address(key) is None
+    assert manager.address_plan_v6.link_address(key) is None
+    assert satellites[0].interfaces == []
+    assert satellites[3].interfaces == []
+
+
+def test_build_interfaces_rolls_back_new_links_when_interface_creation_fails(
+    monkeypatch,
+):
+    manager = _dual_stack_manager()
+    satellite_0 = manager.add_satellite("Sat0")
+    satellite_1 = manager.add_satellite("Sat1")
+    manager._initialize_address_plan()
+    link = manager.add_link(satellite_0, satellite_1)
+    key = frozenset(("Sat0", "Sat1"))
+
+    def fail_create(name):
+        raise RuntimeError("cannot create interface")
+
+    monkeypatch.setattr(satellite_1, "create_interface", fail_create)
+
+    with pytest.raises(RuntimeError, match="cannot create interface"):
+        manager._build_interfaces_from_link(link)
+
+    assert link.peer_interfaces == []
+    assert manager.address_plan.link_address(key) is None
+    assert manager.address_plan_v6.link_address(key) is None
+
+
+def test_build_interfaces_keeps_preallocated_slots_on_interface_failure(
+    monkeypatch,
+):
+    manager = _dual_stack_manager()
+    satellite_0 = manager.add_satellite("Sat0")
+    satellite_1 = manager.add_satellite("Sat1")
+    link = manager.add_link(satellite_0, satellite_1)
+    manager._initialize_address_plan()
+    key = frozenset(("Sat0", "Sat1"))
+    # Initialization preallocates both families for existing links.
+    assert manager.address_plan.link_address(key) is not None
+    assert manager.address_plan_v6.link_address(key) is not None
+
+    def fail_create(name):
+        raise RuntimeError("cannot create interface")
+
+    monkeypatch.setattr(satellite_1, "create_interface", fail_create)
+
+    with pytest.raises(RuntimeError, match="cannot create interface"):
+        manager._build_interfaces_from_link(link)
+
+    # Rollback must not release slots allocated by the initial plan build.
+    assert manager.address_plan.link_address(key) is not None
+    assert manager.address_plan_v6.link_address(key) is not None
+
+
+def test_set_ip_addresses_still_attempts_ipv6_when_ipv4_raises():
+    manager = _LifecycleHost(ipv6_enabled=True)
+    manager.set_ipv4s_for_all_nodes = MagicMock(
+        side_effect=RuntimeError("IPv4 assignment failed on 1 node(s): Sat0")
+    )
+    manager.set_ipv6s_for_all_nodes = MagicMock()
+
+    with pytest.raises(RuntimeError, match="IPv4 assignment failed"):
+        manager.set_ip_addresses(satellites=False, ground_stations=True)
+
+    manager.set_ipv6s_for_all_nodes.assert_called_once_with(
+        set_lo=True,
+        max_workers=MAX_WORKERS,
+        satellites=False,
+        ground_stations=True,
+    )
+
+
+def test_set_ip_addresses_aggregates_failures_from_both_families():
+    manager = _LifecycleHost(ipv6_enabled=True)
+    manager.set_ipv4s_for_all_nodes = MagicMock(side_effect=RuntimeError("v4 down"))
+    manager.set_ipv6s_for_all_nodes = MagicMock(side_effect=RuntimeError("v6 down"))
+
+    with pytest.raises(RuntimeError, match=r"IPv4.*v4 down.*IPv6.*v6 down"):
+        manager.set_ip_addresses()
+
+    manager.set_ipv4s_for_all_nodes.assert_called_once()
+    manager.set_ipv6s_for_all_nodes.assert_called_once()

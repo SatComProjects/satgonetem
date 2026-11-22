@@ -378,7 +378,11 @@ class NetworkLifecycleMixin:
     def set_ip_addresses(
         self, satellites: bool = True, ground_stations: bool = True
     ) -> float:
-        """Set IPv4 addresses for all interfaces in the topology.
+        """Set the planned addresses for all interfaces in the topology.
+
+        IPv4 is always pushed.  When IPv6 is enabled, IPv6 is pushed too; both
+        families are attempted even if one of them fails, and the failures are
+        re-raised after both attempts.
 
         Args:
             satellites:  Optinal flag to assign addresses to satellites (defaults to True)
@@ -392,12 +396,47 @@ class NetworkLifecycleMixin:
             )
 
         tic: float = time.perf_counter()
-        self.set_ipv4s_for_all_nodes(
-            set_lo=True,
-            max_workers=MAX_WORKERS,
-            satellites=satellites,
-            ground_stations=ground_stations,
-        )
+
+        ipv4_error: Exception | None = None
+        try:
+            self.set_ipv4s_for_all_nodes(
+                set_lo=True,
+                max_workers=MAX_WORKERS,
+                satellites=satellites,
+                ground_stations=ground_stations,
+            )
+        except Exception as exc:  # noqa: BLE001 - attempted after IPv6 push
+            ipv4_error = exc
+            logging.exception("IPv4 address assignment failed")
+
+        ipv6_error: Exception | None = None
+        if getattr(self, "ipv6_enabled", False):
+            if getattr(self, "address_plan_v6", None) is None:
+                ipv6_error = RuntimeError(
+                    "IPv6 address plan is not initialized; construct the "
+                    "TopologyManager from a topology before assigning addresses"
+                )
+            else:
+                try:
+                    self.set_ipv6s_for_all_nodes(
+                        set_lo=True,
+                        max_workers=MAX_WORKERS,
+                        satellites=satellites,
+                        ground_stations=ground_stations,
+                    )
+                except Exception as exc:  # noqa: BLE001 - aggregate both families
+                    ipv6_error = exc
+                    logging.exception("IPv6 address assignment failed")
+
+        if ipv4_error is not None and ipv6_error is not None:
+            raise RuntimeError(
+                "Address assignment failed for both families: "
+                f"IPv4: {ipv4_error}; IPv6: {ipv6_error}"
+            ) from ipv4_error
+        if ipv4_error is not None:
+            raise ipv4_error
+        if ipv6_error is not None:
+            raise ipv6_error
 
         return time.perf_counter() - tic
 

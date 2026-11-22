@@ -447,6 +447,8 @@ class TopologySyncMixin:
             default_capacity_kbps=default_capacity_kbps,
             use_budget=self.use_budget,
             link_budget_config=self.link_budget_config,
+            loss=getattr(self, "link_loss_percent", 0.0),
+            jitter=getattr(self, "link_jitter_ms", 0),
         )
         link.satcom_object = sat_com_link
         return link
@@ -667,6 +669,8 @@ class TopologySyncMixin:
                 is_active=True,
                 use_budget=self.use_budget,
                 link_budget_config=self.link_budget_config,
+                loss=getattr(self, "link_loss_percent", 0.0),
+                jitter=getattr(self, "link_jitter_ms", 0),
             )
 
             # Ensure delay is an integer

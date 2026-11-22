@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from satgonetem.addressing import AddressPlanConfigurationError
 from satgonetem.services.topology_satcom import (
     MAX_LINK_QUEUE_PACKETS,
     NetworkConfig,
@@ -21,6 +22,16 @@ SAMPLE_TOPOLOGIES = sorted(
         "*_topology.json"
     )
 )
+
+IPV6_CONFIG_FIELDS = {
+    "ipv6_enabled",
+    "ipv6_ground_station_pool",
+    "ipv6_satellite_pool",
+    "ipv6_user_terminal_pool",
+    "ipv6_ground_station_prefix_len",
+    "ipv6_satellite_prefix_len",
+    "ipv6_user_terminal_prefix_len",
+}
 
 
 @pytest.fixture(scope="module")
@@ -164,12 +175,31 @@ class TestSampleTopologies:
     @pytest.mark.parametrize("path", SAMPLE_TOPOLOGIES)
     def test_pins_every_network_config_field(self, path):
         payload = json.loads(Path(path).read_text())["network_config"]
+        known_fields = {field.name for field in fields(NetworkConfig)}
 
-        assert set(payload) == {field.name for field in fields(NetworkConfig)}
+        # Sample payloads may predate additive fields; from_mapping rejects
+        # unknown keys while field defaults fill the gaps.
+        assert set(payload) <= known_fields
 
-        config = NetworkConfig(**payload)
+        config = NetworkConfig.from_mapping(payload)
+        assert isinstance(config.ipv6_enabled, bool)
         assert 0 <= config.link_netem_limit <= MAX_LINK_QUEUE_PACKETS
         assert 0 <= config.link_txqueuelen <= MAX_LINK_QUEUE_PACKETS
+
+    def test_legacy_payload_without_ipv6_fields_defaults_disabled(self):
+        current = NetworkConfig()
+        payload = {
+            field.name: getattr(current, field.name)
+            for field in fields(NetworkConfig)
+            if field.name not in IPV6_CONFIG_FIELDS
+        }
+
+        config = NetworkConfig.from_mapping(payload)
+
+        assert config.ipv6_enabled is False
+        assert config.ipv6_ground_station_pool == "fd00:1::/40"
+        assert config.ipv6_satellite_pool == "fd00:2::/40"
+        assert config.ipv6_user_terminal_pool == "fd00:3::/40"
 
 
 class TestNetworkConfigSingleSource:
@@ -194,3 +224,192 @@ class TestNetworkConfigSingleSource:
         assert reloaded.controller_subnet_prefix == 24
         assert reloaded.controller_bridge_name == "MgmtBridge"
         assert reloaded.controller_node_iface_pattern == "eth5{node_id}"
+
+
+class TestIpv6Config:
+    def test_defaults_disable_ipv6_and_use_ula_pools(self):
+        config = NetworkConfig()
+
+        assert config.ipv6_enabled is False
+        assert config.ipv6_ground_station_pool == "fd00:1::/40"
+        assert config.ipv6_satellite_pool == "fd00:2::/40"
+        assert config.ipv6_user_terminal_pool == "fd00:3::/40"
+        assert config.ipv6_ground_station_prefix_len == 64
+        assert config.ipv6_satellite_prefix_len == 64
+        assert config.ipv6_user_terminal_prefix_len == 64
+
+    def test_enabled_config_accepts_valid_pools(self):
+        config = NetworkConfig(ipv6_enabled=True)
+
+        assert config.ipv6_enabled is True
+
+    @pytest.mark.parametrize("value", [-1, 129])
+    def test_rejects_out_of_range_prefix_lengths(self, value):
+        for name in (
+            "ipv6_ground_station_prefix_len",
+            "ipv6_satellite_prefix_len",
+            "ipv6_user_terminal_prefix_len",
+        ):
+            with pytest.raises(ValueError, match=name):
+                NetworkConfig(**{name: value})
+
+    @pytest.mark.parametrize("value", [1.5, "64", True])
+    def test_rejects_non_integer_prefix_lengths(self, value):
+        with pytest.raises(TypeError, match="ipv6_satellite_prefix_len"):
+            NetworkConfig(ipv6_satellite_prefix_len=value)
+
+    @pytest.mark.parametrize("value", [1, "yes", None])
+    def test_rejects_non_boolean_enabled_flag(self, value):
+        with pytest.raises(TypeError, match="ipv6_enabled"):
+            NetworkConfig(ipv6_enabled=value)
+
+    @pytest.mark.parametrize(
+        "bad_pool",
+        [
+            "10.0.0.0/8",  # IPv4
+            "ff00::/8",  # multicast
+            "2001:4860::/32",  # globally routable
+        ],
+    )
+    def test_enabled_config_rejects_invalid_pools(self, bad_pool):
+        with pytest.raises(AddressPlanConfigurationError):
+            NetworkConfig(ipv6_enabled=True, ipv6_satellite_pool=bad_pool)
+
+    def test_enabled_config_rejects_overlapping_pools(self):
+        with pytest.raises(AddressPlanConfigurationError, match="overlaps"):
+            NetworkConfig(
+                ipv6_enabled=True,
+                ipv6_ground_station_pool="fd00:2::/39",
+                ipv6_satellite_pool="fd00:2::/40",
+            )
+
+
+class TestNetworkConfigFromMapping:
+    def test_merges_values_over_a_base_config(self):
+        base = NetworkConfig(
+            ipv6_enabled=True,
+            link_netem_limit=2048,
+            satellite_pool="10.128.0.0/9",
+        )
+
+        config = NetworkConfig.from_mapping(
+            {"link_netem_limit": 4096, "ipv6_satellite_pool": "fd00:9::/40"},
+            base=base,
+        )
+
+        assert config.link_netem_limit == 4096
+        assert config.satellite_pool == "10.128.0.0/9"
+        assert config.ipv6_satellite_pool == "fd00:9::/40"
+        assert config.ipv6_enabled is True
+        # The base object is not mutated.
+        assert base.link_netem_limit == 2048
+        assert base.ipv6_satellite_pool == "fd00:2::/40"
+
+    def test_without_base_uses_defaults(self):
+        config = NetworkConfig.from_mapping({"ipv6_enabled": True})
+
+        assert config.ipv6_enabled is True
+        assert config.satellite_pool == "10.128.0.0/9"
+
+    def test_rejects_unknown_fields(self):
+        with pytest.raises(ValueError, match="unknown_field"):
+            NetworkConfig.from_mapping({"unknown_field": 1})
+        with pytest.raises(ValueError, match="unknown_field"):
+            NetworkConfig.from_mapping({"unknown_field": 1}, base=NetworkConfig())
+        # Mixed key types must still produce a readable error, not a TypeError.
+        with pytest.raises(ValueError, match="1"):
+            NetworkConfig.from_mapping({1: True})
+
+    def test_rejects_non_mapping_values(self):
+        with pytest.raises(TypeError, match="mapping"):
+            NetworkConfig.from_mapping([("ipv6_enabled", True)])  # type: ignore[arg-type]
+
+
+class TestIpv6Persistence:
+    def test_to_file_persists_ipv6_fields(self, tmp_path, topology):
+        path = tmp_path / "ipv6.json"
+        config = NetworkConfig(
+            ipv6_enabled=True,
+            ipv6_ground_station_pool="fd00:11::/40",
+            ipv6_satellite_prefix_len=64,
+        )
+
+        topology.to_file(str(path), network_config=config)
+
+        payload = json.loads(path.read_text())["network_config"]
+        assert payload["ipv6_enabled"] is True
+        assert payload["ipv6_ground_station_pool"] == "fd00:11::/40"
+        assert payload["ipv6_satellite_prefix_len"] == 64
+
+    def test_roundtrip_restores_ipv6_and_builds_plan(self, tmp_path, topology):
+        path = tmp_path / "ipv6.json"
+        topology.to_file(str(path), network_config=NetworkConfig(ipv6_enabled=True))
+
+        reloaded = TopologyManager.from_file(str(path))
+
+        assert reloaded.ipv6_enabled is True
+        assert reloaded.ipv6_satellite_pool == "fd00:2::/40"
+        assert reloaded.address_plan_v6 is not None
+        for node in list(reloaded.get_satellites()) + list(
+            reloaded.get_ground_stations()
+        ):
+            assert node.address_block_v6 is not None
+            assert node.address_block_v6.prefixlen == 64
+            assert node.loopback.ipv6_prefix_len == 128
+
+    def test_from_file_without_override_keeps_persisted_setting(
+        self, tmp_path, topology
+    ):
+        path = tmp_path / "ipv6_disabled.json"
+        topology.to_file(str(path), network_config=NetworkConfig(ipv6_enabled=False))
+
+        reloaded = TopologyManager.from_file(str(path))
+
+        assert reloaded.ipv6_enabled is False
+        assert reloaded.address_plan_v6 is None
+
+    def test_from_file_override_enables_ipv6_before_building_the_plan(
+        self, tmp_path, topology
+    ):
+        path = tmp_path / "ipv6_disabled.json"
+        topology.to_file(str(path), network_config=NetworkConfig(ipv6_enabled=False))
+
+        reloaded = TopologyManager.from_file(
+            str(path), network_config=NetworkConfig(ipv6_enabled=True)
+        )
+
+        assert reloaded.ipv6_enabled is True
+        assert reloaded.address_plan_v6 is not None
+        assert all(
+            node.address_block_v6 is not None
+            for node in list(reloaded.get_satellites())
+            + list(reloaded.get_ground_stations())
+        )
+
+    def test_from_file_override_wins_wholesale_over_the_persisted_config(
+        self, tmp_path, topology
+    ):
+        path = tmp_path / "persisted.json"
+        topology.to_file(
+            str(path),
+            network_config=NetworkConfig(
+                ipv6_enabled=False,
+                link_netem_limit=4096,
+                satellite_pool="10.128.0.0/9",
+            ),
+        )
+
+        reloaded = TopologyManager.from_file(
+            str(path), network_config=NetworkConfig(ipv6_enabled=True)
+        )
+
+        # The explicit config replaces the persisted one, including fields it
+        # does not explicitly mention.
+        assert reloaded.ipv6_enabled is True
+        assert reloaded.link_netem_limit == 1000
+        assert reloaded.address_plan_v6 is not None
+
+    def test_legacy_persisted_payload_defaults_to_ipv6_disabled(self, topology):
+        # The module fixture loads a legacy file with no IPv6 keys.
+        assert topology.ipv6_enabled is False
+        assert topology.address_plan_v6 is None

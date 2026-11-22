@@ -64,8 +64,16 @@ Documentation = "https://github.com/SatComProjects/satgonetem/docs"
 Repository = "https://github.com/SatComProjects/satgonetem"
 Issues = "https://github.com/SatComProjects/satgonetem/issues"
 
-[tool.setuptools]
-packages = ["satgonetem"]
+[project.scripts]
+satgonetem = "satgonetem.cli.main:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["satgonetem*"]
+
+[tool.setuptools.package-data]
+satgonetem = ["py.typed"]
+"satgonetem.data" = ["topology_files/*.json", "topology_files/*.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

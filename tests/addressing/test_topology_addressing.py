@@ -130,3 +130,75 @@ def test_static_routes_target_loopbacks_with_slash32(topology):
         assert entry.prefix == 32
         assert entry.destination in loopback_to_node
         assert entry.target_node == loopback_to_node[entry.destination].name
+
+
+@pytest.fixture(scope="module")
+def dual_stack_topology() -> TopologyManager:
+    from satgonetem.services.topology_satcom import NetworkConfig
+
+    return TopologyManager.from_file(
+        str(Path(__file__).resolve().parents[2] / "topology_files/test_topology.json"),
+        network_config=NetworkConfig(ipv6_enabled=True),
+    )
+
+
+def test_ipv6_disabled_by_default(topology):
+    assert topology.ipv6_enabled is False
+    assert topology.address_plan_v6 is None
+    for node in list(topology.get_satellites()) + list(topology.get_ground_stations()):
+        assert node.address_block_v6 is None
+        assert node.loopback.ipv6 == ""
+        for iface in node.interfaces:
+            assert iface.ipv6 == ""
+
+
+def test_dual_stack_nodes_get_unique_slash64_blocks(dual_stack_topology):
+    plan_v6 = dual_stack_topology.address_plan_v6
+    assert plan_v6 is not None
+
+    for node in dual_stack_topology.get_satellites():
+        assert node.address_block_v6 is not None
+        assert node.address_block_v6.prefixlen == 64
+        assert node.address_block_v6.subnet_of(ipaddress.ip_network("fd00:2::/40"))
+        assert node.loopback.ipv6 == str(node.address_block_v6.network_address + 1)
+        assert node.loopback.ipv6_prefix_len == 128
+        # IPv4 stays assigned.
+        assert node.address_block is not None
+        assert node.loopback.ipv4 != ""
+
+    for node in dual_stack_topology.get_ground_stations():
+        assert node.address_block_v6 is not None
+        assert node.address_block_v6.subnet_of(ipaddress.ip_network("fd00:1::/40"))
+        assert node.loopback.ipv6 == str(node.address_block_v6.network_address + 1)
+
+    blocks = [
+        node.address_block_v6
+        for node in list(dual_stack_topology.get_satellites())
+        + list(dual_stack_topology.get_ground_stations())
+    ]
+    assert len(set(blocks)) == len(blocks)
+
+
+def test_dual_stack_every_link_has_a_unique_slash127(dual_stack_topology):
+    seen_networks: set[ipaddress.IPv6Network] = set()
+    seen_addresses: set[str] = set()
+
+    for link in dual_stack_topology.get_links():
+        interface_1, interface_2 = link.peer_interfaces
+        assert interface_1.ipv6_prefix_len == 127
+        assert interface_2.ipv6_prefix_len == 127
+        network = ipaddress.ip_network(
+            f"{interface_1.ipv6}/{interface_1.ipv6_prefix_len}", strict=False
+        )
+        assert network == ipaddress.ip_network(
+            f"{interface_2.ipv6}/{interface_2.ipv6_prefix_len}", strict=False
+        )
+        assert network not in seen_networks
+        seen_networks.add(network)
+        for iface in (interface_1, interface_2):
+            assert ipaddress.ip_address(iface.ipv6) in network
+            assert iface.ipv6 not in seen_addresses
+            seen_addresses.add(iface.ipv6)
+            # IPv4 allocation is unaffected by enabling IPv6.
+            assert iface.ipv4 != ""
+            assert iface.prefix_len == 31

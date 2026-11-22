@@ -5,7 +5,6 @@ Satellites will include a satcom_object, which will correspond to their satcomto
 
 """
 
-from satgonetem.traffic.ping_utils import PingResults
 from satgonetem.utils.satcom_fix import apply_satcom_fix
 
 apply_satcom_fix()
@@ -13,10 +12,12 @@ apply_satcom_fix()
 
 import json
 import logging
+import math
 import os
 import tempfile
 import threading
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass, fields
 from typing import Any, ClassVar
 
@@ -27,6 +28,7 @@ from sat_com_application.simulation_manager import (
 from sat_com_builder.models import SimulationProperty
 from sat_com_model.models import PointOfPresence, UserTerminal
 
+from satgonetem.addressing import Ipv6AddressPlan
 from satgonetem.launchers.base_launcher import NetworkLauncher
 from satgonetem.link_budget.config import AntennaConfig, LinkBudgetConfig
 from satgonetem.models.ground_station import GroundStation
@@ -35,6 +37,7 @@ from satgonetem.models.link import Link
 from satgonetem.models.satellite import Satellite
 from satgonetem.routing.base_daemon import RoutingDaemon
 from satgonetem.routing.registry import available_methods, is_known_method
+from satgonetem.services.mixins.backend_control import BackendControlMixin
 from satgonetem.services.mixins.controller import ControllerMixin
 from satgonetem.services.mixins.diagnostics import DiagnosticsMixin
 from satgonetem.services.mixins.interface_mgr import InterfaceMgrMixin
@@ -45,7 +48,6 @@ from satgonetem.services.mixins.simulation_loop import SimulationLoopMixin
 from satgonetem.services.mixins.topology_sync import TopologySyncMixin
 from satgonetem.services.mixins.traffic_testing import TrafficTestingMixin
 from satgonetem.services.topology_link_plan import ensure_inter_satellite_directions
-from satgonetem.traffic import PingConfig, PingFlow
 from satgonetem.utils.project_builder import (
     _attach_ground_object_domain,
     add_custom_ground_station,
@@ -118,6 +120,8 @@ class NetworkConfig:
         link_txqueuelen: Transmit queue length in packets of the interfaces
             terminating an emulated link. 0 keeps the GoNetEm server default
             (1000 packets).
+        link_loss_percent: Default packet loss percentage for new links.
+        link_jitter_ms: Default netem jitter for new links, in milliseconds.
         protocol: Network-layer protocol string (e.g. "ipv4").
         routing: Default routing method (e.g. "static", "dynamic-ospf").
         satellite_image: Docker image tag used for satellite containers.
@@ -137,6 +141,13 @@ class NetworkConfig:
         ground_station_prefix_len: Prefix length of each ground-station block.
         satellite_prefix_len: Prefix length of each satellite block.
         user_terminal_prefix_len: Prefix length of each user-terminal block.
+        ipv6_enabled: Enable the optional dual-stack IPv6 address plan.
+        ipv6_ground_station_pool: ULA pool subdivided into ground-station /64s.
+        ipv6_satellite_pool: ULA pool subdivided into satellite /64s.
+        ipv6_user_terminal_pool: ULA pool subdivided into user-terminal /64s.
+        ipv6_ground_station_prefix_len: Prefix length of a ground-station block.
+        ipv6_satellite_prefix_len: Prefix length of a satellite block.
+        ipv6_user_terminal_prefix_len: Prefix length of a user-terminal block.
     """
 
     project_name: str | None = None
@@ -146,6 +157,8 @@ class NetworkConfig:
     ground_object_link_capacity: int = 100000
     link_netem_limit: int = 1000
     link_txqueuelen: int = 1000
+    link_loss_percent: float = 0.0
+    link_jitter_ms: int = 0
     protocol: str = "ipv4"
     routing: str = "static"
     satellite_image: str = "jariassuarez/sgnt:satellite"
@@ -161,6 +174,17 @@ class NetworkConfig:
     ground_station_prefix_len: int = 20
     satellite_prefix_len: int = 27
     user_terminal_prefix_len: int = 20
+
+    # Optional dual-stack IPv6 addressing.  Disabled by default; every node
+    # still receives IPv4 addresses.  The defaults are private ULA /40 pools
+    # subdivided into /64 node blocks.
+    ipv6_enabled: bool = False
+    ipv6_ground_station_pool: str = "fd00:1::/40"
+    ipv6_satellite_pool: str = "fd00:2::/40"
+    ipv6_user_terminal_pool: str = "fd00:3::/40"
+    ipv6_ground_station_prefix_len: int = 64
+    ipv6_satellite_prefix_len: int = 64
+    ipv6_user_terminal_prefix_len: int = 64
 
     # Controller connection settings
     controller_veth_host: str = "veth-host"
@@ -194,6 +218,26 @@ class NetworkConfig:
                     f"{MAX_LINK_QUEUE_PACKETS} packets, got {value}"
                 )
 
+        loss = self.link_loss_percent
+        if isinstance(loss, bool) or not isinstance(loss, (int, float)):
+            raise TypeError(
+                f"NetworkConfig.link_loss_percent must be a number, got {loss!r}"
+            )
+        if not math.isfinite(float(loss)) or not 0.0 <= float(loss) <= 100.0:
+            raise ValueError(
+                "NetworkConfig.link_loss_percent must be between 0 and 100, "
+                f"got {loss!r}"
+            )
+        jitter = self.link_jitter_ms
+        if isinstance(jitter, bool) or not isinstance(jitter, int):
+            raise TypeError(
+                f"NetworkConfig.link_jitter_ms must be an int, got {jitter!r}"
+            )
+        if jitter < 0:
+            raise ValueError(
+                f"NetworkConfig.link_jitter_ms must be non-negative, got {jitter}"
+            )
+
         pattern = self.controller_node_iface_pattern
         if "{node_id}" not in pattern:
             raise ValueError(
@@ -212,6 +256,72 @@ class NetworkConfig:
                 f"got {formatted!r}"
             )
 
+        if not isinstance(self.ipv6_enabled, bool):
+            raise TypeError(
+                f"NetworkConfig.ipv6_enabled must be a bool, got {self.ipv6_enabled!r}"
+            )
+
+        for name in (
+            "ipv6_ground_station_prefix_len",
+            "ipv6_satellite_prefix_len",
+            "ipv6_user_terminal_prefix_len",
+        ):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise TypeError(f"NetworkConfig.{name} must be an int, got {value!r}")
+            if value < 0 or value > 128:
+                raise ValueError(
+                    f"NetworkConfig.{name} must be between 0 and 128, got {value}"
+                )
+
+        if self.ipv6_enabled:
+            # Constructing the plan validates address families, ULA ranges,
+            # pool/prefix fit, and overlap before any topology is built.
+            Ipv6AddressPlan(
+                ground_station_pool=self.ipv6_ground_station_pool,
+                satellite_pool=self.ipv6_satellite_pool,
+                user_terminal_pool=self.ipv6_user_terminal_pool,
+                ground_station_prefix_len=self.ipv6_ground_station_prefix_len,
+                satellite_prefix_len=self.ipv6_satellite_prefix_len,
+                user_terminal_prefix_len=self.ipv6_user_terminal_prefix_len,
+            )
+
+    @classmethod
+    def from_mapping(
+        cls,
+        values: Mapping[str, Any],
+        base: "NetworkConfig | None" = None,
+    ) -> "NetworkConfig":
+        """Build a config from a mapping, optionally merged over *base*.
+
+        Args:
+            values: Field overrides. Unknown field names are rejected.
+            base: Config providing defaults for fields absent from *values*.
+                When ``None``, the dataclass defaults are used. *base* is not
+                mutated.
+
+        Raises:
+            TypeError: If *values* is not a mapping.
+            ValueError: If *values* contains an unknown field name.
+        """
+        if not isinstance(values, Mapping):
+            raise TypeError(
+                "NetworkConfig.from_mapping expects a mapping, "
+                f"got {type(values).__name__}"
+            )
+
+        known = {field.name for field in fields(cls)}
+        unknown = sorted(str(name) for name in set(values) - known)
+        if unknown:
+            raise ValueError("Unknown NetworkConfig field(s): " + ", ".join(unknown))
+
+        if base is None:
+            return cls(**values)
+
+        merged = {field.name: getattr(base, field.name) for field in fields(cls)}
+        merged.update(values)
+        return cls(**merged)
+
 
 class TopologyManager(
     TopologySyncMixin,
@@ -223,6 +333,7 @@ class TopologyManager(
     TrafficTestingMixin,
     DiagnosticsMixin,
     ControllerMixin,
+    BackendControlMixin,
 ):
     """Satellite network topology manager.
 
@@ -638,7 +749,11 @@ class TopologyManager(
         return instance
 
     @classmethod
-    def from_file(cls, path: str) -> "TopologyManager":
+    def from_file(
+        cls,
+        path: str,
+        network_config: NetworkConfig | None = None,
+    ) -> "TopologyManager":
         """Load a TopologyManager from a JSON file produced by to_file().
 
         Restores embedded ground station data files to a private temporary
@@ -652,9 +767,14 @@ class TopologyManager(
 
         Args:
             path: Path to the JSON file previously written by to_file().
+            network_config: Optional config that replaces the persisted
+                ``network_config`` wholesale. Use it to enable IPv6 before the
+                address plan is built. When omitted, the persisted config is
+                used, so existing call sites are unchanged.
 
         Returns:
-            An initialised TopologyManager with the persisted configuration applied.
+            An initialised TopologyManager with the persisted (or overridden)
+            configuration applied.
 
         Raises:
             FileNotFoundError: If path does not exist.
@@ -665,7 +785,8 @@ class TopologyManager(
         with open(path, encoding="utf-8") as fh:
             payload = json.load(fh)
 
-        network_config = NetworkConfig(**payload["network_config"])
+        if network_config is None:
+            network_config = NetworkConfig(**payload["network_config"])
 
         if "runtime_state" in payload:
             return cls._deserialize_runtime_state(
@@ -737,8 +858,9 @@ class TopologyManager(
         # Active network launcher (GoNetEm)
         self.launcher: NetworkLauncher | None = None
 
-        # Topology-wide IPv4 plan, built during init().
+        # Topology-wide address plans, built during init().
         self.address_plan: Any = None
+        self.address_plan_v6: Any = None
 
         # Optional HIL manager. Set this before calling start_gonetem() to
         # replace specific ground stations with host-bridged hardware.
@@ -1123,64 +1245,62 @@ class TopologyManager(
         for satellite in satellites:
             satellite.set_addressable(True)
 
-    def test_connectivity(self, max_workers: int = 128) -> None:
+    def connectivity_matrix(
+        self,
+        nodes: list[Any] | None = None,
+        *,
+        max_workers: int = 128,
+        max_pairs: int = 10_000,
+        config: Any = None,
+    ) -> Any:
+        """Ping every ordered pair and return a typed matrix.
 
-        interval_sec = 0.01
-        count = 10
-        ping_config = PingConfig(
-            count=count, interval_sec=interval_sec, preload=1, packet_size=64
+        Args:
+            nodes: Nodes to test. Defaults to every ground station plus every
+                addressable satellite, matching :meth:`test_connectivity`.
+            max_workers: Maximum concurrent ping flows.
+            max_pairs: Safety bound for the all-pairs expansion. Raise before
+                scheduling when ``len(nodes) * (len(nodes) - 1)`` exceeds it.
+            config: Optional ``PingConfig``; the connectivity helper supplies
+                a fast ten-ping default when omitted.
+
+        Returns:
+            A :class:`satgonetem.connectivity.ConnectivityMatrix`.
+        """
+        from satgonetem.connectivity import build_connectivity_matrix
+
+        if nodes is None:
+            nodes = [
+                *self.get_ground_stations(),
+                *[sat for sat in self.get_satellites() if sat.is_addressable()],
+            ]
+        else:
+            nodes = list(nodes)
+
+        pair_count = len(nodes) * (len(nodes) - 1)
+        if pair_count > max_pairs:
+            raise ValueError(
+                f"Connectivity matrix would schedule {pair_count} pairs, "
+                f"exceeding max_pairs={max_pairs}; pass an explicit node subset "
+                "or raise max_pairs"
+            )
+
+        return build_connectivity_matrix(
+            nodes,
+            config=config,
+            max_workers=max_workers,
         )
 
-        gnds = self.get_ground_stations()
+    def test_connectivity(self, max_workers: int = 128) -> dict:
+        """Ping every ground station and addressable satellite and print a summary.
 
-        sats = [sat for sat in self.get_satellites() if sat.is_addressable()]
-
-        flows = []
-
-        all_nodes: list[Any] = [*gnds, *sats]
-        for i, gs_i in enumerate(all_nodes):
-            for gs_j in all_nodes:
-                if gs_i == gs_j:
-                    continue
-                flow = PingFlow(
-                    source=gs_i,
-                    destination=gs_j,
-                    config=ping_config,
-                    delay=i * interval_sec * count,
-                )
-                flows.append(flow)
-
-        from satgonetem.traffic.flow_scheduler import FlowScheduler
-
-        flow_scheduler = FlowScheduler(flows, max_workers=max_workers, debug=True)
-
-        flow_scheduler.run()
-
-        flow_scheduler.join()
-
-        results: list[PingResults] = []
-        errors = 0
-
-        for flow in flows:
-            try:
-                result = flow_scheduler.results(flow)
-                if result is not None:
-                    results.append(result)
-            except Exception as e:
-                print(f"Error occurred while fetching results for flow {flow}: {e}")
-                errors += 1
-
-        # results: List[PingResults] = [flow_scheduler.results(flow) for flow in flows]
-
-        total_lost_packets = sum(
-            (result.packets_transmitted - result.packets_received)
-            for result in results
-            if result is not None
-        )
-
-        print(
-            f"Completed {len(flows)} ping flows with {errors} errors. Total lost packets: {total_lost_packets}"
-        )
+        Kept for compatibility with the original convenience helper. The full
+        typed result is available from :meth:`connectivity_matrix` and is also
+        returned here as a dictionary.
+        """
+        matrix = self.connectivity_matrix(max_workers=max_workers)
+        matrix.print_summary()
+        return matrix.to_dict()
 
 
 def main():

@@ -5,6 +5,23 @@ Private helpers (prefixed with `_`) are excluded.
 
 ---
 
+## Construction
+
+### `TopologyManager.from_file(path, network_config=None) -> TopologyManager`
+
+Load a topology saved by `to_file()`. Both the `simulation_property` and
+`runtime_state` payload paths accept the optional `network_config`.
+
+- When `network_config` is `None` (the default), the config persisted in the
+  file is used, so existing call sites are unchanged.
+- When a `NetworkConfig` is supplied, it replaces the persisted config
+  wholesale, including fields it does not explicitly set. Use
+  `NetworkConfig.from_mapping(values, base=...)` to merge a partial override.
+- Pass `NetworkConfig(ipv6_enabled=True)` to enable IPv6 before the address
+  plan is built.
+
+---
+
 ## Emulator lifecycle
 
 ### `start_gonetem(controller: bool = False) -> tuple[float, float] | None`
@@ -117,23 +134,26 @@ The matching removal method is invoked on the underlying
 
 ### `set_ip_addresses(satellites: bool = True, ground_stations: bool = True) -> float`
 
-Push the already-planned IPv4 addresses into every satellite and ground-station
-container. The plan is built during topology initialization; call this after
+Push the already-planned addresses into every satellite and ground-station
+container. The plans are built during topology initialization; call this after
 `start_gonetem()`.
 
 **Args**
 - `satellites` - assign addresses to satellite interfaces when `True`.
 - `ground_stations` - assign addresses to ground-station interfaces when `True`.
 
-Addresses are applied with `ip addr replace`, one batched command per node,
-in parallel. The method raises after all nodes have been attempted if any node
-fails.
+IPv4 is always pushed. When `ipv6_enabled` is set on the manager/`NetworkConfig`,
+IPv6 is pushed as well. Addresses are applied with `ip addr replace`, one
+batched command per node (`ip` for IPv4, `ip -6` for IPv6), in parallel. Both
+families are attempted even if one fails; failures are re-raised after both
+attempts.
 
 **Returns**
 - `float` - elapsed wall-clock seconds.
 
 See [`addressing.md`](addressing.md) for the address pools, `/20` ground-station
-blocks, `/27` satellite blocks, and `/31` link allocation.
+blocks, `/27` satellite blocks, `/31` link allocation, and the optional IPv6
+`/64` blocks with `/127` links and `/128` loopbacks.
 
 ---
 
@@ -370,17 +390,55 @@ Returns immediately; poll `flow.status()` for `Hping3Status.DONE`.
 
 ---
 
-### `test_connectivity(max_workers: int = 128) -> None`
+### `connectivity_matrix(nodes=None, *, max_workers=128, max_pairs=10_000, config=None) -> ConnectivityMatrix`
 
-Run ICMP pings between every ground station and every addressable satellite.
+Ping every ordered pair of nodes and return typed results.
 
-This is a blocking convenience helper: it schedules all pairwise flows, waits
-for them to finish, and prints a loss summary. Non-addressable satellites are
-excluded; use `set_addressable_satellites()` first if you want satellites to be
-part of the test.
+By default the node set is every ground station plus every addressable
+satellite. Pass an explicit list to test a subset. `max_pairs` is a safety
+bound; the method raises `ValueError` before scheduling when
+`len(nodes) * (len(nodes) - 1)` exceeds it.
+
+**Returns**
+- `ConnectivityMatrix` - per-pair reachability, loss, and RTT min/avg/max,
+  with `to_dict()` and `to_json()` serialization.
+
+---
+
+### `test_connectivity(max_workers: int = 128) -> dict`
+
+Compatibility wrapper around `connectivity_matrix()`. It prints a one-line
+reachability summary and returns the serialized matrix.
+
+Non-addressable satellites are excluded; use `set_addressable_satellites()`
+first if you want satellites to be part of the test.
 
 **Args**
 - `max_workers` - maximum parallel threads used by the flow scheduler.
+
+**Returns**
+- `dict` - the same payload as `ConnectivityMatrix.to_dict()`.
+
+---
+
+## Backend controls
+
+These methods require a live GoNetEm project and feature-detect the launcher.
+See [Network Launchers](launchers.md#backend-controls) for preconditions.
+
+| Method | Purpose |
+|---|---|
+| `restart_node(node_name)` | Restart one container; clear its local handle |
+| `stop_all_nodes()` / `start_all_nodes()` | Stop the loop, then bulk node lifecycle |
+| `set_interface_state(node_name, interface, up)` | Bring one interface up/down |
+| `set_link_state(link, up)` | Both endpoints plus `Link.admin_up` |
+| `capture_interface(node_name, interface, output=None, timeout_s=30.0)` | Capture pcap bytes |
+| `get_backend_status()` | JSON-serializable backend status |
+| `save_snapshot(path)` | Atomic project archive |
+| `set_link_impairment(link, loss_percent=None, jitter_ms=None)` | Update loss/jitter and push it |
+
+Restart and bulk stop/start are raw controls: containers return without
+addresses, routes, or qdiscs. Reapply them before resuming traffic.
 
 ---
 

@@ -77,7 +77,16 @@
     "controller_host_ip": "248.0.0.2",
     "controller_subnet_prefix": 16,
     "controller_bridge_name": "Controller",
-    "controller_node_iface_pattern": "eth{node_id}"
+    "controller_node_iface_pattern": "eth{node_id}",
+    "link_loss_percent": 0.0,
+    "link_jitter_ms": 0,
+    "ipv6_enabled": false,
+    "ipv6_ground_station_pool": "fd00:1::/40",
+    "ipv6_satellite_pool": "fd00:2::/40",
+    "ipv6_user_terminal_pool": "fd00:3::/40",
+    "ipv6_ground_station_prefix_len": 64,
+    "ipv6_satellite_prefix_len": 64,
+    "ipv6_user_terminal_prefix_len": 64
   },
   "ground_files": {
     "/tmp/ground_stations.txt": {
