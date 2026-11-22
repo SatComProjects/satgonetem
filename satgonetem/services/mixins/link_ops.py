@@ -60,6 +60,18 @@ class LinkOpsMixin:
         backend = getattr(self, "link_backend", None)
         return backend if backend is not None else getattr(self, "launcher", None)
 
+    def _link_add_failures(self) -> set[frozenset[str]]:
+        """Return link keys whose last backend add failed and remain pending.
+
+        Entries are dropped when a retry succeeds or the link is deleted so a
+        failed add never leaks local interfaces or retains stale state.
+        """
+        failures = getattr(self, "_failed_link_adds", None)
+        if failures is None:
+            failures = set()
+            self._failed_link_adds = failures
+        return failures
+
     def bulk_link_operations(
         self,
         to_add: bool = True,
@@ -354,7 +366,13 @@ class LinkOpsMixin:
             )
 
     def _execute_link_delete(self, link: Link) -> float:
-        """Delete a link's veth pair directly via nsenter+ip."""
+        """Delete a link's veth pair directly via nsenter+ip.
+
+        ``link.to_delete`` stays set until the backend confirms the deletion.
+        A failed attempt keeps the flag so local interfaces and manager state
+        are retained for the next sync instead of being forgotten while the
+        emulator still holds the veth pair.
+        """
         start = time.perf_counter()
         if self.hil_manager is not None and self.hil_manager.is_hil_link(link):
             self.hil_manager.teardown_link(link)
@@ -364,14 +382,16 @@ class LinkOpsMixin:
         if launcher is None:
             logging.warning("launcher not set, skipping link delete")
             return 0.0
+        link.to_delete = True
         try:
             launcher.delete_link(link)
-            link.to_delete = False
-            logging.debug("Deleted link %s -- %s", link.source.name, link.target.name)
         except (RuntimeError, OSError) as err:
             logging.error(
                 f"Unable to delete link {link.source.name}--{link.target.name}: {err}"
             )
+            return time.perf_counter() - start
+        link.to_delete = False
+        logging.debug("Deleted link %s -- %s", link.source.name, link.target.name)
         return time.perf_counter() - start
 
     def _execute_link_update(self, link) -> float:
@@ -400,7 +420,13 @@ class LinkOpsMixin:
         return time.perf_counter() - start
 
     def _execute_link_add(self, link) -> float:
-        """Add a link by creating a veth pair and applying qdiscs directly."""
+        """Add a link by creating a veth pair and applying qdiscs directly.
+
+        The link stays in ``_link_add_failures`` until the backend confirms
+        the creation. ``_add_link_interfaces`` skips failed links so local
+        interfaces are only built after the emulator accepted the add, and
+        ``to_add`` remains set so the next sync retries.
+        """
         start = time.perf_counter()
         if self.hil_manager is not None and self.hil_manager.is_hil_link(link):
             self.hil_manager.setup_link(link)
@@ -409,19 +435,24 @@ class LinkOpsMixin:
         if launcher is None:
             logging.warning("launcher not set, skipping link add")
             return 0.0
+        failures = self._link_add_failures()
+        key = self._build_link_key(link.source, link.target)
+        failures.add(key)
         try:
             launcher.add_link(link)
-            delay = max(int(link.delay), 1)
-            logging.debug(
-                "Added link %s -- %s with delay %d ms",
-                link.source.name,
-                link.target.name,
-                delay,
-            )
         except (RuntimeError, OSError) as err:
             logging.error(
                 f"Unable to add link {link.source.name}--{link.target.name}: {err}"
             )
+            return time.perf_counter() - start
+        failures.discard(key)
+        delay = max(int(link.delay), 1)
+        logging.debug(
+            "Added link %s -- %s with delay %d ms",
+            link.source.name,
+            link.target.name,
+            delay,
+        )
         return time.perf_counter() - start
 
     def _process_links_sequentially(
@@ -492,9 +523,16 @@ class LinkOpsMixin:
         """
         Perform local link operations in parallel where thread-safe.
         """
+        # A failed backend delete leaves ``to_delete`` set on the link. Keep
+        # its interfaces and manager state intact so the next sync can retry
+        # instead of forgetting a link the emulator still holds.
+        confirmed_removals = [
+            link for link in links_to_remove if not getattr(link, "to_delete", False)
+        ]
+
         # Interface removals mutate shared node.interfaces lists. Run them
         # sequentially; concurrent scans/removals can skip entries.
-        for link in links_to_remove:
+        for link in confirmed_removals:
             self._remove_link_interfaces(link)
 
         # Thread-safe operations that can be parallelized
@@ -519,7 +557,7 @@ class LinkOpsMixin:
                     logging.error(f"Local link operation failed: {e}")
 
         # Sequential operations that require thread safety (modifying shared collections)
-        self._cleanup_removed_links_sequential(links_to_remove)
+        self._cleanup_removed_links_sequential(confirmed_removals)
 
     def _remove_link_interfaces(self, link: Link) -> None:
         """Remove interfaces from nodes for a single link."""
@@ -553,8 +591,10 @@ class LinkOpsMixin:
                     address_plan.release_link(
                         frozenset((link.source.name, link.target.name))
                     )
-                # Remove link from dictionary
+                # Remove link from dictionary, dropping any stale pending-add
+                # marker so a failed add cannot retain the removed link.
                 key = self._build_link_key(link.source, link.target)
+                self._link_add_failures().discard(key)
                 del self.links[key]
             except (AttributeError, KeyError, TypeError) as e:
                 logging.error(
@@ -571,7 +611,15 @@ class LinkOpsMixin:
             )
 
     def _add_link_interfaces(self, link: Link) -> None:
-        """Add interfaces for a single link."""
+        """Add interfaces for a single link.
+
+        Skipped while the backend add is unconfirmed so a failed add can be
+        retried without creating local interfaces for a link the emulator
+        never accepted.
+        """
+        key = self._build_link_key(link.source, link.target)
+        if key in self._link_add_failures():
+            return
         try:
             self._build_interfaces_from_link(link, set_ip=True, sync_to_node=True)
             link.to_add = False

@@ -203,8 +203,8 @@ when present.
 |---|---|---|
 | `update_link(link)` | `LinkUpdate` | Logs and swallows errors; does not raise |
 | `update_links(links)` | `LinkUpdateMany` | Chunks of `LINK_UPDATE_CHUNK_SIZE = 512`; returns a merged response; preserves `grpc.RpcError` for `UNIMPLEMENTED` fallback |
-| `add_link(link)` | `LinkAdd` | Logs and swallows errors |
-| `delete_link(link)` | `LinkDel` | Logs and swallows errors |
+| `add_link(link)` | `LinkAdd` | Raises `RuntimeError` on backend failure |
+| `delete_link(link)` | `LinkDel` | Raises `RuntimeError` on backend failure |
 | `set_link_capacities(...)` | `LinkUpdate` per link | Updates non-budget links and pushes every link |
 
 `update_links()` raises `RuntimeError` if the project is not open or the

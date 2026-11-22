@@ -315,20 +315,20 @@ class GoNetEmLifecycleMixin(GoNetEmClientMixin):
         return merged
 
     def add_link(self, link) -> None:
+        """Create *link* on the emulator, raising when the backend fails."""
         if self._client is None or self._request is None:
             logging.warning("GoNetEmLauncher: add_link called before project is open")
             return
         try:
             self._client.LinkAdd(self._link_request(link))
         except Exception as exc:
-            logging.error(
-                "GoNetEmLauncher: LinkAdd failed for %s<->%s: %s",
-                link.source.name,
-                link.target.name,
-                exc,
-            )
+            raise RuntimeError(
+                "GoNetEmLauncher: LinkAdd failed for "
+                f"{link.source.name}<->{link.target.name}: {exc}"
+            ) from exc
 
     def delete_link(self, link) -> None:
+        """Delete *link* on the emulator, raising when the backend fails."""
         if self._client is None or self._request is None:
             logging.warning(
                 "GoNetEmLauncher: delete_link called before project is open"
@@ -337,12 +337,10 @@ class GoNetEmLifecycleMixin(GoNetEmClientMixin):
         try:
             self._client.LinkDel(self._link_request(link))
         except Exception as exc:
-            logging.error(
-                "GoNetEmLauncher: LinkDel failed for %s<->%s: %s",
-                link.source.name,
-                link.target.name,
-                exc,
-            )
+            raise RuntimeError(
+                "GoNetEmLauncher: LinkDel failed for "
+                f"{link.source.name}<->{link.target.name}: {exc}"
+            ) from exc
 
     def set_link_capacities(self, isl_kbps: int, gnd_kbps: int, links: list) -> None:
         self.isl_capacity_kbps = isl_kbps
