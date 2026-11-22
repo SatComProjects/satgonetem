@@ -14,6 +14,7 @@ apply_satcom_fix()
 import json
 import logging
 import os
+import tempfile
 import threading
 import time
 from dataclasses import dataclass, fields
@@ -56,6 +57,42 @@ from satgonetem.utils.project_builder import (
 # packets. It mirrors the GoNetEm server's maxQueuePackets so a configuration
 # accepted here is never rejected by the server.
 MAX_LINK_QUEUE_PACKETS = 1_000_000
+
+# Serialised simulation dates must use the format accepted by
+# satgonetem.utils.project_fixtures.create_empty_project() on restore.
+_RUNTIME_DATE_FORMAT = "%d/%m/%Y %H:%M:%S"
+
+
+def _ground_file_restore_path(ground_dir: str, basename: object) -> str:
+    """Return a safe restore path for an embedded ground station data file.
+
+    Only plain file names are accepted. The persisted ``basename`` must not be
+    absolute, empty, or carry directory components such as ``..``.
+
+    Args:
+        ground_dir: Private directory created for this restore.
+        basename: ``ground_files[<original path>]["basename"]`` from the payload.
+
+    Returns:
+        Absolute path inside *ground_dir* where the file can be written.
+
+    Raises:
+        ValueError: If basename is not a plain file name or the resolved path
+            would leave *ground_dir*.
+    """
+    if not isinstance(basename, str) or not basename:
+        raise ValueError(f"Invalid ground file basename: {basename!r}")
+
+    name = os.path.basename(basename)
+    if os.path.isabs(basename) or name != basename or name in {os.curdir, os.pardir}:
+        raise ValueError(f"Invalid ground file basename: {basename!r}")
+
+    root = os.path.realpath(ground_dir)
+    target = os.path.realpath(os.path.join(root, name))
+    if os.path.commonpath([root, target]) != root:
+        raise ValueError(f"Invalid ground file basename: {basename!r}")
+
+    return target
 
 
 @dataclass
@@ -278,8 +315,12 @@ class TopologyManager(
             "simulation_name": getattr(
                 self.simulation_manager, "project_name", "Constellation"
             ),
-            "start_date": self.simulation_manager.time_manager.start_date.isoformat(),
-            "end_date": self.simulation_manager.time_manager.end_date.isoformat(),
+            "start_date": self.simulation_manager.time_manager.start_date.strftime(
+                _RUNTIME_DATE_FORMAT
+            ),
+            "end_date": self.simulation_manager.time_manager.end_date.strftime(
+                _RUNTIME_DATE_FORMAT
+            ),
             "satellites": [],
             "ground_stations": [],
             "user_terminals": [],
@@ -548,8 +589,9 @@ class TopologyManager(
     def from_file(cls, path: str) -> "TopologyManager":
         """Load a TopologyManager from a JSON file produced by to_file().
 
-        Restores embedded ground station data files to '/tmp/<stem>_ground_files/',
-        then reconstructs the SimulationProperty and NetworkConfig.
+        Restores embedded ground station data files to a private temporary
+        directory created with ``tempfile.mkdtemp()``, then reconstructs the
+        SimulationProperty and NetworkConfig.
 
         When the file contains a ``runtime_state`` block (produced when saving a
         topology that was built programmatically via ``from_simulation_manager``),
@@ -564,7 +606,8 @@ class TopologyManager(
 
         Raises:
             FileNotFoundError: If path does not exist.
-            ValueError: If the file content is not a valid topology config.
+            ValueError: If the file content is not a valid topology config, or
+                an embedded ground station file name is unsafe.
             OSError: If ground station data files cannot be written.
         """
         with open(path, encoding="utf-8") as fh:
@@ -582,12 +625,13 @@ class TopologyManager(
 
         if ground_files:
             stem = os.path.splitext(os.path.basename(path))[0]
-            ground_dir = os.path.join("/tmp", f"{stem}_ground_files")
-            os.makedirs(ground_dir, exist_ok=True)
+            ground_dir = tempfile.mkdtemp(prefix=f"{stem}_ground_files_")
 
             path_map: dict[str, str] = {}
             for original_path, file_info in ground_files.items():
-                restored_path = os.path.join(ground_dir, file_info["basename"])
+                restored_path = _ground_file_restore_path(
+                    ground_dir, file_info.get("basename")
+                )
                 with open(restored_path, "w", encoding="utf-8") as fh:
                     fh.write(file_info["content"])
                 path_map[original_path] = restored_path
