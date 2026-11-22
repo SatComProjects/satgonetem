@@ -18,6 +18,8 @@ recorded in [../adr/](../adr/).
 | [0007 — Launchers, builders, utils](0007-launchers-builders-utils.md) | 6 | Implemented |
 | [0008 — Enforcement and final validation](0008-enforcement.md) | 7 | Implemented |
 | [0009 — Fix Phase 1 characterization defects](0009-defect-fixes.md) | 1.1 | Implemented |
+| [0010 — Wave 1 experiment platform and link controls](0010-wave1-experiment-platform.md) | 8 | Accepted |
+| [0011 — Optional dual-stack IPv6 addressing](0011-ipv6-addressing.md) | 8 | Accepted |
 
 ## Rules
 
