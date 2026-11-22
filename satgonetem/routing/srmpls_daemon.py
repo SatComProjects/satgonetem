@@ -552,7 +552,7 @@ class SRMPLSDaemon(RoutingDaemon):
                         continue
 
                     label_stack = self._label_manager.get_label_stack_for_path(
-                        path[1:], use_php=use_php
+                        path, use_php=use_php
                     )
 
                     entry = SRLabelStackEntry(
@@ -996,7 +996,7 @@ class SRMPLSDaemon(RoutingDaemon):
                     continue
 
                 label_stack = self._label_manager.get_label_stack_for_path(
-                    path[1:], use_php=use_php
+                    path, use_php=use_php
                 )
 
                 entry = SRLabelStackEntry(

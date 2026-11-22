@@ -370,6 +370,12 @@ not strictly below the end. Its defaults differ from the Pydantic
 `SRLabelStackEntry.label_stack` is written in push order and joined with `/`
 for the kernel command. An empty stack degrades to a plain IP route.
 
+`SegmentRoutingManager.get_label_stack_for_path()` takes the complete path
+from source to destination. The source is never labelled, and the destination
+is labelled only when PHP is disabled (`use_php=False`). The ingress route and
+the stack reported by `set_sr_custom_path()` use this same builder, so the
+reported and installed stacks always agree.
+
 ## Declarative configuration models
 
 `sat_com_models.py` provides Pydantic v2 models that mirror the subset of the
