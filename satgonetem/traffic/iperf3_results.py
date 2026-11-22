@@ -27,12 +27,26 @@ class Iperf3Results:
     All summary metrics are derived from the 'end' section of the iperf3
     JSON (the most reliable aggregated values). Time-series properties pull
     from the flattened interval DataFrames.
+
+    Bidirectional (``--bidir``) output is aggregated across both directions:
+    the forward summary and its ``*_bidir_reverse`` counterpart are combined
+    so throughput, byte, packet, retransmit, loss, and jitter figures are not
+    silently reduced to one direction's share.
     """
 
     _BPS_TO_MBPS: float = 1_000_000.0
     _BYTES_TO_MB: float = 1_000_000.0
     _BYTES_TO_KB: float = 1_000.0
     _USEC_TO_MS: float = 1_000.0
+
+    # iperf3 names the reverse channel of a --bidir test by appending this
+    # suffix to the forward summary label. The mapping is used to pair the
+    # interval summaries of both directions.
+    _BIDIR_REVERSE_LABELS: dict[str, str] = {
+        "sum": "sum_bidir_reverse",
+        "sum_sent": "sum_sent_bidir_reverse",
+        "sum_received": "sum_received_bidir_reverse",
+    }
 
     def __init__(self, raw_json: str, config: Iperf3Config) -> None:
         """
@@ -111,6 +125,48 @@ class Iperf3Results:
             The end summary dict, or an empty dict if absent.
         """
         return self._data.get("end", {})
+
+    def _end_value(self, key: str, field: str) -> float:
+        """Return a numeric field from an 'end' summary, defaulting to 0.0.
+
+        Args:
+            key: Summary key in the end section (e.g. 'sum_sent').
+            field: Field within that summary (e.g. 'bytes').
+
+        Returns:
+            The field as a float, or 0.0 when the key/field is absent or null.
+        """
+        value = self._end().get(key, {}).get(field, 0)
+        return float(value or 0.0)
+
+    def _end_pair_value(self, key: str, field: str) -> float:
+        """Sum a field over a forward summary and its reverse counterpart.
+
+        iperf3 appends ``_bidir_reverse`` to the summary key for the reverse
+        channel of a ``--bidir`` run (e.g. ``sum_sent_bidir_reverse``).
+        Non-bidirectional output has no such key, so only the forward value
+        is returned.
+
+        Args:
+            key: Forward summary key (e.g. 'sum_sent').
+            field: Field within the summary (e.g. 'bytes').
+
+        Returns:
+            Forward plus reverse field value as a float.
+        """
+        value = self._end_value(key, field)
+        reverse_key = f"{key}_bidir_reverse"
+        if reverse_key in self._end():
+            value += self._end_value(reverse_key, field)
+        return value
+
+    def _is_bidir(self) -> bool:
+        """Return True when the end section carries a reverse summary.
+
+        Returns:
+            True for ``--bidir`` output, False for one-direction results.
+        """
+        return any(key.endswith("_bidir_reverse") for key in self._end())
 
     def _col_mean(self, df: pd.DataFrame, col: str, default: float = 0.0) -> float:
         """Return the mean of a DataFrame column, falling back to default.
@@ -195,32 +251,62 @@ class Iperf3Results:
 
     # ---- Shared throughput metrics (TCP + UDP) ----
 
-    def _summary_series(self) -> pd.DataFrame | None:
+    def _summary_series(self, label: str | None = None) -> pd.DataFrame | None:
         """Return one consistent interval summary series, if available.
 
         Prefers the aggregate ``sum`` rows, then sender/receiver summaries.
         Using one label avoids mixing three different rate series per interval.
+
+        Args:
+            label: Optional explicit summary label to select instead of the
+                default preference order.
 
         Returns:
             The selected summary DataFrame, or None when no summary is present.
         """
         if self._df_summaries.empty or "_label" not in self._df_summaries.columns:
             return None
-        for label in ("sum", "sum_received", "sum_sent"):
-            series = self._df_summaries[self._df_summaries["_label"] == label]
+        candidates = (
+            (label,) if label is not None else ("sum", "sum_received", "sum_sent")
+        )
+        for candidate in candidates:
+            series = self._df_summaries[self._df_summaries["_label"] == candidate]
             if not series.empty:
                 return series
         return None
 
-    @property
-    def avg_throughput_mbps(self) -> float:
-        """Mean throughput in Mbps, excluding omitted warm-up intervals."""
-        series = self._summary_series()
-        if (
-            series is not None
-            and "bytes" in series.columns
-            and "seconds" in series.columns
-        ):
+    def _bidir_reverse_series(self, series: pd.DataFrame | None) -> pd.DataFrame | None:
+        """Return the reverse-direction interval series matching *series*.
+
+        iperf3 names the reverse channel of a ``--bidir`` run by appending
+        ``_bidir_reverse`` to the forward summary label.
+
+        Args:
+            series: A summary series returned by :meth:`_summary_series`.
+
+        Returns:
+            The matching reverse-direction DataFrame, or None when the input
+            has no bidirectional counterpart.
+        """
+        if series is None or series.empty or "_label" not in series.columns:
+            return None
+        reverse_label = self._BIDIR_REVERSE_LABELS.get(str(series["_label"].iloc[0]))
+        if reverse_label is None:
+            return None
+        return self._summary_series(reverse_label)
+
+    def _series_throughput_mbps(self, series: pd.DataFrame | None) -> float | None:
+        """Return the mean throughput of one interval series in Mbps.
+
+        Args:
+            series: Summary rows for one direction.
+
+        Returns:
+            Throughput in Mbps, or None when no series was supplied.
+        """
+        if series is None or series.empty:
+            return None
+        if "bytes" in series.columns and "seconds" in series.columns:
             total_seconds = float(series["seconds"].sum())
             if total_seconds > 0:
                 return (
@@ -229,16 +315,95 @@ class Iperf3Results:
                     / total_seconds
                     / self._BPS_TO_MBPS
                 )
-        return self._col_mean(self._primary_df(), "bits_per_second") / self._BPS_TO_MBPS
+        return self._col_mean(series, "bits_per_second") / self._BPS_TO_MBPS
+
+    def _series_interval_rates(self, series: pd.DataFrame | None) -> list[float]:
+        """Return one throughput value per reporting interval, in Mbps.
+
+        Args:
+            series: Summary rows for one direction.
+
+        Returns:
+            Per-interval rates in Mbps, or an empty list when the series has
+            no usable rate data.
+        """
+        if series is None or series.empty:
+            return []
+        if "bytes" in series.columns and "seconds" in series.columns:
+            seconds = series["seconds"].astype(float)
+            byte_counts = series["bytes"].astype(float)
+            rates = (byte_counts * 8.0 / seconds.where(seconds > 0)) / self._BPS_TO_MBPS
+            return [float(value) for value in rates.dropna()]
+        if "bits_per_second" in series.columns:
+            return [
+                float(value) / self._BPS_TO_MBPS
+                for value in series["bits_per_second"].dropna()
+            ]
+        return []
+
+    def _combined_interval_rates(self) -> list[float] | None:
+        """Return per-interval forward+reverse rates for a bidirectional run.
+
+        Returns:
+            One aggregate rate per interval in Mbps, or None when the result
+            has no reverse series or the two direction series cannot be paired.
+        """
+        series = self._summary_series()
+        if series is None:
+            return None
+        reverse = self._bidir_reverse_series(series)
+        if reverse is None:
+            return None
+        forward_rates = self._series_interval_rates(series)
+        reverse_rates = self._series_interval_rates(reverse)
+        if not forward_rates or len(forward_rates) != len(reverse_rates):
+            return None
+        return [
+            forward + reverse_rate
+            for forward, reverse_rate in zip(forward_rates, reverse_rates, strict=True)
+        ]
+
+    @property
+    def avg_throughput_mbps(self) -> float:
+        """Mean throughput in Mbps, excluding omitted warm-up intervals.
+
+        For bidirectional (``--bidir``) results the forward and reverse
+        interval series are both aggregated and their rates are summed, so
+        the value is the aggregate throughput of both directions rather than
+        one direction's share.
+        """
+        series = self._summary_series()
+        throughput = self._series_throughput_mbps(series)
+        if throughput is None:
+            return (
+                self._col_mean(self._primary_df(), "bits_per_second")
+                / self._BPS_TO_MBPS
+            )
+        reverse = self._series_throughput_mbps(self._bidir_reverse_series(series))
+        return throughput + (reverse or 0.0)
 
     @property
     def max_throughput_mbps(self) -> float:
-        """Peak interval throughput in Mbps."""
+        """Peak interval throughput in Mbps.
+
+        For bidirectional (``--bidir``) results both directions are summed per
+        interval, matching :attr:`avg_throughput_mbps`.
+        """
+        combined = self._combined_interval_rates()
+        if combined:
+            return max(combined)
         return self._col_max(self._primary_df(), "bits_per_second") / self._BPS_TO_MBPS
 
     @property
     def min_throughput_mbps(self) -> float:
-        """Minimum interval throughput in Mbps."""
+        """Minimum interval throughput in Mbps.
+
+        For bidirectional (``--bidir``) results both directions are summed per
+        interval, matching :attr:`avg_throughput_mbps`.
+        """
+        combined = self._combined_interval_rates()
+        if combined:
+            return min(combined)
         return self._col_min(self._primary_df(), "bits_per_second") / self._BPS_TO_MBPS
 
     @property
@@ -258,18 +423,32 @@ class Iperf3Results:
 
     @property
     def total_bytes_sent(self) -> int:
-        """Total bytes sent (TCP). Derived from end.sum_sent."""
-        return int(self._end().get("sum_sent", {}).get("bytes", 0))
+        """Total bytes sent (TCP), across both directions for --bidir runs.
+
+        Derived from end.sum_sent. When end.sum_sent_bidir_reverse is present
+        (``--bidir``), the bytes sent by the reverse-direction sender are
+        added, so the value covers both endpoints.
+        """
+        return int(self._end_pair_value("sum_sent", "bytes"))
 
     @property
     def total_bytes_received(self) -> int:
-        """Total bytes received (TCP). Derived from end.sum_received."""
-        return int(self._end().get("sum_received", {}).get("bytes", 0))
+        """Total bytes received (TCP), across both directions for --bidir runs.
+
+        Derived from end.sum_received. When end.sum_received_bidir_reverse is
+        present (``--bidir``), the bytes received from the reverse direction
+        are added, so the value covers both endpoints.
+        """
+        return int(self._end_pair_value("sum_received", "bytes"))
 
     @property
     def total_retransmits(self) -> int:
-        """Total TCP retransmissions across the entire test."""
-        return int(self._end().get("sum_sent", {}).get("retransmits", 0))
+        """Total TCP retransmissions across the entire test.
+
+        For bidirectional (``--bidir``) runs the reverse sender's
+        retransmissions (end.sum_sent_bidir_reverse) are included.
+        """
+        return int(self._end_pair_value("sum_sent", "retransmits"))
 
     @property
     def avg_rtt_ms(self) -> float:
@@ -300,33 +479,85 @@ class Iperf3Results:
 
     @property
     def total_bytes(self) -> int:
-        """Total UDP payload bytes, preferring the receiver summary."""
-        end = self._end()
+        """Total UDP payload bytes, preferring the receiver summary.
+
+        When a reverse-direction counterpart is present (``--bidir``), the
+        bytes of both directions are summed, so the value is the payload
+        received across the whole bidirectional test.
+        """
         for key in ("sum_received", "sum_sent", "sum"):
-            value = end.get(key, {}).get("bytes")
+            value = self._end_pair_value(key, "bytes")
             if value:
                 return int(value)
         return 0
 
     @property
     def total_packets(self) -> int:
-        """Total UDP packets transmitted. Derived from end.sum."""
-        return int(self._end().get("sum", {}).get("packets", 0))
+        """Total UDP packets, preferring the receiver summaries.
+
+        For bidirectional (``--bidir``) runs this is the sum of both
+        direction receivers' packet counts
+        (end.sum_received + end.sum_received_bidir_reverse). Otherwise it is
+        derived from end.sum, matching iperf3's legacy summary.
+        """
+        if self._is_bidir():
+            received = self._end_pair_value("sum_received", "packets")
+            if received:
+                return int(received)
+        return int(self._end_value("sum", "packets"))
 
     @property
     def avg_jitter_ms(self) -> float:
-        """Mean one-way jitter in milliseconds (UDP). Derived from end.sum."""
-        return float(self._end().get("sum", {}).get("jitter_ms", 0.0))
+        """Mean one-way jitter in milliseconds (UDP).
+
+        For bidirectional (``--bidir``) runs the jitter reported by both
+        direction receivers (end.sum_received and
+        end.sum_received_bidir_reverse) is combined as a packet-weighted
+        mean, so a direction that carried more packets contributes
+        proportionally more. Otherwise derived from end.sum.
+        """
+        if self._is_bidir():
+            forward_packets = self._end_value("sum_received", "packets")
+            reverse_packets = self._end_value("sum_received_bidir_reverse", "packets")
+            total_packets = forward_packets + reverse_packets
+            if total_packets > 0:
+                weighted = (
+                    self._end_value("sum_received", "jitter_ms") * forward_packets
+                    + self._end_value("sum_received_bidir_reverse", "jitter_ms")
+                    * reverse_packets
+                )
+                return weighted / total_packets
+        return self._end_value("sum", "jitter_ms")
 
     @property
     def total_lost_packets(self) -> int:
-        """Total lost UDP packets. Derived from end.sum."""
-        return int(self._end().get("sum", {}).get("lost_packets", 0))
+        """Total lost UDP packets.
+
+        For bidirectional (``--bidir``) runs the losses reported by both
+        direction receivers (end.sum_received + end.sum_received_bidir_reverse)
+        are summed. Otherwise derived from end.sum.
+        """
+        if self._is_bidir():
+            received = self._end_pair_value("sum_received", "packets")
+            if received:
+                return int(self._end_pair_value("sum_received", "lost_packets"))
+        return int(self._end_value("sum", "lost_packets"))
 
     @property
     def avg_loss_percent(self) -> float:
-        """Average UDP packet loss percentage. Derived from end.sum."""
-        return float(self._end().get("sum", {}).get("lost_percent", 0.0))
+        """Average UDP packet loss percentage.
+
+        For bidirectional (``--bidir``) runs the percentage is recomputed
+        from the combined receiver counts (total lost / total received), not
+        by adding the two directions' percentages. Otherwise derived from
+        end.sum.
+        """
+        if self._is_bidir():
+            received = self._end_pair_value("sum_received", "packets")
+            if received > 0:
+                lost = self._end_pair_value("sum_received", "lost_packets")
+                return 100.0 * lost / received
+        return self._end_value("sum", "lost_percent")
 
     @property
     def total_out_of_order(self) -> int:
@@ -419,7 +650,8 @@ class Iperf3Results:
                 <output_dir>/<file_stem>_<metric>.<fmt>.
             use_summary: When True, prefers interval summary rows
                 (sum/sum_sent) over per-stream rows. Falls back to per-stream
-                data when summaries are absent.
+                data when summaries are absent or when the requested metric
+                is only present in stream rows.
             fmt: File format for the output image. E.g. 'png', 'pdf'.
 
         Returns:
@@ -433,11 +665,16 @@ class Iperf3Results:
         if metric not in mmap:
             return None
 
-        df = (
-            self._df_summaries
-            if (use_summary and not self._df_summaries.empty)
-            else self._df_streams
-        )
+        df = self._df_streams
+        if (
+            use_summary
+            and not self._df_summaries.empty
+            and metric in self._df_summaries.columns
+            and self._df_summaries[metric].notna().any()
+        ):
+            # Summary rows only carry the shared TCP/UDP metrics; TCP-only
+            # series (RTT, cwnd, PMTU) must still fall back to stream rows.
+            df = self._df_summaries
         if df.empty or metric not in df.columns or df[metric].isna().all():
             return None
 

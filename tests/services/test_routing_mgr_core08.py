@@ -9,7 +9,9 @@ from __future__ import annotations
 import logging
 from unittest.mock import MagicMock
 
+from satgonetem.routing.base_daemon import RoutingDaemon
 from satgonetem.services.mixins.routing_mgr import RoutingManagerMixin
+from satgonetem.services.topology_satcom import TopologyManager
 from satgonetem.utils.constants import MAX_WORKERS
 
 
@@ -203,3 +205,44 @@ def test_delete_routing_still_removes_the_installed_daemon():
     assert factory.instances[0].remove_calls == [(None, MAX_WORKERS)]
     assert topology.routing_daemon is None
     assert topology.routing_initiated is False
+
+
+class PositionalDaemon(RoutingDaemon):
+    """Custom daemon registered through the public registration API."""
+
+    instances: list[PositionalDaemon] = []
+
+    def __init__(self, topology):
+        super().__init__(topology)
+        self.init_worker_values = []
+        PositionalDaemon.instances.append(self)
+
+    def init(self, max_workers=4):
+        self.init_worker_values.append(max_workers)
+        return True
+
+    def update(self, new_links, max_workers=4):
+        pass
+
+    def remove(self, node=None, max_workers=4):
+        pass
+
+
+def test_positional_routing_method_selects_registered_custom_daemon():
+    """Documented ``init_routing("my-method")`` binds routing_method, not workers."""
+    method = "positional-custom"
+    TopologyManager._daemon_registry.pop(method, None)
+    TopologyManager.register_routing_daemon(method, PositionalDaemon)
+    PositionalDaemon.instances.clear()
+    try:
+        topology = DummyRoutingTopology(routing="static")
+        topology._daemon_registry = dict(TopologyManager._daemon_registry)
+
+        elapsed = topology.init_routing(method)
+    finally:
+        TopologyManager._daemon_registry.pop(method, None)
+
+    assert elapsed >= 0
+    assert topology.routing_daemon is PositionalDaemon.instances[0]
+    assert PositionalDaemon.instances[0].init_worker_values == [MAX_WORKERS]
+    assert topology.routing_initiated is True

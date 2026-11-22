@@ -168,24 +168,34 @@ class StaticRoutingDaemon(RoutingDaemon):
 
         Recomputes shortest-path routing tables and pushes incremental route
         changes to all nodes. The new_links argument is accepted for interface
-        consistency but is not used by static routing.
+        consistency but is not used by static routing. When the topology is not
+        active the tables are left untouched: rotating and rebuilding them
+        would make the un-applied table look like the installed state, and the
+        next active update would incorrectly emit no operations.
 
         Args:
             new_links: Newly added links (unused for static routing).
             max_workers: Maximum number of worker threads for parallel route
                 updates.
+
+        Raises:
+            ValueError: If a reachable destination's next hop has no interface
+                on the source node, or that interface has no peer. The
+                inconsistency is reported instead of silently installing an
+                on-link route the topology cannot use.
         """
-        self._populate_routing_tables()
-        if self.topology.status:
-            outcome = self._apply_all_routes(max_workers=max_workers)
-            if outcome.error_nodes:
-                logging.warning(
-                    "Static routing update failed on %d node(s): %s",
-                    len(outcome.error_nodes),
-                    ", ".join(sorted(outcome.error_nodes)),
-                )
-        else:
+        if not self.topology.status:
             logging.warning("Static routing update skipped: topology not yet active")
+            return
+
+        self._populate_routing_tables()
+        outcome = self._apply_all_routes(max_workers=max_workers)
+        if outcome.error_nodes:
+            logging.warning(
+                "Static routing update failed on %d node(s): %s",
+                len(outcome.error_nodes),
+                ", ".join(sorted(outcome.error_nodes)),
+            )
 
     def remove(self, node: Node | None = None, max_workers: int = 128) -> None:
         """Remove all installed static IP routes.
@@ -737,6 +747,60 @@ class StaticRoutingDaemon(RoutingDaemon):
 
         logging.info("Routing complete: routes were generated using shortest path.")
 
+    def _route_cache_signature(
+        self,
+        src_id: int,
+        src_ifaces,
+        dst_array,
+        next_hops: dict[int, dict[int, int]],
+        loopback_ips: dict[int, str],
+    ) -> list[tuple[int, str, str, int | None]]:
+        """Build the route-cache signature for one source.
+
+        A next-hop vector alone does not identify the destinations it targets:
+        replacing a destination with another node can leave every next hop
+        unchanged.  Each entry therefore carries the destination identity and
+        the gateway as well, so any change to the installed routes invalidates
+        the cache.
+
+        Args:
+            src_id: Integer ID of the source node.
+            src_ifaces: Mapping of peer node ID to outgoing Interface.
+            dst_array: Ordered list of destination nodes.
+            next_hops: Mapping of destination ID to ``{src_id: next_hop}``.
+            loopback_ips: Mapping of node ID to its exact loopback IP.
+
+        Returns:
+            One ``(dst_id, destination, gateway, next_hop)`` tuple per
+            destination, in ``dst_array`` order.
+
+        Raises:
+            ValueError: If a reachable destination's next hop has no entry in
+                *src_ifaces* or that interface has no peer. Silently falling
+                back to an on-link route would install a route the topology
+                cannot use.
+        """
+        signature: list[tuple[int, str, str, int | None]] = []
+        for dst in dst_array:
+            next_hop = next_hops[dst.id].get(src_id)
+            gateway = ""
+            if next_hop is not None:
+                iface_map = src_ifaces or {}
+                interface = iface_map.get(int(next_hop))
+                if interface is None:
+                    raise ValueError(
+                        f"Source {src_id} has no interface to next hop {next_hop} "
+                        f"for destination {dst.id}"
+                    )
+                if interface.peer is None:
+                    raise ValueError(
+                        f"Source {src_id} interface {interface.name!r} to next hop "
+                        f"{next_hop} for destination {dst.id} has no peer"
+                    )
+                gateway = interface.peer.ipv4
+            signature.append((dst.id, loopback_ips[dst.id], gateway, next_hop))
+        return signature
+
     def _install_source_routes(
         self,
         node,
@@ -765,7 +829,9 @@ class StaticRoutingDaemon(RoutingDaemon):
             src_name: Name of the source node.
             dst_array: Ordered list of destination nodes.
             dst_ids: IDs of ``dst_array`` in the same order.
-            signature: Next-hop IDs for this source, in ``dst_array`` order.
+            signature: Per-destination identity tuples
+                ``(dst_id, destination, gateway, next_hop)`` for this source,
+                in ``dst_array`` order.
             loopback_ips: Mapping of node ID to its exact loopback IP.
             prefix: Prefix length used for all installed routes.
         """
@@ -781,13 +847,12 @@ class StaticRoutingDaemon(RoutingDaemon):
         cached_entries = old_entries or {}
         new_entries: dict[int, RoutingEntry] = {}
         table: list[RoutingEntry] = []
-        for dst, next_hop in zip(dst_array, signature, strict=False):
+        for dst, (dst_id, destination, gateway, next_hop) in zip(
+            dst_array, signature, strict=False
+        ):
             if next_hop is None:
                 continue
-            dst_id = dst.id
             interface = src_ifaces.get(int(next_hop))
-            gateway = interface.peer.ipv4
-            destination = loopback_ips[dst_id]
             entry = cached_entries.get(dst_id)
             if (
                 entry is None
@@ -854,18 +919,6 @@ class StaticRoutingDaemon(RoutingDaemon):
                 if src_idx != dst_idx and len(path) >= 2
             }
 
-        # Transpose the destination-indexed next-hop map into one vector per
-        # source.  Each vector doubles as the cache signature for that source.
-        next_hop_by_src: dict[int, list] = {}
-        for dst_idx, dst in enumerate(dst_array):
-            for src_id, next_hop in next_hops[dst.id].items():
-                signature = next_hop_by_src.get(src_id)
-                if signature is None:
-                    signature = [None] * len(dst_array)
-                    next_hop_by_src[src_id] = signature
-                signature[dst_idx] = next_hop
-        no_route_signature = [None] * len(dst_array)
-
         # Route to the exact loopback address.  A /32 is the stable target for
         # each node and never resolves to one of its link interfaces.
         prefix = 32
@@ -876,30 +929,36 @@ class StaticRoutingDaemon(RoutingDaemon):
         dst_ids = [dst.id for dst in dst_array]
         for gs_src in gs_array:
             src_id = gs_src.id
+            src_ifaces = gs_ifaces.get(src_id)
             self._install_source_routes(
                 node=gs_src,
                 src_id=src_id,
-                src_ifaces=gs_ifaces.get(src_id),
+                src_ifaces=src_ifaces,
                 src_loopback=loopback_ips[src_id],
                 src_name=gs_src.name,
                 dst_array=dst_array,
                 dst_ids=dst_ids,
-                signature=next_hop_by_src.get(src_id, no_route_signature),
+                signature=self._route_cache_signature(
+                    src_id, src_ifaces, dst_array, next_hops, loopback_ips
+                ),
                 loopback_ips=loopback_ips,
                 prefix=prefix,
             )
 
         for sat_src in sat_array:
             src_id = sat_src.id
+            src_ifaces = sat_ifaces.get(src_id)
             self._install_source_routes(
                 node=sat_src,
                 src_id=src_id,
-                src_ifaces=sat_ifaces.get(src_id),
+                src_ifaces=src_ifaces,
                 src_loopback=loopback_ips[src_id],
                 src_name=sat_src.name,
                 dst_array=dst_array,
                 dst_ids=dst_ids,
-                signature=next_hop_by_src.get(src_id, no_route_signature),
+                signature=self._route_cache_signature(
+                    src_id, src_ifaces, dst_array, next_hops, loopback_ips
+                ),
                 loopback_ips=loopback_ips,
                 prefix=prefix,
             )
@@ -1063,6 +1122,8 @@ class StaticRoutingDaemon(RoutingDaemon):
 
         next_hop = path[1]
         interface = self._resolve_interface(gs_src, gs_src.id, next_hop, iface_map)
+        if interface.peer is None:
+            raise ValueError(f"Interface {interface.name} on {gs_src.name} has no peer")
 
         gs_src.ipv4_routing_table.append(
             RoutingEntry(
@@ -1090,6 +1151,10 @@ class StaticRoutingDaemon(RoutingDaemon):
 
         next_hop = path[1]
         interface = self._resolve_interface(sat_src, sat_src.id, next_hop, iface_map)
+        if interface.peer is None:
+            raise ValueError(
+                f"Interface {interface.name} on {sat_src.name} has no peer"
+            )
 
         sat_src.ipv4_routing_table.append(
             RoutingEntry(

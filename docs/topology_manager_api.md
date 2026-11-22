@@ -137,7 +137,7 @@ blocks, `/27` satellite blocks, and `/31` link allocation.
 
 ---
 
-### `init_routing(max_workers: int = MAX_WORKERS, routing_method: str = "") -> float`
+### `init_routing(routing_method: str = "", max_workers: int = MAX_WORKERS) -> float`
 
 Initialize the routing daemon for the configured routing method.
 
@@ -147,8 +147,8 @@ Additional methods can be registered via `register_routing_daemon()`.
 Passing `routing_method` overrides `self.routing` for this call only.
 
 **Args**
-- `max_workers` - maximum parallel threads used during route installation.
 - `routing_method` - routing method name; overrides `self.routing` when non-empty.
+- `max_workers` - maximum parallel threads used during route installation.
 
 **Returns**
 - `float` - elapsed wall-clock seconds on success.

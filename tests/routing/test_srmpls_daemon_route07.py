@@ -16,19 +16,7 @@ from satgonetem.models.ground_station import GroundStation
 from satgonetem.models.interface import Interface
 from satgonetem.models.satellite import Satellite
 from satgonetem.routing.srmpls_daemon import SRMPLSDaemon
-
-
-class _FakeLabelManager:
-    """Minimal label manager returning deterministic label stacks."""
-
-    def get_custom_path(self, source_id, dest_id):
-        return None
-
-    def get_node_sid(self, node_id):
-        return 16000 + node_id
-
-    def get_label_stack_for_path(self, path, use_php=False):
-        return [16000 + node_id for node_id in path]
+from satgonetem.routing.srmpls_label_manager import SegmentRoutingManager
 
 
 class _FakeTopology:
@@ -76,7 +64,13 @@ def _make_sat(name, loopback_ip, addressable):
 
 def _make_daemon(topology):
     daemon = SRMPLSDaemon.__new__(SRMPLSDaemon)
-    daemon._label_manager = _FakeLabelManager()
+    manager = SegmentRoutingManager(node_sid_base=16000)
+    for node in [
+        *topology.satellites.values(),
+        *topology.ground_stations.values(),
+    ]:
+        manager.allocate_node_sid(node.id, node.name)
+    daemon._label_manager = manager
     daemon.topology = topology
     daemon.mpls_config = SimpleNamespace(use_php=False)
     daemon.sr_lfib = {}

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "satgonetem"
-version = "0.3.0"
+version = "0.3.1"
 description = "SatGoNetem - Satellite Network Emulation Tool"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -72,7 +72,8 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
-addopts = "-ra --strict-markers -m 'not slow and not benchmark'"
+addopts = "-ra --strict-markers -m 'not slow and not benchmark' -p tests._cov_preload"
+pythonpath = ["."]
 markers = [
     "unit: fast, deterministic unit tests",
     "integration: requires Docker, root, network, or another external service",

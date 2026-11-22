@@ -50,7 +50,7 @@ class DummyTopology(NetworkLifecycleMixin):
 def make_launcher():
     launcher = MagicMock()
     launcher.start_containers.return_value = (1.0, 2.0)
-    launcher.force_close_project.return_value = None
+    launcher.force_close_project.return_value = True
     return launcher
 
 
@@ -141,6 +141,21 @@ def test_retry_after_failure_opens_one_fresh_launcher():
     assert live_launchers == [fresh_launcher]
 
 
+def test_start_refuses_to_overwrite_a_retained_launcher():
+    topology = DummyTopology()
+    retained = MagicMock()
+    topology.launcher = retained
+
+    with patch(LAUNCHER_PATH) as launcher_cls:
+        with pytest.raises(RuntimeError, match="retained"):
+            topology.start_gonetem()
+
+    launcher_cls.assert_not_called()
+    assert topology.launcher is retained
+    assert topology.status is False
+    assert topology.gonetem_status is False
+
+
 def test_force_close_failure_does_not_mask_startup_error():
     topology = DummyTopology()
     launcher = make_launcher()
@@ -153,3 +168,39 @@ def test_force_close_failure_does_not_mask_startup_error():
 
     launcher.force_close_project.assert_called_once_with()
     assert_clean_failure(topology)
+
+
+def test_startup_failure_retains_launcher_when_force_close_reports_failure():
+    topology = DummyTopology()
+    launcher = make_launcher()
+    launcher.start_containers.side_effect = RuntimeError("container start failed")
+    launcher.force_close_project.return_value = False
+
+    with patch(LAUNCHER_PATH, return_value=launcher):
+        with pytest.raises(RuntimeError, match="container start failed"):
+            topology.start_gonetem()
+
+    launcher.force_close_project.assert_called_once_with()
+    assert topology.launcher is launcher
+    assert topology._pending_force_close is True
+    assert topology.status is False
+    assert topology.gonetem_status is False
+    assert topology.routing_initiated is False
+    assert topology.start_time_ is None
+
+
+def test_stop_retries_cleanup_after_a_failed_startup_cleanup():
+    topology = DummyTopology()
+    launcher = make_launcher()
+    launcher.start_containers.side_effect = RuntimeError("container start failed")
+    launcher.force_close_project.side_effect = [False, True]
+
+    with patch(LAUNCHER_PATH, return_value=launcher):
+        with pytest.raises(RuntimeError, match="container start failed"):
+            topology.start_gonetem()
+
+    topology.stop_gonetem()
+
+    assert launcher.force_close_project.call_count == 2
+    assert topology.launcher is None
+    assert topology._pending_force_close is False

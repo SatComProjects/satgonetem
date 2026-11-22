@@ -136,6 +136,29 @@ results.print_summary()
 
 The `delay` parameter (default `0.0`) tells the background thread to sleep that many seconds before executing. The flow status is `RUNNING` for the entire duration, including the delay.
 
+### Ports and server readiness
+
+Every flow uses its own destination port, allocated from a process-wide pool
+(default 5201-6200) sized for the largest number of concurrent flows. The
+reservation is made on first use inside the flow thread, so constructing flows
+up front or cancelling one during its delay does not hold a port; it is
+released when the flow finishes, including on failure. `config.port` is only a
+fallback and is never mutated: sharing one `Iperf3Config` between flows is
+safe. Configure the pool before starting flows; changing it while ports are
+held raises `RuntimeError`:
+
+```python
+from satgonetem.traffic import set_iperf3_port_range
+
+set_iperf3_port_range(5201, 5400)  # or SATGONETEM_IPERF3_PORT_RANGE=5201-5400
+```
+
+The flow waits up to two seconds for the destination server to listen. When
+the listener probe is unavailable (a container without `ss`/`pgrep`, or a
+reduced node fake), the wait keeps a 0.5-second grace period and returns ready
+so the client can still try. An explicit not-listening result after the
+timeout fails the flow before the client starts.
+
 ### Results properties
 
 **Common (TCP and UDP)**
@@ -174,6 +197,12 @@ The `delay` parameter (default `0.0`) tells the background thread to sleep that 
 | `avg_loss_percent` | `float` | Packet loss percentage |
 | `total_out_of_order` | `int` | Out-of-order packets |
 
+For `bidir=True`, throughput and totals aggregate both directions:
+`avg_throughput_mbps` is the sum of the forward and reverse interval rates,
+`max_throughput_mbps`/`min_throughput_mbps` are per-interval sums, and byte,
+packet, retransmit, loss and jitter figures cover both endpoints. iperf3 3.11
+or newer is required for the `*_bidir_reverse` summaries.
+
 ### DataFrames and plotting
 
 ```python
@@ -186,6 +215,41 @@ path = results.plot_metric("bits_per_second", output_dir="/tmp/results")
 # save all available metric plots
 paths = results.plot_all(output_dir="/tmp/results")
 ```
+
+---
+
+## iperf2 logs
+
+`generate_iperf2_plots()` parses saved iperf2 output and writes throughput,
+transfer-size, and cumulative plots, plus retransmit plots for TCP or
+jitter/loss plots for UDP when the log carries those columns. Sender-side UDP
+logs have no jitter/loss columns, so those plots are skipped instead of
+failing. It also prints a summary to stdout.
+
+```python
+from satgonetem.traffic.iperf2_utils import generate_iperf2_plots
+
+paths = generate_iperf2_plots("/tmp/results/iperf2.log", log_file_name="iperf2")
+```
+
+Unit handling follows what iperf2 actually prints:
+
+- **Transfer sizes are binary**: `1 MBytes = 2**20 bytes`, `1 GBytes = 2**30`.
+- **Bit rates are decimal**: `1 Kbits/sec = 1000 bit/s`,
+  `1 Mbits/sec = 1e6 bit/s`, `1 Gbits/sec = 1e9 bit/s`. For example,
+  `1.00 GBytes  46.6 Gbits/sec` parses as `46.6e9` bit/s, and the printed
+  average throughput is divided by `1e6` to report Mbps.
+
+Summary and protocol detection:
+
+- A `[SUM]` row is always the summary. Without one, the last row is treated as
+  the single-stream summary only when it spans the union of the interval rows
+  and its transfer is approximately their sum; otherwise it is a genuine
+  interval row of another stream.
+- UDP is detected from header lines (`UDP port`, `UDP buffer size`, `-u` in the
+  command line, or the `Total Datagrams` column layout). This keeps UDP logs
+  labelled correctly even when sender-side interval rows omit jitter/loss
+  columns.
 
 ---
 

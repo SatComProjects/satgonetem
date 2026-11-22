@@ -14,6 +14,7 @@ apply_satcom_fix()
 import json
 import logging
 import os
+import tempfile
 import threading
 import time
 from dataclasses import dataclass, fields
@@ -24,6 +25,7 @@ from sat_com_application.simulation_manager import (
     SimulationManager,
 )
 from sat_com_builder.models import SimulationProperty
+from sat_com_model.models import PointOfPresence, UserTerminal
 
 from satgonetem.launchers.base_launcher import NetworkLauncher
 from satgonetem.link_budget.config import AntennaConfig, LinkBudgetConfig
@@ -45,6 +47,7 @@ from satgonetem.services.mixins.traffic_testing import TrafficTestingMixin
 from satgonetem.services.topology_link_plan import ensure_inter_satellite_directions
 from satgonetem.traffic import PingConfig, PingFlow
 from satgonetem.utils.project_builder import (
+    _attach_ground_object_domain,
     add_custom_ground_station,
     create_and_load_simulation,
     create_custom_ground_station,
@@ -56,6 +59,42 @@ from satgonetem.utils.project_builder import (
 # packets. It mirrors the GoNetEm server's maxQueuePackets so a configuration
 # accepted here is never rejected by the server.
 MAX_LINK_QUEUE_PACKETS = 1_000_000
+
+# Serialised simulation dates must use the format accepted by
+# satgonetem.utils.project_fixtures.create_empty_project() on restore.
+_RUNTIME_DATE_FORMAT = "%d/%m/%Y %H:%M:%S"
+
+
+def _ground_file_restore_path(ground_dir: str, basename: object) -> str:
+    """Return a safe restore path for an embedded ground station data file.
+
+    Only plain file names are accepted. The persisted ``basename`` must not be
+    absolute, empty, or carry directory components such as ``..``.
+
+    Args:
+        ground_dir: Private directory created for this restore.
+        basename: ``ground_files[<original path>]["basename"]`` from the payload.
+
+    Returns:
+        Absolute path inside *ground_dir* where the file can be written.
+
+    Raises:
+        ValueError: If basename is not a plain file name or the resolved path
+            would leave *ground_dir*.
+    """
+    if not isinstance(basename, str) or not basename:
+        raise ValueError(f"Invalid ground file basename: {basename!r}")
+
+    name = os.path.basename(basename)
+    if os.path.isabs(basename) or name != basename or name in {os.curdir, os.pardir}:
+        raise ValueError(f"Invalid ground file basename: {basename!r}")
+
+    root = os.path.realpath(ground_dir)
+    target = os.path.realpath(os.path.join(root, name))
+    if os.path.commonpath([root, target]) != root:
+        raise ValueError(f"Invalid ground file basename: {basename!r}")
+
+    return target
 
 
 @dataclass
@@ -132,13 +171,19 @@ class NetworkConfig:
     controller_node_iface_pattern: str = "eth{node_id}"
 
     def __post_init__(self) -> None:
-        """Validate the queue-length fields.
+        """Validate the queue-length fields and the tick interval.
 
         Raises:
             TypeError: If a queue-length field is not an integer.
             ValueError: If a queue-length field is outside
-                ``[0, MAX_LINK_QUEUE_PACKETS]``.
+                ``[0, MAX_LINK_QUEUE_PACKETS]``, or if ``update_time`` is not
+                positive.
         """
+        if self.update_time <= 0:
+            raise ValueError(
+                f"NetworkConfig.update_time must be positive, got {self.update_time}"
+            )
+
         for name in ("link_netem_limit", "link_txqueuelen"):
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, int):
@@ -278,8 +323,12 @@ class TopologyManager(
             "simulation_name": getattr(
                 self.simulation_manager, "project_name", "Constellation"
             ),
-            "start_date": self.simulation_manager.time_manager.start_date.isoformat(),
-            "end_date": self.simulation_manager.time_manager.end_date.isoformat(),
+            "start_date": self.simulation_manager.time_manager.start_date.strftime(
+                _RUNTIME_DATE_FORMAT
+            ),
+            "end_date": self.simulation_manager.time_manager.end_date.strftime(
+                _RUNTIME_DATE_FORMAT
+            ),
             "satellites": [],
             "ground_stations": [],
             "user_terminals": [],
@@ -391,7 +440,9 @@ class TopologyManager(
 
         When the TopologyManager was created from a SimulationManager with
         programmatically added satellites and links (rather than from a
-        SimulationProperty), the runtime state is also serialised.
+        SimulationProperty), the runtime state is also serialised. That state
+        covers satellites, ground stations, user terminals, points of presence
+        and every link type between them.
 
         Args:
             path: Filesystem path where the JSON file will be written.
@@ -476,6 +527,32 @@ class TopologyManager(
             )
             add_custom_ground_station(gs, sim_manager)
 
+        for ut_data in runtime_state.get("user_terminals", []):
+            user_terminal = UserTerminal()
+            user_terminal.label = ut_data["label"]
+            user_terminal.object_id = ut_data.get("object_id", 0)
+            user_terminal.domain = ut_data.get("domain", "public")
+            user_terminal.set_position(
+                latitude=ut_data["latitude"],
+                longitude=ut_data["longitude"],
+                altitude=ut_data.get("altitude", 0),
+            )
+            _attach_ground_object_domain(user_terminal, sim_manager)
+            sim_manager.add_user_terminals(user_terminal)
+
+        for pop_data in runtime_state.get("points_of_presence", []):
+            point_of_presence = PointOfPresence()
+            point_of_presence.label = pop_data["label"]
+            point_of_presence.object_id = pop_data.get("object_id", 0)
+            point_of_presence.domain = pop_data.get("domain", "public")
+            point_of_presence.set_position(
+                latitude=pop_data["latitude"],
+                longitude=pop_data["longitude"],
+                altitude=pop_data.get("altitude", 0),
+            )
+            _attach_ground_object_domain(point_of_presence, sim_manager)
+            sim_manager.add_point_of_presence(point_of_presence)
+
         from sat_com_model.models import InterSatelliteLinkDirection
 
         links = runtime_state.get("links", {})
@@ -525,6 +602,22 @@ class TopologyManager(
             except Exception as exc:
                 logging.warning(f"Failed to restore GSL {gsl}: {exc}")
 
+        for utl in links.get("user_terminal", []):
+            try:
+                sat = next(
+                    s
+                    for s in sim_manager.get_satellites()
+                    if s.satellite_name == utl["source"]
+                )
+                ut = next(
+                    u
+                    for u in sim_manager.get_user_terminals()
+                    if u.label == utl["destination"]
+                )
+                sim_manager.create_and_add_user_terminal_link_connection(sat, ut)
+            except Exception as exc:
+                logging.warning(f"Failed to restore user-terminal link {utl}: {exc}")
+
         for gol in links.get("ground_object", []):
             try:
                 go_a = next(
@@ -548,13 +641,14 @@ class TopologyManager(
     def from_file(cls, path: str) -> "TopologyManager":
         """Load a TopologyManager from a JSON file produced by to_file().
 
-        Restores embedded ground station data files to '/tmp/<stem>_ground_files/',
-        then reconstructs the SimulationProperty and NetworkConfig.
+        Restores embedded ground station data files to a private temporary
+        directory created with ``tempfile.mkdtemp()``, then reconstructs the
+        SimulationProperty and NetworkConfig.
 
         When the file contains a ``runtime_state`` block (produced when saving a
         topology that was built programmatically via ``from_simulation_manager``),
-        the full runtime state—including custom satellites, ground stations, and
-        links—is restored instead.
+        the full runtime state—including custom satellites, ground stations,
+        user terminals, points of presence, and their links—is restored instead.
 
         Args:
             path: Path to the JSON file previously written by to_file().
@@ -564,7 +658,8 @@ class TopologyManager(
 
         Raises:
             FileNotFoundError: If path does not exist.
-            ValueError: If the file content is not a valid topology config.
+            ValueError: If the file content is not a valid topology config, or
+                an embedded ground station file name is unsafe.
             OSError: If ground station data files cannot be written.
         """
         with open(path, encoding="utf-8") as fh:
@@ -582,12 +677,13 @@ class TopologyManager(
 
         if ground_files:
             stem = os.path.splitext(os.path.basename(path))[0]
-            ground_dir = os.path.join("/tmp", f"{stem}_ground_files")
-            os.makedirs(ground_dir, exist_ok=True)
+            ground_dir = tempfile.mkdtemp(prefix=f"{stem}_ground_files_")
 
             path_map: dict[str, str] = {}
             for original_path, file_info in ground_files.items():
-                restored_path = os.path.join(ground_dir, file_info["basename"])
+                restored_path = _ground_file_restore_path(
+                    ground_dir, file_info.get("basename")
+                )
                 with open(restored_path, "w", encoding="utf-8") as fh:
                     fh.write(file_info["content"])
                 path_map[original_path] = restored_path
@@ -620,6 +716,10 @@ class TopologyManager(
         self.satellites: dict[int, Satellite] = {}
         self.ground_stations: dict[int, GroundStation] = {}
         self.links: dict[frozenset[(str)], Link] = {}
+        # Link keys whose backend add failed and must be retried before local
+        # interfaces are built. Initialised eagerly so the add thread pool
+        # cannot race on first use.
+        self._failed_link_adds: set[frozenset[str]] = set()
         self.interfaces: list[Interface] = []  # List of all interfaces in the network
         self.interface_version = 0
 

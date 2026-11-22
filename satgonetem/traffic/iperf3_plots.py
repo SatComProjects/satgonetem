@@ -12,6 +12,8 @@ matplotlib.use("Agg")  # non-GUI backend
 import matplotlib.pyplot as plt
 
 from satgonetem.ports import default_runner
+from satgonetem.traffic.iperf3_config import Iperf3Config
+from satgonetem.traffic.iperf3_results import Iperf3Results
 
 if TYPE_CHECKING:
     pass
@@ -221,71 +223,13 @@ def generate_iperf3_plots(
         df_summaries, f"{protocol} interval summaries", f"{protocol.lower()}_summaries"
     )
 
-    # ---------- Calculate and print statistics ----------
-    def calculate_and_print_stats(df_streams, df_summaries, protocol):
-        # Clear console
-        # os.system('clear' if os.name == 'posix' else 'cls')
-
-        print("=" * 60)
-        print(f"           {protocol} IPERF3 TEST STATISTICS")
-        print("=" * 60)
-
-        # Use summary data if available, otherwise use stream data
-        df_for_stats = df_summaries if not df_summaries.empty else df_streams
-
-        if df_for_stats.empty:
-            print("No data available for statistics calculation.")
-            return
-
-        # Average Throughput (Mbps)
-        if "bits_per_second" in df_for_stats.columns:
-            avg_throughput_bps = df_for_stats["bits_per_second"].mean()
-            avg_throughput_mbps = avg_throughput_bps / 1_000_000
-            print(f"Average Throughput:      {avg_throughput_mbps:.2f} Mbps")
-        else:
-            print("Average Throughput:      Not available")
-
-        # Total Retransmissions (TCP only)
-        if protocol == "TCP" and "retransmits" in df_for_stats.columns:
-            total_retransmits = df_for_stats["retransmits"].sum()
-            print(f"Total Retransmissions:   {total_retransmits:.0f}")
-        elif protocol == "TCP":
-            print("Total Retransmissions:   Not available")
-
-        # Average RTT (TCP only)
-        if protocol == "TCP" and "rtt" in df_for_stats.columns:
-            # RTT is in microseconds, convert to milliseconds
-            avg_rtt_us = df_for_stats["rtt"].mean()
-            avg_rtt_ms = avg_rtt_us / 1000.0
-            print(f"Average RTT:             {avg_rtt_ms:.2f} ms")
-        elif protocol == "TCP":
-            print("Average RTT:             Not available")
-
-        # UDP-specific stats
-        if protocol == "UDP":
-            if "lost_packets" in df_for_stats.columns:
-                total_lost = df_for_stats["lost_packets"].sum()
-                print(f"Total Lost Packets:      {total_lost:.0f}")
-
-            if "lost_percent" in df_for_stats.columns:
-                avg_loss_percent = df_for_stats["lost_percent"].mean()
-                print(f"Average Packet Loss:     {avg_loss_percent:.2f}%")
-
-            if "jitter_ms" in df_for_stats.columns:
-                avg_jitter = df_for_stats["jitter_ms"].mean()
-                print(f"Average Jitter:          {avg_jitter:.2f} ms")
-
-        # Total Data Transferred
-        if "bytes" in df_for_stats.columns:
-            total_bytes = df_for_stats["bytes"].sum()
-            total_mb = total_bytes / 1_000_000
-            print(f"Total Data Transferred:  {total_mb:.2f} MB")
-
-        print("=" * 60)
-        print(f"Plots saved to: {out_dir}")
-        print("=" * 60)
-
-    calculate_and_print_stats(df_streams, df_summaries, protocol)
+    # ---------- Print statistics ----------
+    # Delegate to the parsed-results object so the metrics, units, and
+    # stream/summary fallbacks cannot drift from the rest of the package.
+    results = Iperf3Results(raw_json=json.dumps(data), config=Iperf3Config())
+    results.print_summary()
+    print(f"Plots saved to: {out_dir}")
+    print("=" * 60)
 
     # ---------- Open folder in explorer ----------
     if use_tmp_dir:

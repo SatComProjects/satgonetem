@@ -228,17 +228,20 @@ want a Walker-delta-style mesh without manually wiring every pair, use
 `add_mesh_links`.  It automatically:
 
 1. **Groups satellites into orbital planes** by clustering their TLE **RAAN**
-   values.  Satellites whose altitude differs by more than
-   *max_altitude_difference* from the rest of their RAAN cluster are placed in
-   separate sub-planes (this prevents deorbiting or misplaced satellites from
-   being meshed with the main constellation).
+   values, then splitting each RAAN cluster by **inclination** and by altitude.
+   An altitude sub-plane uses an absolute window: a satellite joins only while
+   it stays within *max_altitude_difference* of the first satellite in that
+   sub-plane.  This prevents a slow altitude drift from chaining unrelated
+   satellites into one plane, keeps deorbiting or misplaced satellites in
+   separate sub-planes, and never meshes different shells together.
 2. **Intra-plane links** – within each plane satellites are sorted by their
    *actual propagated position* (argument of latitude) and connected
    sequentially (1→2, 2→3, …, last→0).
-3. **Inter-plane links** – for each pair of consecutive planes, satellites are
-   matched by index (satellite j in plane A connects to satellite j in plane B).
-   Links longer than **4000 km** are skipped, and planes with fewer than
-   *min_plane_size* satellites do not participate in inter-plane connections.
+3. **Inter-plane links** – for each pair of consecutive planes, every satellite
+   in plane A is connected to the closest still-unmatched satellite in plane B
+   (shortest angular phase distance).  Links longer than **4000 km** are
+   skipped, and planes with fewer than *min_plane_size* satellites do not
+   participate in inter-plane connections.
 4. **Ground links** – each ground station is connected to the closest satellite.
 
 ```python

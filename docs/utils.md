@@ -144,13 +144,16 @@ Otherwise the new station participates in the topology but has no GSL.
 `add_mesh_links()` follows four deterministic steps:
 
 1. Group satellites into orbital planes by RAAN. Within one RAAN cluster,
-   altitude gaps larger than `max_altitude_difference` start a new sub-plane.
+   different inclinations start new sub-planes, and an altitude sub-plane keeps
+   only satellites within an absolute `max_altitude_difference` of its first
+   member (no drift chaining).
 2. Connect each plane in mean-anomaly order: `1→2, 2→3, …, last→0`
    (`add_orbital=True`).
-3. Connect consecutive planes by matching satellites in mean-anomaly order;
-   the last plane does not wrap to the first (`add_adjacent=True`). Planes with
-   fewer than `min_plane_size` satellites are skipped, and candidate ISLs
-   longer than 4000 km are dropped.
+3. Connect consecutive planes by pairing each satellite with the closest
+   still-unmatched satellite in the next plane (shortest angular mean-anomaly
+   distance); the last plane does not wrap to the first (`add_adjacent=True`).
+   Planes with fewer than `min_plane_size` satellites are skipped, and
+   candidate ISLs longer than 4000 km are dropped.
 4. Connect every ground station to its closest satellite (`add_ground=True`).
 
 ```python
@@ -259,7 +262,9 @@ sat_com_connectivity. They are referenced by string in a ground object's
 Both strategies retain valid existing connections first, respect
 `maximum_connected_satellites`, and return a
 `ComputedGroundObjectConnectionsResult` with obsolete links and new
-connections.
+connections. Retained links are left in place: they are neither marked
+obsolete nor recreated, and only the remaining connection budget is filled
+with new connections.
 
 `LongestConnectionTimeStrategy` selects the furthest satellite that is still
 approaching, which minimises handovers. `WeightedConnection` uses fixed class
@@ -341,8 +346,36 @@ header. There is no cross-process locking; consumers should poll `version`.
 
 `P4Daemon` owns a segment named `satgonetem_graph` by default; the name can be
 overridden with the `shared_memory_name` constructor argument. Re-initializing
-the daemon, failing to start the controller, or calling `remove()` closes and
-unlinks the owned segment.
+the daemon, failing to start the controller, or calling `remove()` without a
+node closes and unlinks the owned segment. `remove(node)` is a documented
+no-op because the controller and graph segment are global to the topology.
+
+`P4Daemon.update()` exports only links that are active, not pending removal, and
+not disabled. It is a logged no-op before initialization (or after a failed
+initialization released the segment) instead of raising. When topology growth
+exceeds the segment capacity, the owner unlinks the old segment and creates a
+larger one under the same name, keeping the header `version` monotonic.
+Calling `ensure_capacity()` on a read-only (non-owning) segment raises
+`ValueError` because a reader cannot replace the owner's segment.
+
+A consumer that maps the segment once keeps that mapping after a recreation:
+the old object and its data remain valid, but the consumer can never observe
+the new version or data through that mapping. To follow the owner, re-open the
+segment by name for each read (or periodically) instead of holding a mapping:
+
+```python
+snapshot = GraphSharedMemory.read_snapshot("satgraph")
+for edge in snapshot.edges:
+    ...
+```
+
+`read_snapshot()` opens by name, sizes its views from the header's
+`max_edges`, copies the populated records, and closes the mapping. It retries a
+bounded number of times when the name is briefly absent (`FileNotFoundError`) or
+the replacement still reports `version == 0` while the owner is recreating the
+segment; it raises `TimeoutError` if version 0 persists and re-raises
+`FileNotFoundError` if the name does not come back. There is no cross-process
+lock, so poll `version` when a consistent view across multiple writes matters.
 
 ## Interactive terminal bridge
 

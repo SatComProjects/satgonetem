@@ -12,8 +12,8 @@ from sat_com_model.models import Satellite as SatComSatellite
 
 def _get_orbital_elements(
     sat: SatComSatellite, time_manager
-) -> tuple[float, float, float] | None:
-    """Extract RAAN, orbital phase and altitude from a satellite's orbital model.
+) -> tuple[float, float, float, float] | None:
+    """Extract RAAN, orbital phase, altitude and inclination from a model.
 
     For SGP4 models RAAN and inclination are taken directly from the TLE epoch
     elements (``nodeo``/``inclo``).  Models such as pyorbital's ``Orbital`` do
@@ -31,7 +31,8 @@ def _get_orbital_elements(
         time_manager: The simulation's TimeManager (provides current UTC).
 
     Returns:
-        Tuple of (raan_degrees, orbital_phase_degrees, altitude_km)
+        Tuple of
+        (raan_degrees, orbital_phase_degrees, altitude_km, inclination_degrees)
         or None if the satellite has no usable orbital model.
     """
     import math
@@ -95,34 +96,34 @@ def _get_orbital_elements(
     alt_m = get_geodetic().altitude
     altitude = alt_m / 1000.0
 
-    return raan, phase, altitude
+    return raan, phase, altitude, math.degrees(inc)
 
 
 def _group_satellites_by_orbital_plane(
     satellites,
     time_manager,
     raan_threshold: float = 5.0,
-    min_plane_size: int = 10,
     max_altitude_difference: float = 50.0,
+    inclination_threshold: float = 1.0,
 ) -> list[list[tuple[SatComSatellite, float]]]:
-    """Group satellites into orbital planes by RAAN and altitude.
+    """Group satellites into orbital planes by RAAN, altitude and inclination.
 
-    Satellites are first grouped by RAAN.  Within each RAAN cluster the
-    group is further split by altitude: if the altitude gap between two
-    consecutive satellites (when sorted by altitude) exceeds
-    *max_altitude_difference*, a new sub-plane is started.  This prevents
-    outliers (e.g. deorbiting satellites) from being meshed with the main
-    constellation.
+    Satellites are first grouped by RAAN.  Within each RAAN cluster the group
+    is split by inclination (planes with different inclinations intersect even
+    when RAAN and altitude match), then by altitude.  Altitude clustering uses
+    an absolute window: a satellite joins the current sub-plane only while its
+    altitude differs from the first satellite in that sub-plane by less than
+    *max_altitude_difference*.  This prevents a slow drift from chaining
+    unrelated altitudes into one cluster.
 
     Args:
         satellites: List of Satellite objects.
         time_manager: The simulation's TimeManager.
         raan_threshold: Maximum RAAN difference (degrees) to belong to the same plane.
-        min_plane_size: Minimum number of satellites to consider a valid plane.
         max_altitude_difference: Maximum altitude difference (km) between
-            satellites in the same plane.  Satellites whose altitude differs
-            by more than this value from the rest of their RAAN cluster are
-            placed in separate sub-planes.
+            satellites in the same plane.
+        inclination_threshold: Maximum inclination difference (degrees) between
+            satellites in the same plane.
 
     Returns:
         List of orbital planes, where each plane is a list of
@@ -133,8 +134,8 @@ def _group_satellites_by_orbital_plane(
         elements = _get_orbital_elements(sat, time_manager)
         if elements is None:
             continue
-        raan, current_ma, altitude = elements
-        sat_data.append((sat, raan, current_ma, altitude))
+        raan, current_ma, altitude, inclination = elements
+        sat_data.append((sat, raan, current_ma, altitude, inclination))
 
     if not sat_data:
         return []
@@ -175,22 +176,38 @@ def _group_satellites_by_orbital_plane(
             current_plane = [rotated[i]]
     raan_planes.append(current_plane)
 
-    # Within each RAAN plane, further split by altitude
+    # Within each RAAN plane, separate different inclinations first: two
+    # shells with the same RAAN/altitude but different inclination are
+    # distinct, intersecting planes.
     planes = []
     for raan_plane in raan_planes:
-        # Sort by altitude
-        raan_plane.sort(key=lambda x: x[3])
-        current_sub = [raan_plane[0]]
+        raan_plane.sort(key=lambda x: x[4])
+        inclination_groups = []
+        current_inclination_group = [raan_plane[0]]
         for i in range(1, len(raan_plane)):
-            alt_diff = raan_plane[i][3] - raan_plane[i - 1][3]
-            if alt_diff < max_altitude_difference:
-                current_sub.append(raan_plane[i])
+            inc_diff = raan_plane[i][4] - current_inclination_group[0][4]
+            if inc_diff < inclination_threshold:
+                current_inclination_group.append(raan_plane[i])
             else:
-                planes.append(current_sub)
-                current_sub = [raan_plane[i]]
-        planes.append(current_sub)
+                inclination_groups.append(current_inclination_group)
+                current_inclination_group = [raan_plane[i]]
+        inclination_groups.append(current_inclination_group)
 
-    # Keep average RAAN for sorting, then strip RAAN and altitude
+        # Within each inclination group, split by an absolute altitude window
+        # so a slow drift cannot chain all altitudes into one plane.
+        for inclination_group in inclination_groups:
+            inclination_group.sort(key=lambda x: x[3])
+            current_sub = [inclination_group[0]]
+            for i in range(1, len(inclination_group)):
+                alt_diff = inclination_group[i][3] - current_sub[0][3]
+                if alt_diff < max_altitude_difference:
+                    current_sub.append(inclination_group[i])
+                else:
+                    planes.append(current_sub)
+                    current_sub = [inclination_group[i]]
+            planes.append(current_sub)
+
+    # Keep average RAAN for sorting, then strip RAAN, altitude and inclination
     planes_with_raan = []
     for plane in planes:
         avg_raan = sum(s[1] for s in plane) / len(plane)
@@ -200,6 +217,12 @@ def _group_satellites_by_orbital_plane(
     # Sort planes by average RAAN so adjacent planes are truly adjacent in space
     planes_with_raan.sort(key=lambda x: x[0])
     return [p[1] for p in planes_with_raan]
+
+
+def _angular_distance_degrees(first: float, second: float) -> float:
+    """Return the shortest angular distance between two angles in degrees."""
+    diff = abs(first - second) % 360.0
+    return min(diff, 360.0 - diff)
 
 
 def add_mesh_links(
@@ -250,7 +273,6 @@ def add_mesh_links(
         satellites,
         simulation_manager.time_manager,
         max_altitude_difference=max_altitude_difference,
-        min_plane_size=min_plane_size,
     )
     num_planes = len(planes)
 
@@ -289,9 +311,20 @@ def add_mesh_links(
             if len(plane_a) < min_plane_size or len(plane_b) < min_plane_size:
                 continue
 
-            for idx in range(min(len(plane_a), len(plane_b))):
-                sat_a, _phase_a = plane_a[idx]
-                sat_b, _phase_b = plane_b[idx]
+            unmatched_b = list(plane_b)
+            for sat_a, phase_a in plane_a:
+                if not unmatched_b:
+                    break
+
+                # Pair each satellite with the closest still-unmatched
+                # satellite in the adjacent plane (shortest angular distance).
+                closest_index = min(
+                    range(len(unmatched_b)),
+                    key=lambda index: _angular_distance_degrees(
+                        phase_a, unmatched_b[index][1]
+                    ),
+                )
+                sat_b, _phase_b = unmatched_b.pop(closest_index)
 
                 # Skip if the 3D distance is excessive (e.g. planes are far
                 # apart in RAAN because intermediate planes are missing).

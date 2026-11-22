@@ -52,21 +52,22 @@ class DiagnosticsMixin:
         """
         if not hasattr(self, "links") or not isinstance(self.links, dict):
             return []
+        if not self.links:
+            return []
 
         out = []
         link_usage_map: dict[frozenset, dict[str, Any]] = {}  # Track usage by link key
         lock = threading.Lock()  # Protect concurrent access
-        max_workers = min(MAX_WORKERS, len(self.links))
+        max_workers = max(1, min(MAX_WORKERS, len(self.links)))
 
+        satellites = self.get_satellites()
         log_path = "/tmp/interfaces/"
-        paths = [
-            f"{log_path}{self.project_name}.{sat.name}" for sat in self.get_satellites()
-        ]
+        paths = [f"{log_path}{self.project_name}.{sat.name}" for sat in satellites]
 
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = {
                 executor.submit(self._process_interface_file, path): sat.name
-                for path, sat in zip(paths, self.get_satellites(), strict=False)
+                for path, sat in zip(paths, satellites, strict=False)
             }
 
             for fut in as_completed(futures):

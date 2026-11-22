@@ -4,6 +4,9 @@ Both custom strategies used to keep existing connections in a first pass and
 then iterate over *all* visible satellites in a second pass.  Retained
 satellites were therefore appended twice, producing duplicate
 ``GroundToSpaceConnection`` objects for the same satellite.
+
+The retained link object is now left in place, so it must not appear in the
+new-connection list at all; only free capacity is filled.
 """
 
 from unittest.mock import patch
@@ -66,16 +69,17 @@ def _make_visible_satellites():
     return ground_object, satellites, visible_satellites
 
 
-def _assert_each_connected_satellite_appears_once(result, retained_satellite_name):
+def _assert_retained_satellite_is_not_reappended(result, retained_satellite_name):
     connected_names = [
         connection.satellite.satellite_name
         for connection in result.new_ground_object_connections
     ]
-    assert len(connected_names) == 3, connected_names
+    # One retained link plus two free slots out of three.
+    assert len(connected_names) == 2, connected_names
     assert len(connected_names) == len(set(connected_names)), (
         f"duplicate connections: {connected_names}"
     )
-    assert retained_satellite_name in connected_names
+    assert retained_satellite_name not in connected_names
 
 
 def test_longest_connection_time_strategy_does_not_duplicate_retained_satellite():
@@ -104,7 +108,7 @@ def test_longest_connection_time_strategy_does_not_duplicate_retained_satellite(
             )
         )
 
-    _assert_each_connected_satellite_appears_once(result, "Sat0")
+    _assert_retained_satellite_is_not_reappended(result, "Sat0")
 
 
 def test_weighted_connection_does_not_duplicate_retained_satellite():
@@ -119,4 +123,4 @@ def test_weighted_connection_does_not_duplicate_retained_satellite():
             satellites=satellites,
         )
 
-    _assert_each_connected_satellite_appears_once(result, "Sat0")
+    _assert_retained_satellite_is_not_reappended(result, "Sat0")

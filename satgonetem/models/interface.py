@@ -15,7 +15,7 @@ class Interface:
         self.ipv4: str = ""
         self.prefix_len: int = 32 if iface_type == "lo" else 31
         self.name: str = name
-        self.peer: Interface
+        self.peer: Interface | None = None
         self.is_monitored: bool = False
         self.is_active: bool = False
         self.previously_active: bool = True
@@ -61,13 +61,30 @@ class Interface:
         return ipaddress.IPv4Interface(f"{self.ipv4}/{self.prefix_len}").network
 
     def get_iname(self) -> str:
-        """Return the name of the interface inside the container."""
-        return "lo" if self.type == "lo" else "eth" + self.name.split(".")[1]
+        """Return the name of the interface inside the container.
+
+        Raises:
+            ValueError: If a non-loopback interface name has no ``.<id>``
+                suffix, so it cannot be mapped to ``eth<id>``.
+        """
+        if self.type == "lo":
+            return "lo"
+        parts = self.name.split(".")
+        if len(parts) < 2:
+            raise ValueError(
+                f"Interface name {self.name!r} has no '.id' suffix; "
+                "expected a name such as 'Sat0.1'"
+            )
+        return "eth" + parts[1]
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, Interface):
             return NotImplemented
         return self.name == other.name
+
+    def __hash__(self) -> int:
+        # Consistent with __eq__, which compares interface names only.
+        return hash(self.name)
 
     def get_mac_address(self) -> str | None:
         """Return the configured MAC address, if any."""

@@ -42,6 +42,34 @@ if TYPE_CHECKING:
     from satgonetem.models.node import Node
 
 
+def _route_key(route_command: str) -> tuple[str, str]:
+    """Return the stable identity of an installed route command.
+
+    A route is identified by its table and label/prefix, not by the full
+    command: two commands that target the same route are the same route even
+    when their next hop or label stack differs.
+
+    Args:
+        route_command: Installed route command ending in ``replace``.
+
+    Returns:
+        ``("mpls", label)`` for MPLS routes, ``("ip", prefix)`` for IPv4 routes.
+
+    Raises:
+        ValueError: If *route_command* is not a supported replace command.
+    """
+    parts = route_command.split()
+    if (
+        parts[:4] == ["ip", "-f", "mpls", "route"]
+        and len(parts) >= 6
+        and parts[4] == "replace"
+    ):
+        return ("mpls", parts[5])
+    if parts[:3] == ["ip", "route", "replace"] and len(parts) >= 5:
+        return ("ip", parts[3])
+    raise ValueError(f"Unsupported route command: {route_command!r}")
+
+
 def _route_delete_command(route_command: str) -> str:
     """Build the iproute2 delete command for an installed route line.
 
@@ -60,16 +88,65 @@ def _route_delete_command(route_command: str) -> str:
     Raises:
         ValueError: If *route_command* is not a supported replace command.
     """
-    parts = route_command.split()
-    if (
-        parts[:4] == ["ip", "-f", "mpls", "route"]
-        and len(parts) >= 6
-        and parts[4] == "replace"
-    ):
-        return f"ip -f mpls route del {parts[5]}"
-    if parts[:3] == ["ip", "route", "replace"] and len(parts) >= 5:
-        return f"ip route del {parts[3]}"
-    raise ValueError(f"Unsupported route command: {route_command!r}")
+    family, target = _route_key(route_command)
+    if family == "mpls":
+        return f"ip -f mpls route del {target}"
+    return f"ip route del {target}"
+
+
+def _tolerant_route_delete_command(route_command: str) -> str:
+    """Build a delete that tolerates a route the kernel no longer has.
+
+    A cached route can outlive the kernel entry (container restart, or a
+    partially applied earlier batch).  These batches run with ``set -e``, so
+    an unguarded ``route del`` of an absent prefix would abort the whole batch
+    and leave the stale key in the cache, wedging every later update.
+
+    Args:
+        route_command: Installed route command ending in ``replace``.
+
+    Returns:
+        Matching ``ip ... route del`` command with a ``|| true`` guard.
+    """
+    return f"{_route_delete_command(route_command)} 2>/dev/null || true"
+
+
+def _route_changes(
+    previous: list[str],
+    desired: list[str],
+    foreign_keys: set[tuple[str, str]],
+) -> tuple[list[str], list[str]]:
+    """Diff cached satellite routes against the routes this pass now wants.
+
+    Routes are compared by identity (label/prefix), so a changed next hop is a
+    replace rather than a delete followed by a fresh install.
+
+    Args:
+        previous: Commands this pass installed on the previous update.
+        desired: Commands this pass wants installed now.
+        foreign_keys: Route identities owned by the sibling satellite pass.
+            They are never deleted here: the owner deletes them when it drops
+            the route, which prevents one pass from breaking the other's batch.
+
+    Returns:
+        Tuple of ``(delete_lines, install_lines)``.
+    """
+    previous_by_key = {_route_key(line): line for line in previous}
+    desired_by_key = {_route_key(line): line for line in desired}
+    deletes = [
+        line
+        for key, line in previous_by_key.items()
+        if key not in desired_by_key and key not in foreign_keys
+    ]
+    installs = [
+        line for key, line in desired_by_key.items() if previous_by_key.get(key) != line
+    ]
+    return deletes, installs
+
+
+def _cached_route_keys(commands: list[str]) -> set[tuple[str, str]]:
+    """Return the route identities present in a cached command list."""
+    return {_route_key(line) for line in commands}
 
 
 class SRMPLSDaemon(RoutingDaemon):
@@ -82,10 +159,12 @@ class SRMPLSDaemon(RoutingDaemon):
     SR-MPLS model used by this daemon:
     - Each node gets one stable Node SID (label = base + node_id).
     - Ground stations push a label stack encoding the complete path.
-    - Satellites only need their own SID pop rule and per-neighbour forward
-      rules, so satellite LFIB size is O(degree) rather than O(N).
-    - Only ground-station routes change when the topology changes; satellite
-      configuration is installed once at init and never touched again.
+    - Satellites install their own SID pop rule and per-neighbour forward
+      rules, which are O(degree).
+    - Every ground station and every addressable satellite is also an ingress
+      source: it pushes a label stack to every other destination. That ingress
+      table is O(N) and is rebuilt on every update; non-addressable satellites
+      are never ingress sources or destinations.
     """
 
     def __init__(self, topology: RoutingContext) -> None:
@@ -148,10 +227,13 @@ class SRMPLSDaemon(RoutingDaemon):
             return False
 
     def update(self, _new_links: list[Link], max_workers: int = 128) -> None:
-        """Rebuild SR-MPLS ground-station routes after topology changes.
+        """Rebuild SR-MPLS routes after topology changes.
 
-        Satellite Node SID rules are stable and never touched here. Only
-        ground-station label-stack routes are recomputed.
+        Recomputes ingress label-stack routes for every source (ground
+        stations and addressable satellites) and re-applies satellite
+        forwarding entries. Node SID allocations are stable, but satellite
+        SID/forward rules and ingress routes are both re-sent when their
+        attributes change.
 
         Args:
             _new_links: Unused. The topology graph is re-fetched from the
@@ -161,20 +243,27 @@ class SRMPLSDaemon(RoutingDaemon):
         self._rebuild_sr_mpls_routing(init_flag=False, max_workers=max_workers)
 
     def remove(self, node: Node | None = None, max_workers: int = 128) -> None:
-        """Remove all SR-MPLS forwarding entries.
+        """Remove SR-MPLS forwarding entries for one node or the topology.
 
-        Flushes the kernel MPLS label-forwarding table on every node (or on a
-        single node if provided), then resets all in-memory SR state.
+        With *node*, flushes that node's kernel entries and drops only that
+        node's cached routes and LFIB slot. The daemon stays initialized for
+        the remaining nodes. Without *node*, flushes every node and resets all
+        in-memory SR state.
 
         Args:
-            node: If provided, flush only this node. Otherwise flush all
+            node: If provided, remove only this node. Otherwise remove all
                 satellites and ground stations.
             max_workers: Maximum number of parallel worker threads.
         """
         if node is not None:
             self._flush_node(node)
-        else:
-            self._flush_all_nodes(max_workers)
+            self.sr_lfib.pop(node.id, None)
+            self._prev_sr_gs_routes.pop(node.id, None)
+            self._prev_sr_sat_routes.pop(node.id, None)
+            self._prev_sr_node_sid_routes.pop(node.id, None)
+            return
+
+        self._flush_all_nodes(max_workers)
 
         self.sr_lfib = {}
         self._sr_graph = None
@@ -275,9 +364,13 @@ class SRMPLSDaemon(RoutingDaemon):
     def get_sr_statistics(self) -> dict[str, Any]:
         """Return SR-MPLS statistics.
 
+        ``nodes_with_routes`` counts every LFIB source (ground stations and
+        addressable satellites). ``ground_stations_with_routes`` counts only
+        the ground-station subset.
+
         Returns:
             Dict with enabled, node_sids_allocated, custom_paths, sr_routes,
-            and ground_stations_with_routes.
+            nodes_with_routes, and ground_stations_with_routes.
         """
         if self._label_manager is None:
             return {"enabled": False}
@@ -285,7 +378,10 @@ class SRMPLSDaemon(RoutingDaemon):
         stats = self._label_manager.get_statistics()
         stats["enabled"] = True
         stats["sr_routes"] = sum(len(v) for v in self.sr_lfib.values())
-        stats["ground_stations_with_routes"] = len(self.sr_lfib)
+        stats["nodes_with_routes"] = len(self.sr_lfib)
+        stats["ground_stations_with_routes"] = sum(
+            1 for node_id in self.sr_lfib if node_id in self.topology.ground_stations
+        )
         return stats
 
     def list_sr_custom_paths(self) -> list[dict[str, Any]]:
@@ -387,8 +483,9 @@ class SRMPLSDaemon(RoutingDaemon):
     ) -> int:
         """Rebuild SR-MPLS routing for the current time step.
 
-        Satellite Node SID rules are stable; only ground-station label-stack
-        routes are recomputed each call.
+        Satellite Node SID allocations are stable, but satellite SID/forward
+        rules and ingress label-stack routes are both recomputed and
+        re-applied on every call.
 
         Args:
             init_flag: When True, also enables MPLS on all nodes before
@@ -418,11 +515,12 @@ class SRMPLSDaemon(RoutingDaemon):
         return 0
 
     def _build_sr_gs_routes(self) -> None:
-        """Build SR label-stack routes for all ground-station pairs.
+        """Build SR label-stack ingress routes for every source.
 
-        Uses a custom path when one was set via set_sr_custom_path, otherwise
-        falls back to the shortest weighted path. Results are stored in
-        self.sr_lfib keyed by source ground-station ID.
+        Sources and destinations are all ground stations plus addressable
+        satellites. Uses a custom path when one was set via
+        set_sr_custom_path, otherwise falls back to the shortest weighted
+        path. Results are stored in self.sr_lfib keyed by source node ID.
         """
         from satgonetem.models.mpls_entry import SRLabelStackEntry
 
@@ -492,7 +590,7 @@ class SRMPLSDaemon(RoutingDaemon):
                         continue
 
                     label_stack = self._label_manager.get_label_stack_for_path(
-                        path[1:], use_php=use_php
+                        path, use_php=use_php
                     )
 
                     entry = SRLabelStackEntry(
@@ -602,6 +700,13 @@ class SRMPLSDaemon(RoutingDaemon):
     def _apply_sr_node_sids_to_satellites(self) -> int:
         """Install SR-MPLS forwarding entries on all satellites.
 
+        This pass owns the satellite's own Node SID, its per-neighbour forward
+        rules, and the plain IPv4 fallback routes to directly connected ground
+        stations. A ground-station prefix that the label-stack pass also
+        installs (``_apply_sr_routes_to_satellites``) is left to that pass, so a
+        route has exactly one owner and this pass never deletes a prefix the
+        label-stack pass still holds.
+
         On the first call (previous table empty) all entries are installed.
         On subsequent calls only entries whose attributes changed are sent,
         and entries no longer present are deleted.
@@ -614,6 +719,8 @@ class SRMPLSDaemon(RoutingDaemon):
 
         all_sats = list(self.topology.satellites.values())
         all_gs = list(self.topology.ground_stations.values())
+        if not all_sats:
+            return 0
         workers = min(32, (os.cpu_count() or 4) * 4, len(all_sats))
 
         def install_sr_forwarding(sat: Satellite) -> bool:
@@ -622,6 +729,11 @@ class SRMPLSDaemon(RoutingDaemon):
             my_sid = self._label_manager.get_node_sid(sat.id)
             if my_sid is None:
                 return True
+
+            stack_commands = [
+                entry.to_iproute2_command() for entry in self.sr_lfib.get(sat.id, [])
+            ]
+            stack_keys = _cached_route_keys(stack_commands)
 
             route_commands = []
 
@@ -677,6 +789,10 @@ class SRMPLSDaemon(RoutingDaemon):
                 gs_loopback = gs.loopback.ipv4 if gs.loopback else None
                 if not gs_loopback:
                     continue
+                # The label-stack pass owns this prefix when it has an SR route;
+                # keep the plain route only as a fallback when it does not.
+                if ("ip", f"{gs_loopback}/32") in stack_keys:
+                    continue
                 gs_ip = iface.peer.ipv4
                 iface_name = iface.get_iname()
                 route_commands.append(
@@ -684,20 +800,20 @@ class SRMPLSDaemon(RoutingDaemon):
                 )
 
             prev = self._prev_sr_node_sid_routes.get(sat.id, [])
-            prev_set = set(prev)
-            new_set = set(route_commands)
-            changed = [line for line in route_commands if line not in prev_set]
-            stale = [line for line in prev if line not in new_set]
+            foreign_keys = _cached_route_keys(self._prev_sr_sat_routes.get(sat.id, []))
+            stale, changed = _route_changes(prev, route_commands, foreign_keys)
 
-            if changed or stale:
-                batch_lines = [_route_delete_command(line) for line in stale] + changed
+            if stale or changed:
+                batch_lines = [
+                    _tolerant_route_delete_command(line) for line in stale
+                ] + changed
                 batch_cmd = "set -e; " + "; ".join(batch_lines)
                 try:
                     sat.execute_command(["sh", "-lc", batch_cmd])
-                    self._prev_sr_node_sid_routes[sat.id] = route_commands
                 except Exception as e:
                     logging.error(f"Failed to install SR forwarding on {sat.name}: {e}")
                     return False
+            self._prev_sr_node_sid_routes[sat.id] = route_commands
             return True
 
         errors = 0
@@ -731,6 +847,9 @@ class SRMPLSDaemon(RoutingDaemon):
         if self._label_manager is None:
             return 0
 
+        if not self.topology.ground_stations:
+            return 0
+
         workers = min(
             32,
             (os.cpu_count() or 4) * 4,
@@ -758,7 +877,9 @@ class SRMPLSDaemon(RoutingDaemon):
             stale = [line for line in prev if line not in new_set]
 
             if changed or stale:
-                batch_lines = [_route_delete_command(line) for line in stale] + changed
+                batch_lines = [
+                    _tolerant_route_delete_command(line) for line in stale
+                ] + changed
                 batch_cmd = "set -e; " + "; ".join(batch_lines)
                 try:
                     gs.execute_command(["sh", "-lc", batch_cmd])
@@ -785,7 +906,14 @@ class SRMPLSDaemon(RoutingDaemon):
         return errors
 
     def _apply_sr_routes_to_satellites(self) -> int:
-        """Install SR-MPLS routes on all satellites.
+        """Install SR-MPLS label-stack routes on all satellites.
+
+        This pass owns the IPv4 prefix routes built from ``sr_lfib`` (the
+        ``encap mpls`` routes and their direct-IP fallbacks). The satellite's
+        own Node SID and its per-neighbour forward rules belong to
+        ``_apply_sr_node_sids_to_satellites`` and are not installed here, so
+        every route has exactly one owner. Deletes for prefixes the SID pass
+        still caches are skipped; that pass deletes them when it drops them.
 
         On the first call (previous table empty) all routes are installed.
         On subsequent calls only routes whose attributes changed are sent,
@@ -794,9 +922,10 @@ class SRMPLSDaemon(RoutingDaemon):
         Returns:
             Number of satellites whose routes could not be installed.
         """
-        from satgonetem.models.mpls_entry import SRNodeSIDEntry
-
         if self._label_manager is None:
+            return 0
+
+        if not self.topology.satellites:
             return 0
 
         workers = min(
@@ -809,31 +938,27 @@ class SRMPLSDaemon(RoutingDaemon):
             if self._label_manager is None:
                 raise RuntimeError("SR-MPLS manager not initialized")
 
-            route_commands = []
-
-            my_sid = self._label_manager.get_node_sid(sat.id)
-            if my_sid is not None:
-                own_entry = SRNodeSIDEntry(node_sid=my_sid, node_name=sat.name)
-                route_commands.append(own_entry.to_iproute2_command())
-
-            for entry in self.sr_lfib.get(sat.id, []):
-                route_commands.append(entry.to_iproute2_command())
+            route_commands = [
+                entry.to_iproute2_command() for entry in self.sr_lfib.get(sat.id, [])
+            ]
 
             prev = self._prev_sr_sat_routes.get(sat.id, [])
-            prev_set = set(prev)
-            new_set = set(route_commands)
-            changed = [line for line in route_commands if line not in prev_set]
-            stale = [line for line in prev if line not in new_set]
+            foreign_keys = _cached_route_keys(
+                self._prev_sr_node_sid_routes.get(sat.id, [])
+            )
+            stale, changed = _route_changes(prev, route_commands, foreign_keys)
 
-            if changed or stale:
-                batch_lines = [_route_delete_command(line) for line in stale] + changed
+            if stale or changed:
+                batch_lines = [
+                    _tolerant_route_delete_command(line) for line in stale
+                ] + changed
                 batch_cmd = "set -e; " + "; ".join(batch_lines)
                 try:
                     sat.execute_command(["sh", "-lc", batch_cmd])
-                    self._prev_sr_sat_routes[sat.id] = route_commands
                 except Exception as e:
                     logging.error(f"Failed to install SR routes on {sat.name}: {e}")
                     return False
+            self._prev_sr_sat_routes[sat.id] = route_commands
             return True
 
         errors = 0
@@ -923,7 +1048,7 @@ class SRMPLSDaemon(RoutingDaemon):
                     continue
 
                 label_stack = self._label_manager.get_label_stack_for_path(
-                    path[1:], use_php=use_php
+                    path, use_php=use_php
                 )
 
                 entry = SRLabelStackEntry(
@@ -953,8 +1078,15 @@ class SRMPLSDaemon(RoutingDaemon):
         for entry in new_entries:
             route_commands.append(entry.to_iproute2_command())
 
-        if route_commands:
-            batch_cmd = "set -e; " + "; ".join(route_commands)
+        stale, _ = _route_changes(
+            self._prev_sr_gs_routes.get(source_id, []), route_commands, set()
+        )
+        batch_lines = [
+            _tolerant_route_delete_command(line) for line in stale
+        ] + route_commands
+
+        if batch_lines:
+            batch_cmd = "set -e; " + "; ".join(batch_lines)
             try:
                 gs_src.execute_command(["sh", "-lc", batch_cmd])
                 self._prev_sr_gs_routes[source_id] = route_commands

@@ -45,6 +45,16 @@ def topology_manager():
     )
 
 
+def test_failed_link_add_state_is_initialised(topology_manager):
+    """The add-failure set must exist before the threaded add path uses it.
+
+    Lazy creation inside the add thread pool can race on the first batch and
+    lose a failed link key, which would let interfaces be built for a link the
+    backend never accepted.
+    """
+    assert topology_manager._failed_link_adds == set()
+
+
 class TestSetLinkBudgetConfig:
     def test_sets_config_on_manager(self, mock_tm):
         cfg = LinkBudgetConfig(downlink_freq_ghz=20.0, uplink_freq_ghz=15.0)

@@ -2,9 +2,50 @@
 
 from __future__ import annotations
 
+import json
 import os
 import tarfile
 import tempfile
+
+import yaml
+
+# YAML treats these as line breaks even inside double-quoted scalars, but
+# json.dumps leaves them raw. Go's yaml.v2/v3 then normalizes them to spaces
+# while parsing, silently changing the value.
+_YAML_LINE_BREAK_ESCAPES = {
+    "\u0085": "\\u0085",  # NEL
+    "\u2028": "\\u2028",  # LINE SEPARATOR
+    "\u2029": "\\u2029",  # PARAGRAPH SEPARATOR
+}
+
+
+def _yaml_scalar(value: object) -> str:
+    """Return *value* as a single-line, YAML-safe scalar.
+
+    Plain values stay unquoted so the generated document keeps the shape the
+    GoNetEm server expects. The value is validated in a flow mapping because
+    peers are emitted inside ``{peer1: ..., peer2: ...}``. Anything YAML would
+    reinterpret there (newlines, comments, mapping separators, flow
+    indicators, anchor/alias indicators, type coercion) is emitted as a
+    JSON-quoted scalar, which is also valid YAML.
+
+    ``ensure_ascii=False`` keeps non-BMP characters literal: Go's yaml.v2/v3
+    rejects the UTF-16 surrogate-pair escapes that ``json.dumps`` produces by
+    default. NEL, LINE SEPARATOR, and PARAGRAPH SEPARATOR are escaped as
+    ``\\uXXXX`` because YAML parses them as line breaks even in quoted scalars.
+    """
+    text = str(value)
+    if not any(char in text for char in _YAML_LINE_BREAK_ESCAPES):
+        try:
+            parsed = yaml.safe_load(f"{{value: {text}}}")
+        except yaml.YAMLError:
+            parsed = None
+        if parsed == {"value": text}:
+            return text
+    quoted = json.dumps(text, ensure_ascii=False)
+    for char, escape in _YAML_LINE_BREAK_ESCAPES.items():
+        quoted = quoted.replace(char, escape)
+    return quoted
 
 
 def _tbf_qos(rate_kbps: int, delay_ms: int) -> tuple[int, float]:
@@ -126,16 +167,20 @@ class GoNetEmProjectBuilder:
         for sat in satellites:
             eth_id = self._controller_iface_suffix(sat)
             burst, buffer = _tbf_qos(1_000_000, 1)
+            peer1 = _yaml_scalar(f"Controller.{sat.id}")
+            peer2 = _yaml_scalar(f"{sat.name}.{eth_id}")
             result += (
-                f" - {{peer1: Controller.{sat.id}, peer2: {sat.name}.{eth_id},"
+                f" - {{peer1: {peer1}, peer2: {peer2},"
                 f" peer1qos: {{ rate: 1000000, buffer: {buffer}, jitter: 0, delay: 1, burst: {burst}}},"
                 f" peer2qos: {{ rate: 1000000, buffer: {buffer}, jitter: 0, delay: 1, burst: {burst}}}}} \n"
             )
         for gs in ground_stations:
             eth_id = self._controller_iface_suffix(gs)
             burst, buffer = _tbf_qos(1_000_000, 1)
+            peer1 = _yaml_scalar(f"Controller.{gs.id}")
+            peer2 = _yaml_scalar(f"{gs.name}.{eth_id}")
             result += (
-                f" - {{peer1: Controller.{gs.id}, peer2: {gs.name}.{eth_id},"
+                f" - {{peer1: {peer1}, peer2: {peer2},"
                 f" peer1qos: {{ rate: 1000000, buffer: {buffer}, jitter: 0, delay: 1, burst: {burst}}},"
                 f" peer2qos: {{ rate: 1000000, buffer: {buffer}, jitter: 0, delay: 1, burst: {burst}}}}} \n"
             )
@@ -150,7 +195,11 @@ class GoNetEmProjectBuilder:
         result = ""
         for sat in satellites:
             image = "jariassuarez/sgnt:satellite" if not sat.image else sat.image
-            result += f" Sat{sat.id}:\n  type: {sat_type}\n  image: {image}\n  volumes:\n  - /tmp:/tmp\n"
+            key = _yaml_scalar(f"Sat{sat.id}")
+            result += (
+                f" {key}:\n  type: {_yaml_scalar(sat_type)}\n"
+                f"  image: {_yaml_scalar(image)}\n  volumes:\n  - /tmp:/tmp\n"
+            )
         return result
 
     @staticmethod
@@ -163,7 +212,11 @@ class GoNetEmProjectBuilder:
             image = gs.image
             if not image and not fallback:
                 image = "jariassuarez/sgnt:ground-station"
-            result += f" {prefix}{gs.id}:\n  type: {gs_type}\n  image: {image}\n  volumes:\n  - /tmp:/tmp\n"
+            key = _yaml_scalar(f"{prefix}{gs.id}")
+            result += (
+                f" {key}:\n  type: {_yaml_scalar(gs_type)}\n"
+                f"  image: {_yaml_scalar(image)}\n  volumes:\n  - /tmp:/tmp\n"
+            )
         return result
 
     def _write_links(self, links) -> str:
@@ -175,9 +228,11 @@ class GoNetEmProjectBuilder:
             rate = link.get_capacity()
             burst, buffer = _tbf_qos(rate, delay)
             queue = f"limit: {self.netem_limit}, txqueuelen: {self.txqueuelen}"
+            peer1 = _yaml_scalar(f"{link.source.name}.{link.target.id}")
+            peer2 = _yaml_scalar(f"{link.target.name}.{link.source.id}")
             result += (
-                f" - {{peer1: {link.source.name}.{link.target.id},"
-                f" peer2: {link.target.name}.{link.source.id},"
+                f" - {{peer1: {peer1},"
+                f" peer2: {peer2},"
                 f" peer1qos: {{ rate: {rate}, buffer: {buffer}, jitter: 0, delay: {delay}, burst: {burst}, {queue}}},"
                 f" peer2qos: {{ rate: {rate}, buffer: {buffer}, jitter: 0, delay: {delay}, burst: {burst}, {queue}}}}}"
                 f" #Latency of {delay}ms \n"

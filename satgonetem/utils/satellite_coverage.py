@@ -131,7 +131,7 @@ def coverage_percentage(
             n_pts=n_ring_pts,
             R_earth_km=6_371.0,
         )
-        if lon_arr is None:
+        if lon_arr is None or lat_arr is None:
             continue
         rings.append(Path(np.vstack((lon_arr, lat_arr)).T))
 

@@ -70,8 +70,18 @@ class NetworkLauncher(ABC):
         """Tear down all containers / processes for this project."""
 
     @abstractmethod
-    def force_close_project(self) -> None:
-        """Best-effort teardown after a failed startup."""
+    def force_close_project(self) -> bool:
+        """Best-effort teardown after a failed startup or a failed close.
+
+        Implementations must clean up whatever backend state is still
+        reachable. They must not assume a healthy client/session remains: a
+        preceding ``close_project()`` may already have dropped it.
+
+        Returns:
+            True when the backend is confirmed cleaned up, including when
+            there was nothing to clean. False when cleanup could not be
+            completed, so the caller can retain its handles and retry.
+        """
 
     # Per-step link management
 
@@ -81,11 +91,19 @@ class NetworkLauncher(ABC):
 
     @abstractmethod
     def add_link(self, link) -> None:
-        """Create a new link and apply qdiscs to both ends."""
+        """Create a new link and apply qdiscs to both ends.
+
+        Raises:
+            RuntimeError: If the backend could not create the link.
+        """
 
     @abstractmethod
     def delete_link(self, link) -> None:
-        """Remove a link (both ends)."""
+        """Remove a link (both ends).
+
+        Raises:
+            RuntimeError: If the backend could not delete the link.
+        """
 
     @abstractmethod
     def set_link_capacities(self, isl_kbps: int, gnd_kbps: int, links: list) -> None:

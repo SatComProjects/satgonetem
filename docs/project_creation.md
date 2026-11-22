@@ -592,10 +592,13 @@ from satgonetem.services.topology_satcom import TopologyManager
 topology = TopologyManager.from_file("my_topology.json")
 ```
 
-`from_file` writes any embedded ground station data files to `/tmp/<stem>_ground_files/`
-(e.g. `/tmp/my_topology_ground_files/`), updates the `data_file` paths in the
+`from_file` writes any embedded ground station data files to a private temporary
+directory created with `tempfile.mkdtemp()` (prefix `<stem>_ground_files_`),
+updates the `data_file` paths in the
 configuration, then calls `from_satcom` and
-applies the persisted `NetworkConfig`. The returned instance is ready to use in the
+applies the persisted `NetworkConfig`. Embedded basenames must be plain file
+names; absolute paths or directory components such as `..` raise `ValueError`.
+The returned instance is ready to use in the
 same way as one built directly with `from_satcom`.
 
 ---

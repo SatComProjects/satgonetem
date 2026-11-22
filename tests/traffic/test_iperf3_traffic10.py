@@ -7,6 +7,7 @@ used.
 """
 
 import json
+import re
 from unittest.mock import MagicMock, patch
 
 from satgonetem.traffic.iperf3_utils import (
@@ -64,12 +65,12 @@ def _kill_calls(node: MagicMock) -> list:
     return [
         call
         for call in node.execute_command.call_args_list
-        if "pkill" in str(call) and "iperf3 -s -1" in str(call)
+        if "pkill" in str(call) and "[i]perf3 -s -1" in str(call)
     ]
 
 
-def test_missing_destination_loopback_sets_error_and_tries_server_kill():
-    """Setup failure before the try block must not leave the flow RUNNING."""
+def test_missing_destination_loopback_sets_error_without_killing():
+    """Setup failure before reservation must not kill another flow's server."""
     src = _make_node("gs0", "10.0.0.1")
     dst = _make_node("gs1", "10.0.0.2")
     del dst.loopback  # simulate an unset/missing destination loopback
@@ -85,7 +86,9 @@ def test_missing_destination_loopback_sets_error_and_tries_server_kill():
     assert status == FlowStatus.ERROR
     assert status is not FlowStatus.RUNNING
     assert flow._error is not None
-    assert _kill_calls(dst), "detached server kill was not attempted"
+    assert not _kill_calls(dst), (
+        "no port was reserved, so cleanup must not pkill a shared config port"
+    )
 
 
 def test_cleanup_failure_does_not_prevent_done_result():
@@ -149,7 +152,15 @@ def test_client_setup_failure_sets_error_and_kills_detached_server():
 
     kills = _kill_calls(dst)
     assert kills, "detached server kill was not attempted"
+    # The reservation is released after completion, so read the allocated port
+    # from the server command this flow issued.
+    server_cmd = next(
+        str(call)
+        for call in dst.execute_command.call_args_list
+        if "iperf3 -s -1" in str(call)
+    )
+    port = re.search(r"-p (\d+)", server_cmd).group(1)
     # The kill must be scoped to this flow's bind address and allocated port.
     assert any(
-        f"iperf3 -s -1 -B 10.0.0.2 -p {flow._port}" in str(call) for call in kills
+        f"[i]perf3 -s -1 -B 10.0.0.2 -p {port}" in str(call) for call in kills
     ), f"kill was not scoped to this flow: {kills!r}"

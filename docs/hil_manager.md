@@ -96,9 +96,26 @@ HIL and handles only satellites and non-HIL ground stations.
 
 ## PID Resolution
 
-HILManager reads `node.container_pid` from the satellite node object. This
-attribute is set by any launcher during `start_containers`. HILManager holds
-no reference to the launcher and works with GoNetEmLauncher as long as `container_pid` is populated on satellite nodes.
+HILManager resolves the satellite container PID from `node.container` at call
+time, reloading the container state and refreshing `node.container_pid`. This
+prevents a stale PID (left behind by a container restart or PID reuse) from
+sending `nsenter` into the wrong network namespace.
+
+- A container reported as stopped is never used. The operation logs an error
+  and skips PID-dependent work: `teardown_link` still deletes the bridge but
+  does not attempt veth deletion, while `setup_link` and `update_link` do
+  nothing.
+- If Docker cannot refresh the container state and `node.container_pid` holds
+  a positive cached PID, the cached PID is used as a fallback. This keeps
+  teardown able to remove the veth after the container state became
+  unavailable. The tradeoff is a residual TOCTOU risk: the cached PID may be
+  recycled by another process between resolution and `nsenter`.
+- If the refresh fails and no cached PID is available, the operation reports a
+  clear error. `teardown_link` still removes the bridge and skips veth
+  deletion; `setup_link` and `update_link` do nothing.
+
+When no container object is attached, the launcher-populated
+`node.container_pid` is used.
 
 ## Handovers
 
