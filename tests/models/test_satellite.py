@@ -5,7 +5,6 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from satgonetem.models.interface import Interface
 from satgonetem.models.node import Node
 from satgonetem.models.satellite import Satellite
 
@@ -164,28 +163,60 @@ class TestSatelliteEquality:
 
 
 class TestSatelliteNetLogger:
-    """The log destination is interpolated into a container shell command."""
+    """The sampler writes one project-scoped JSONL file per satellite."""
 
-    def test_log_path_is_quoted(self):
+    def test_start_uses_the_project_scoped_monitor_file(self):
         sat = Satellite("Sat0")
-        sat.interfaces.append(Interface(name="Sat0.1"))
         sat.execute_command = MagicMock()
-        hostile_path = "/tmp/logs; touch /tmp/pwned"
 
-        sat.start_net_logger(hostile_path)
+        sat.start_net_logger("proj")
 
         command = sat.execute_command.call_args.args[0]
         tokens = shlex.split(command)
-        destination = hostile_path + "/Sat0_eth1.log"
-        assert tokens[tokens.index("--log") + 1] == destination
-        assert f"--log {destination}" not in command
+        assert "/tmp/interfaces/proj.Sat0" in tokens
+        assert "pkill" in command
+        assert "base64 -d" in command
+        assert sat.execute_command.call_args.kwargs == {"detach": True}
 
-    def test_normal_path_is_unchanged(self):
+    def test_start_honours_a_custom_path(self):
         sat = Satellite("Sat0")
-        sat.interfaces.append(Interface(name="Sat0.1"))
         sat.execute_command = MagicMock()
 
-        sat.start_net_logger("/tmp/logs")
+        sat.start_net_logger("proj", path="/tmp/logs")
 
         command = sat.execute_command.call_args.args[0]
-        assert "--log /tmp/logs/Sat0_eth1.log" in command
+        assert "/tmp/logs/proj.Sat0" in shlex.split(command)
+
+    def test_start_quotes_a_hostile_path(self):
+        sat = Satellite("Sat0")
+        sat.execute_command = MagicMock()
+        hostile_path = "/tmp/logs; touch /tmp/pwned"
+
+        sat.start_net_logger("proj", path=hostile_path)
+
+        command = sat.execute_command.call_args.args[0]
+        tokens = shlex.split(command)
+        destination = hostile_path + "/proj.Sat0"
+        assert destination in tokens
+        assert f"rm -f {shlex.quote(destination)}" in command
+
+    def test_start_rejects_an_invalid_interval(self):
+        sat = Satellite("Sat0")
+        sat.execute_command = MagicMock()
+
+        with pytest.raises(ValueError, match="interval_s"):
+            sat.start_net_logger("proj", interval_s=0)
+
+        sat.execute_command.assert_not_called()
+
+    def test_stop_targets_the_same_monitor_file(self):
+        sat = Satellite("Sat0")
+        sat.execute_command = MagicMock()
+
+        sat.stop_net_logger("proj")
+
+        command = sat.execute_command.call_args.args[0]
+        tokens = shlex.split(command)
+        assert "/tmp/interfaces/proj.Sat0" in tokens
+        assert "pkill" in command
+        assert sat.execute_command.call_args.kwargs == {"detach": False}

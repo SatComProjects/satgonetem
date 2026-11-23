@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import time
 import warnings
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import TYPE_CHECKING, Any
 
 from satgonetem.services.mixins.simulation_loop import ensure_simulation_lock
@@ -90,6 +91,8 @@ class NetworkLifecycleMixin:
 
             if hil is not None:
                 hil.wire_links(hil_links)
+
+            self._start_net_loggers(launch_nodes)
         except Exception:
             # Startup failed after the project may have been opened. Tear down
             # any HIL bridges/veths wired before the failure so the physical
@@ -224,6 +227,74 @@ class NetworkLifecycleMixin:
                     self.routing_daemon = None
             self.set_routing_initiated(False)
 
+    def _start_net_loggers(self, nodes: list[Any]) -> None:
+        """Start one link-usage sampler per launched satellite container.
+
+        Monitoring is observability, not emulation. A sampler that cannot
+        start is logged and skipped so traffic experiments still run.
+        """
+        project_name = getattr(self, "project_name", "")
+        if not project_name:
+            return
+
+        satellites = [
+            node
+            for node in nodes
+            if callable(getattr(node, "start_net_logger", None))
+            and getattr(node, "container", None) is not None
+        ]
+        if not satellites:
+            return
+
+        def _start(node: Any) -> None:
+            node.start_net_logger(project_name)
+
+        max_workers = max(1, min(MAX_WORKERS, len(satellites)))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(_start, node): node for node in satellites}
+            for future in as_completed(futures):
+                node = futures[future]
+                try:
+                    future.result()
+                except Exception as exc:  # noqa: BLE001 - keep startup alive
+                    logging.warning(
+                        "Failed to start link-usage monitor on %s: %s",
+                        getattr(node, "name", node),
+                        exc,
+                    )
+
+    def _stop_net_loggers(self) -> None:
+        """Stop link-usage samplers while the containers still exist."""
+        project_name = getattr(self, "project_name", "")
+        if not project_name:
+            return
+
+        satellites = [
+            node
+            for node in getattr(self, "satellites", {}).values()
+            if callable(getattr(node, "stop_net_logger", None))
+            and getattr(node, "container", None) is not None
+        ]
+        if not satellites:
+            return
+
+        def _stop(node: Any) -> None:
+            node.stop_net_logger(project_name)
+
+        max_workers = max(1, min(MAX_WORKERS, len(satellites)))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(_stop, node): node for node in satellites}
+            for future in as_completed(futures):
+                node = futures[future]
+                try:
+                    future.result()
+                except Exception as exc:  # noqa: BLE001 - teardown is best-effort
+                    logging.warning(
+                        "Failed to stop link-usage monitor on %s: %s",
+                        getattr(node, "name", node),
+                        exc,
+                    )
+
     def stop_gonetem(self) -> float:
         """Stop GoNetEm and clean up resources.
 
@@ -247,6 +318,7 @@ class NetworkLifecycleMixin:
         launcher_retained = False
 
         self._stop_routing_daemon()
+        self._stop_net_loggers()
 
         try:
             if self.hil_manager is not None:
@@ -354,6 +426,7 @@ class NetworkLifecycleMixin:
                 logging.error("Failed to stop traffic flows during force stop: %s", exc)
 
             self._stop_routing_daemon()
+            self._stop_net_loggers()
 
             if self.hil_manager is not None:
                 try:
