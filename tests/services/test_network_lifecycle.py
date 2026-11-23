@@ -95,6 +95,92 @@ def test_start_gonetem_passes_only_non_hil_nodes_and_active_links():
     assert topology.gonetem_status is True
 
 
+def test_start_gonetem_starts_the_link_monitor_on_each_satellite():
+    topology = DummyTopology()
+    sat = SimpleNamespace(
+        name="Sat0",
+        container=object(),
+        start_net_logger=MagicMock(),
+    )
+    gnd = SimpleNamespace(name="Gnd0", container=object())
+    topology.satellites = {0: sat}
+    topology.ground_stations = {0: gnd}
+    topology.links = {}
+
+    fake_launcher = MagicMock()
+    fake_launcher.start_containers.return_value = (1.0, 2.0)
+
+    with patch(
+        "satgonetem.launchers.gonetem_launcher.GoNetEmLauncher",
+        return_value=fake_launcher,
+    ):
+        topology.start_gonetem()
+
+    sat.start_net_logger.assert_called_once_with("test")
+    assert not hasattr(gnd, "start_net_logger")
+
+
+def test_start_gonetem_continues_when_a_link_monitor_fails():
+    topology = DummyTopology()
+    sat = SimpleNamespace(
+        name="Sat0",
+        container=object(),
+        start_net_logger=MagicMock(side_effect=RuntimeError("docker unavailable")),
+    )
+    topology.satellites = {0: sat}
+    topology.ground_stations = {}
+    topology.links = {}
+
+    fake_launcher = MagicMock()
+    fake_launcher.start_containers.return_value = (1.0, 2.0)
+
+    with patch(
+        "satgonetem.launchers.gonetem_launcher.GoNetEmLauncher",
+        return_value=fake_launcher,
+    ):
+        topology.start_gonetem()
+
+    assert topology.gonetem_status is True
+
+
+def test_stop_gonetem_stops_monitors_before_closing_the_project():
+    topology = DummyTopology()
+    calls = []
+    sat = SimpleNamespace(
+        name="Sat0",
+        container=object(),
+        stop_net_logger=lambda project: calls.append(("stop", project)),
+    )
+    topology.satellites = {0: sat}
+    topology.gonetem_status = True
+    launcher = MagicMock()
+    launcher.close_project.side_effect = lambda: calls.append(("close", None))
+    topology.launcher = launcher
+
+    topology.stop_gonetem()
+
+    assert calls == [("stop", "test"), ("close", None)]
+
+
+def test_force_stop_gonetem_stops_monitors_before_force_closing():
+    topology = DummyTopology()
+    calls = []
+    sat = SimpleNamespace(
+        name="Sat0",
+        container=object(),
+        stop_net_logger=lambda project: calls.append(("stop", project)),
+    )
+    topology.satellites = {0: sat}
+    launcher = MagicMock()
+    launcher.force_close_project.side_effect = lambda: calls.append(("force", None))
+    topology.launcher = launcher
+
+    with pytest.warns(ResourceWarning):
+        topology.force_stop_gonetem()
+
+    assert calls == [("stop", "test"), ("force", None)]
+
+
 def test_stop_gonetem_stops_flows_and_clears_tracking():
     topology = DummyTopology()
     flow = MagicMock()

@@ -170,8 +170,16 @@ Adds:
 | `is_addressable()` / `set_addressable(status)` | Read/write the flag |
 | `satcom_object` | `sat_com_model.Satellite` backing this node |
 | `sync_position_from_satcom(altitude_unit="m")` | Copy latitude/longitude/altitude from `satcom_object.spatial_position`, converting the altitude from metres (default) or taking it as kilometres |
-| `start_net_logger(path)` | Start `net_logger` on every interface, detached, writing `<path>/<node>_<iface>.log` |
+| `start_net_logger(project_name, path="/tmp/interfaces", interval_s=1.0)` | Start the detached Bash usage sampler writing `<path>/<project_name>.<node_name>` |
+| `stop_net_logger(project_name, path="/tmp/interfaces")` | Stop the sampler and remove its samples |
 | `default_qos_is_on`, `program_specific_qos_is_on`, `qos_configuration_count` | Legacy QoS bookkeeping used by the TBF helper |
+
+`start_net_logger()` writes one JSON object per sample, for example
+`{"eth1": 123456, "eth2": 0}`, and the value for each interface is
+`max(rx_bps, tx_bps)` over the sampling interval. The file lives under the
+host/container-shared `/tmp`, so `TopologyManager.monitor_links()` can read it
+without an RPC. Starting a sampler truncates the file and stops any previous
+sampler for the same satellite, so a restart does not mix old and new samples.
 
 `sync_position_from_satcom(altitude_unit="m")` makes the altitude unit
 explicit. The default `"m"` follows the sat_com movement-model contract and

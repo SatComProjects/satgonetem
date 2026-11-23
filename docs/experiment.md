@@ -157,7 +157,9 @@ reported instead of aborting `satgonetem report`.
 - UTC timestamp, simulation step, simulation seconds;
 - satellite, ground-station, and link counts;
 - per-link source/destination, type, active/admin state, delay, capacity,
-  loss, jitter, tx, and rx (tx comes from `monitor_links()` when available);
+  loss, jitter, tx, and rx. When `monitor_links()` is available, both tx and rx
+  carry the same sampled bidirectional maximum (`max(rx_bps, tx_bps)`) because
+  the monitor reports one scalar per interface;
 - the most recent simulation error.
 
 `JsonlMetricsWriter` appends samples; `write_json` writes pretty JSON. The

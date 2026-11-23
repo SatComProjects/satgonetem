@@ -404,8 +404,10 @@ Owns the topology-wide address plan and interface construction.
   all failures, and raises one `RuntimeError` naming the failed nodes after
   every node has been attempted. `set_ipv6s_for_all_nodes()` follows the same
   contract for IPv6.
-- `get_all_links_usage()` returns `[]` unless GoNetEm is running; otherwise it
-  delegates to `monitor_links()`.
+- `get_all_links_usage()` returns `[]` unless GoNetEm is running and monitor
+  files are readable; otherwise it delegates to `monitor_links()`. Idle links
+  are explicit zero-valued rows, so an empty result means the monitor is
+  unavailable rather than idle.
 
 ## LinkOpsMixin
 
@@ -544,7 +546,7 @@ See [Traffic Utilities](traffic.md) for configuration and result parsing.
 | `get_node_by_name(name)` / `get_node_by_id(id)` | Node lookup; `None` when absent |
 | `get_node_ip_addresses(name)` / `get_node_ifaces(name)` | Planned addresses and named interfaces |
 | `execute_command_on(node, command)` | Run a command and return `{"output", "error"}` |
-| `monitor_links(debug=False)` | Read `/tmp/interfaces/<project>.<SatN>` and return per-link usage |
+| `monitor_links(debug=False)` | Read `/tmp/interfaces/<project>.<SatN>` JSONL samples and return per-link usage |
 | `get_all_links_usage()` | `monitor_links()` when GoNetEm is running, else `[]` |
 | `enable_tcpdump_on_satellites(...)` | Start `tcpdump -s 96 -w <dump_dir>/<sat>_<iface>.pcap` per interface |
 | `disable_tcpdump_on_satellites(...)` | `pkill tcpdump` in the selected satellites |
@@ -552,10 +554,31 @@ See [Traffic Utilities](traffic.md) for configuration and result parsing.
 | `open_bash_terminal(node)` | Spawn a local terminal running the NodeExec bridge |
 | `get_coverage_percentage(...)` | Delegates to `coverage_percentage_fast()` over current satellites |
 
-`monitor_links()` expects interface-stat files written by `net_logger` under
-`/tmp/interfaces/`, named `<project_name>.<SatN>`. Each file's **last line**
-must be a JSON object mapping interface names to bits per second. The method
-keeps the maximum value seen for each link, sets `link.tx`, and returns:
+`start_gonetem()` starts one Bash usage sampler inside every launched
+satellite container, after the links are wired, and `stop_gonetem()` /
+`force_stop_gonetem()` stop the samplers before the project is closed. A
+sampler failure is logged and skipped; it never aborts network startup.
+Samplers write one file per satellite under `/tmp/interfaces/`, named
+`<project_name>.<SatN>`. The host and every node container share `/tmp`.
+
+Each file is JSON Lines: every line is one sample, and the **last line** is the
+current state. For example:
+
+```json
+{"eth1": 272974304, "eth2": 0}
+```
+
+Values are bits per second and represent `max(rx_bps, tx_bps)` for that
+interface over the interval. The sampler reports every `eth*` interface,
+including idle ones as `0`, emits an initial all-zero sample immediately, then
+samples once per second. Startup truncates the file and stops any previous
+sampler for the same satellite, so restarts do not append stale samples or
+leave duplicate processes.
+
+`monitor_links()` maps each `ethN` key to its peer through the satellite's
+interface model, with a fallback for legacy `<project>.SatX` / `<project>.GndX`
+keys, keeps the maximum value seen for each link, sets both `link.tx` and
+`link.rx` to that aggregate, and returns:
 
 ```python
 [
@@ -565,8 +588,13 @@ keeps the maximum value seen for each link, sets `link.tx`, and returns:
 ]
 ```
 
-`debug=True` additionally logs the top 20 links by usage. Missing files are
-ignored; malformed JSON is logged and skipped.
+The link key is direction-independent and the sampler reports one scalar per
+interface, so `link.tx` and `link.rx` carry the same bidirectional maximum;
+per-direction rates are not distinguished. Missing files are ignored and
+malformed JSON is logged and skipped, so an empty result means the monitor is
+unavailable while a zero-valued row means the link is idle.
+
+`debug=True` additionally logs the top 20 links by usage.
 
 `open_bash_terminal()` requires `project_id` (set by the launcher) and one of
 `gnome-terminal`, `xterm`, `konsole`, `alacritty`, or `kitty`. The bridge
