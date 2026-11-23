@@ -77,7 +77,9 @@ def net_logger_path(
 def net_logger_token(destination: str) -> str:
     """Return a stable, shell-safe identity token for one monitor file."""
     _validate_destination(destination)
-    digest = hashlib.sha1(destination.encode("utf-8")).hexdigest()[:16]
+    digest = hashlib.sha1(
+        destination.encode("utf-8"), usedforsecurity=False
+    ).hexdigest()[:16]
     return f"{_TOKEN_PREFIX}{digest}"
 
 
