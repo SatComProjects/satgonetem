@@ -10,12 +10,19 @@ Extends Node with satellite-specific state and behaviour:
 from __future__ import annotations
 
 import logging
-import shlex
 
 from sat_com_model.models import Satellite as SatComSatellite
 
 from satgonetem.models.mixins.qos_mixin import QoSCapableMixin
 from satgonetem.models.node import Node
+from satgonetem.utils.net_logger import (
+    NET_LOGGER_DIR,
+    NET_LOGGER_INTERVAL_S,
+    build_start_command,
+    build_stop_command,
+    net_logger_path,
+    net_logger_token,
+)
 
 
 class Satellite(Node, QoSCapableMixin):
@@ -109,21 +116,53 @@ class Satellite(Node, QoSCapableMixin):
         self.position["longitude"] = lon
         self.position["altitude"] = alt / 1000.0 if unit == "m" else float(alt)
 
-    def start_net_logger(self, path: str) -> None:
+    def start_net_logger(
+        self,
+        project_name: str,
+        path: str = NET_LOGGER_DIR,
+        interval_s: float = NET_LOGGER_INTERVAL_S,
+    ) -> None:
         """
-        Start net_logger on every interface of the satellite.
+        Start the link-usage sampler for this satellite.
+
+        The sampler writes one JSON object per sample to
+        ``<path>/<project_name>.<node_name>``. Each object maps every
+        ``eth*`` interface to a single bits-per-second value,
+        ``max(rx_bps, tx_bps)``.
 
         Args:
-            path: Host directory path for log files.
+            project_name: GoNetEm project name used in the monitor filename.
+            path: Directory holding the monitor files. ``/tmp`` is shared
+                between the host and every node container.
+            interval_s: Sampling interval in seconds.
+
+        Returns:
+            None
+
+        Raises:
+            ValueError: If ``project_name``, ``path`` or ``interval_s`` is
+                invalid.
+        """
+        destination = net_logger_path(project_name, self.name, path)
+        token = net_logger_token(destination)
+        command = build_start_command(destination, interval_s, token)
+        self.execute_command(command, detach=True)
+
+    def stop_net_logger(
+        self,
+        project_name: str,
+        path: str = NET_LOGGER_DIR,
+    ) -> None:
+        """
+        Stop this satellite's link-usage sampler and remove its samples.
+
+        Args:
+            project_name: GoNetEm project name used in the monitor filename.
+            path: Directory holding the monitor files.
 
         Returns:
             None
         """
-        for interface in self.interfaces:
-            iname = interface.get_iname()
-            destination = path + f"/{self.name}_{iname}.log"
-            command = (
-                f"net_logger --interface {shlex.quote(iname)} "
-                f"--log {shlex.quote(destination)} --interval 1"
-            )
-            self.execute_command(command, detach=True)
+        destination = net_logger_path(project_name, self.name, path)
+        token = net_logger_token(destination)
+        self.execute_command(build_stop_command(destination, token), detach=False)

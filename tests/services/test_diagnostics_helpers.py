@@ -368,24 +368,32 @@ def test_execute_command_on_resolves_nodes_and_reports_errors():
     assert "no container" in host.execute_command_on("Sat0", "uptime")["error"]
 
 
-def test_monitor_links_maps_interface_usage_to_links(monkeypatch):
+def _wire_isl(host, sat_type: str = "InterSatelliteLink"):
+    """Create Sat0 -- Sat1 with the interfaces the sampler reports as ethN."""
     from types import SimpleNamespace
 
     from tests.support import make_link
 
-    host = _DiagnosticsHost(project_name="proj")
     sat0 = host.add_satellite("Sat0")
     sat1 = host.add_satellite("Sat1")
     sat0.satcom_object = SimpleNamespace(topology_uniq_id=0)
     sat1.satcom_object = SimpleNamespace(topology_uniq_id=1)
-    link = make_link(sat0, sat1)
+    add_interface(sat0, "Sat0.1")
+    add_interface(sat1, "Sat1.0")
+    link = make_link(sat0, sat1, link_type=sat_type)
     host.links = {frozenset(("Sat0", "Sat1")): link}
     host._build_link_key = lambda source, target: frozenset(("Sat0", "Sat1"))
+    return sat0, sat1, link
+
+
+def test_monitor_links_maps_eth_interface_usage_to_links(monkeypatch):
+    host = _DiagnosticsHost(project_name="proj")
+    _sat0, _sat1, link = _wire_isl(host)
 
     monkeypatch.setattr(
         host,
         "_process_interface_file",
-        lambda path: {"proj.Sat1": 1234} if path.endswith("Sat0") else {},
+        lambda path: {"eth1": 1234} if path.endswith("Sat0") else {},
     )
 
     result = host.monitor_links(debug=True)
@@ -399,7 +407,130 @@ def test_monitor_links_maps_interface_usage_to_links(monkeypatch):
         }
     ]
     assert link.tx == 1234
+    assert link.rx == 1234
+
+
+def test_monitor_links_maps_a_ground_station_link(monkeypatch):
+    from types import SimpleNamespace
+
+    from tests.support import make_link
+
+    host = _DiagnosticsHost(project_name="proj")
+    sat = host.add_satellite("Sat0")
+    gnd = host.add_ground_station("Gnd1")
+    sat.satcom_object = SimpleNamespace(topology_uniq_id=0)
+    gnd.satcom_object = SimpleNamespace(topology_uniq_id=1)
+    add_interface(sat, "Sat0.1")
+    add_interface(gnd, "Gnd1.0")
+    link = make_link(sat, gnd)
+    host.links = {frozenset(("Sat0", "Gnd1")): link}
+    host._build_link_key = lambda source, target: frozenset(("Sat0", "Gnd1"))
+
+    monkeypatch.setattr(
+        host,
+        "_process_interface_file",
+        lambda path: {"eth1": 555} if path.endswith("Sat0") else {},
+    )
+
+    result = host.monitor_links()
+
+    assert result == [
+        {
+            "src": "Sat0",
+            "dst": "Gnd1",
+            "value": 555,
+            "type": "GroundStationLink",
+        }
+    ]
+
+
+def test_monitor_links_reports_explicit_zero_rows_for_idle_links(monkeypatch):
+    host = _DiagnosticsHost(project_name="proj")
+    _sat0, _sat1, link = _wire_isl(host)
+
+    monkeypatch.setattr(
+        host,
+        "_process_interface_file",
+        lambda path: {"eth1": 0} if path.endswith("Sat0") else {},
+    )
+
+    result = host.monitor_links()
+
+    assert result == [
+        {
+            "src": "Sat0",
+            "dst": "Sat1",
+            "value": 0,
+            "type": "InterSatelliteLink",
+        }
+    ]
+    assert link.tx == 0
     assert link.rx == 0
+
+
+def test_monitor_links_keeps_the_maximum_across_satellite_files(monkeypatch):
+    host = _DiagnosticsHost(project_name="proj")
+    _sat0, _sat1, link = _wire_isl(host)
+
+    def _stats(path: str):
+        if path.endswith("Sat0"):
+            return {"eth1": 100}
+        if path.endswith("Sat1"):
+            return {"eth0": 200}
+        return {}
+
+    monkeypatch.setattr(host, "_process_interface_file", _stats)
+
+    result = host.monitor_links()
+
+    assert result == [
+        {
+            "src": "Sat0",
+            "dst": "Sat1",
+            "value": 200,
+            "type": "InterSatelliteLink",
+        }
+    ]
+    assert link.tx == 200
+    assert link.rx == 200
+
+
+def test_monitor_links_falls_back_to_legacy_interface_keys(monkeypatch):
+    host = _DiagnosticsHost(project_name="proj")
+    _sat0, _sat1, link = _wire_isl(host)
+    host.links = {frozenset(("Sat0", "Sat1")): link}
+
+    monkeypatch.setattr(
+        host,
+        "_process_interface_file",
+        lambda path: {"proj.Sat1": 321} if path.endswith("Sat0") else {},
+    )
+
+    assert host.monitor_links()[0]["value"] == 321
+
+
+def test_monitor_links_returns_empty_when_files_are_missing(monkeypatch):
+    host = _DiagnosticsHost(project_name="proj")
+    _wire_isl(host)
+
+    def _missing(_path: str):
+        raise FileNotFoundError
+
+    monkeypatch.setattr(host, "_process_interface_file", _missing)
+
+    assert host.monitor_links() == []
+
+
+def test_monitor_links_skips_a_malformed_snapshot(monkeypatch):
+    host = _DiagnosticsHost(project_name="proj")
+    _wire_isl(host)
+
+    def _malformed(_path: str):
+        raise json.JSONDecodeError("bad", "", 0)
+
+    monkeypatch.setattr(host, "_process_interface_file", _malformed)
+
+    assert host.monitor_links() == []
 
 
 def test_monitor_links_returns_empty_for_empty_topology(diagnostics_host):
@@ -410,17 +541,8 @@ def test_monitor_links_returns_empty_for_empty_topology(diagnostics_host):
 
 def test_monitor_links_uses_a_single_satellite_snapshot(monkeypatch):
     """Paths and worker names must come from the same topology snapshot."""
-    from types import SimpleNamespace
-
-    from tests.support import make_link
-
     host = _DiagnosticsHost(project_name="proj")
-    sat0 = host.add_satellite("Sat0")
-    sat1 = host.add_satellite("Sat1")
-    sat0.satcom_object = SimpleNamespace(topology_uniq_id=0)
-    sat1.satcom_object = SimpleNamespace(topology_uniq_id=1)
-    host.links = {frozenset(("Sat0", "Sat1")): make_link(sat0, sat1)}
-    host._build_link_key = lambda source, target: frozenset(("Sat0", "Sat1"))
+    sat0, sat1, _link = _wire_isl(host)
 
     snapshots = [[sat0, sat1], []]
     host.get_satellites = lambda: snapshots.pop(0)
@@ -428,7 +550,7 @@ def test_monitor_links_uses_a_single_satellite_snapshot(monkeypatch):
     monkeypatch.setattr(
         host,
         "_process_interface_file",
-        lambda path: {"proj.Sat1": 1234} if path.endswith("Sat0") else {},
+        lambda path: {"eth1": 1234} if path.endswith("Sat0") else {},
     )
 
     result = host.monitor_links()

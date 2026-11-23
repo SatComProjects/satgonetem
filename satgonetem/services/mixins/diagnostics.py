@@ -15,6 +15,7 @@ from satgonetem.models.satellite import Satellite
 from satgonetem.ports import default_runner
 from satgonetem.services.node_terminal import NodeTerminal as NodeTerminal
 from satgonetem.utils.constants import MAX_WORKERS
+from satgonetem.utils.net_logger import NET_LOGGER_DIR
 from satgonetem.utils.satellite_coverage import coverage_percentage_fast
 
 if TYPE_CHECKING:
@@ -61,110 +62,90 @@ class DiagnosticsMixin:
         max_workers = max(1, min(MAX_WORKERS, len(self.links)))
 
         satellites = self.get_satellites()
-        log_path = "/tmp/interfaces/"
-        paths = [f"{log_path}{self.project_name}.{sat.name}" for sat in satellites]
+        paths = [
+            f"{NET_LOGGER_DIR}/{self.project_name}.{sat.name}" for sat in satellites
+        ]
 
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = {
-                executor.submit(self._process_interface_file, path): sat.name
+                executor.submit(self._process_interface_file, path): sat
                 for path, sat in zip(paths, satellites, strict=False)
             }
 
             for fut in as_completed(futures):
-                sat_name = futures[fut]
+                satellite = futures[fut]
+                sat_name = satellite.name
                 try:
                     interface_stats = fut.result()
-                    if interface_stats:
+                    if interface_stats and satellite is not None:
                         logging.debug(
                             f"Link monitor stats for {sat_name}: {interface_stats}"
                         )
-                        # Process the interface stats to extract link usage
                         for iface, val in interface_stats.items():
-                            # iface format: 'project.SatX' or 'project.GndX'
-                            node_part = (
-                                iface.split(".", 1)[1] if "." in iface else iface
-                            )
-                            peer_id = node_part[3:]  # strip 'Sat' or 'Gnd' prefix
-                            iface_sat = f"Sat{peer_id}"
-                            iface_gnd = f"Gnd{peer_id}"
-                            match self.links.get(frozenset((sat_name, iface_gnd))):
-                                case Link() as link:
-                                    pass
-                                case None:
-                                    match self.links.get(
-                                        frozenset((sat_name, iface_sat))
-                                    ):
-                                        case Link() as link:
-                                            pass
-                                        case None:
-                                            logging.debug(
-                                                f"No link found for interface {iface} on satellite {sat_name}"
-                                            )
-                                            continue
-                                        case _ as unexpected:
-                                            raise TypeError(
-                                                f"Expected Link in links, got {type(unexpected)}"
-                                            )
-                                case _ as unexpected:
-                                    raise TypeError(
-                                        f"Expected Link in links, got {type(unexpected)}"
-                                    )
-                            try:
-                                # Use the proper link key for consistency
-                                link_key = self._build_link_key(
-                                    link.source, link.target
-                                )
-                                usage_bps = int(val or 0)
-
-                                # Store link data (thread-safe)
-                                with lock:
-                                    # Use maximum usage if link appears in multiple files
-                                    if link_key not in link_usage_map:
-                                        src_name = (
-                                            getattr(link.source, "name", None)
-                                            or f"Sat{getattr(link.source, 'topology_uniq_id', 'Unknown')}"
-                                        )
-                                        dst_name = (
-                                            getattr(link.target, "name", None)
-                                            or f"Sat{getattr(link.target, 'topology_uniq_id', 'Unknown')}"
-                                        )
-                                        link_usage_map[link_key] = {
-                                            "src": src_name,
-                                            "dst": dst_name,
-                                            "value": usage_bps,
-                                            "type": getattr(link, "type", None),
-                                            "link": link,
-                                        }
-                                    else:
-                                        # Keep the maximum usage value for this link
-                                        current_usage = link_usage_map[link_key][
-                                            "value"
-                                        ]
-                                        if usage_bps > current_usage:
-                                            link_usage_map[link_key]["value"] = (
-                                                usage_bps
-                                            )
-
-                                # Also update the link object's tx value
-                                link.tx = usage_bps
-                                link.rx = 0  # Not measured
-
-                            except (
-                                AttributeError,
-                                KeyError,
-                                TypeError,
-                                ValueError,
-                            ) as e:
-                                logging.warning(
-                                    f"Error processing interface {iface} on {sat_name}: {e}"
+                            peer_name = self._peer_node_name(satellite, iface)
+                            if peer_name is None:
+                                logging.debug(
+                                    f"No peer found for interface {iface} "
+                                    f"on satellite {sat_name}"
                                 )
                                 continue
+
+                            link = self.links.get(frozenset((sat_name, peer_name)))
+                            if link is None:
+                                logging.debug(
+                                    f"No link found for interface {iface} "
+                                    f"on satellite {sat_name}"
+                                )
+                                continue
+                            if not isinstance(link, Link):
+                                raise TypeError(
+                                    f"Expected Link in links, got {type(link)}"
+                                )
+
+                            try:
+                                usage_bps = max(0, int(val or 0))
+                            except (TypeError, ValueError) as exc:
+                                logging.warning(
+                                    f"Invalid usage for interface {iface} "
+                                    f"on {sat_name}: {exc}"
+                                )
+                                continue
+
+                            link_key = self._build_link_key(link.source, link.target)
+                            with lock:
+                                entry = link_usage_map.get(link_key)
+                                if entry is None:
+                                    src_name = (
+                                        getattr(link.source, "name", None)
+                                        or f"Sat{getattr(link.source, 'topology_uniq_id', 'Unknown')}"
+                                    )
+                                    dst_name = (
+                                        getattr(link.target, "name", None)
+                                        or f"Sat{getattr(link.target, 'topology_uniq_id', 'Unknown')}"
+                                    )
+                                    link_usage_map[link_key] = {
+                                        "src": src_name,
+                                        "dst": dst_name,
+                                        "value": usage_bps,
+                                        "type": getattr(link, "type", None),
+                                        "link": link,
+                                    }
+                                elif usage_bps > entry["value"]:
+                                    entry["value"] = usage_bps
                 except FileNotFoundError:
                     logging.debug(f"No interface stats file found for {sat_name}")
                 except (json.JSONDecodeError, KeyError, TypeError, ValueError) as e:
                     logging.error(
                         f"Error processing interface file for {sat_name}: {e}"
                     )
+
+        # The sampler reports one scalar per interface, so both link fields
+        # carry the same bidirectional maximum. This is documented as an
+        # aggregate rather than a per-direction measurement.
+        for entry in link_usage_map.values():
+            link = entry["link"]
+            link.tx = entry["value"]
+            link.rx = entry["value"]
 
         # Convert map to output list (remove link object reference)
         out = [
@@ -182,6 +163,36 @@ class DiagnosticsMixin:
                 )
 
         return out
+
+    def _peer_node_name(self, satellite: Satellite, iface_name: str) -> str | None:
+        """Return the peer node name for one interface key from a monitor file.
+
+        The sampler writes local interface names such as ``eth3``. The
+        satellite's interface model knows the peer, so use it first and only
+        fall back to parsing legacy ``<project>.SatX``/``<project>.GndX`` keys.
+        """
+        for interface in getattr(satellite, "interfaces", []):
+            try:
+                iname = interface.get_iname()
+            except (AttributeError, ValueError):
+                continue
+            if iname != iface_name:
+                continue
+            peer_name = getattr(getattr(interface, "peer", None), "name", None)
+            if peer_name:
+                return str(peer_name).split(".", 1)[0]
+            break
+
+        token = iface_name.rsplit(".", 1)[-1]
+        if token.startswith(("Sat", "Gnd")):
+            return token
+        if token.startswith("eth"):
+            peer_id = token[3:]
+            for prefix in ("Gnd", "Sat"):
+                candidate = f"{prefix}{peer_id}"
+                if frozenset((satellite.name, candidate)) in self.links:
+                    return candidate
+        return None
 
     def _process_interface_file(self, file_path: str) -> dict[str, int]:
         """
@@ -207,6 +218,13 @@ class DiagnosticsMixin:
                 return {}
 
             current_state = json.loads(last_line)
+            if not isinstance(current_state, dict):
+                logging.warning(
+                    "Expected a JSON object in %s, got %s",
+                    file_path,
+                    type(current_state).__name__,
+                )
+                return {}
             return current_state
         except FileNotFoundError:
             raise
