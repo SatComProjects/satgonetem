@@ -476,3 +476,35 @@ def test_truncated_multistream_log_keeps_its_interval_rows(tmp_path) -> None:
 
     assert len(rows) == 4
     assert sum(row["bytes"] for row in rows) == pytest.approx(5.00 * _MIB)
+
+
+def test_generate_iperf2_plots_scales_throughput_to_mbps_and_bytes_to_mb(
+    tmp_path,
+) -> None:
+    """H-21: plotted throughput must be in Mbps and bytes in MB, matching axes."""
+    from unittest.mock import patch
+
+    import matplotlib.pyplot as plt
+
+    log = _write_log(
+        tmp_path,
+        """\
+[  3]  0.00-1.00  sec  1.25 MBytes  10.50 Mbits/sec    0    sender
+[  3]  1.00-2.00  sec  2.50 MBytes  21.00 Mbits/sec    1    sender
+""",
+    )
+    plotted_series: list[tuple[str, list[float]]] = []
+    real_plot = plt.plot
+
+    def _recording_plot(*args, **kwargs):
+        result = real_plot(*args, **kwargs)
+        plotted_series.append((kwargs.get("label", ""), list(args[1])))
+        return result
+
+    with patch("satgonetem.traffic.iperf2_utils.plt.plot", side_effect=_recording_plot):
+        generate_iperf2_plots(str(log), use_tmp_dir=False)
+
+    # Plot order: throughput (Mbps), bytes (MB), retransmits, cumulative (MB)
+    assert len(plotted_series) == 4
+    assert plotted_series[0][1] == pytest.approx([10.50, 21.00])
+    assert plotted_series[1][1] == pytest.approx([1.25, 2.50])

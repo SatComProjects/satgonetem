@@ -437,6 +437,17 @@ class LinkOpsMixin:
         start = time.perf_counter()
         key = self._build_link_key(link.source, link.target)
         applied = LinkOpsMixin._link_backend_adds(self)
+        add_failures = LinkOpsMixin._link_add_failures(self)
+        if key not in applied and (
+            key in add_failures
+            or (hasattr(link, "peer_interfaces") and not link.peer_interfaces)
+        ):
+            # The link was never created on the backend (its add failed or it
+            # was never activated). Skip backend teardown so local cleanup can
+            # drop it instead of retrying LinkDel forever.
+            add_failures.discard(key)
+            link.to_delete = False
+            return time.perf_counter() - start
         if self.hil_manager is not None and self.hil_manager.is_hil_link(link):
             link.to_delete = True
             if self.hil_manager.teardown_link(link):

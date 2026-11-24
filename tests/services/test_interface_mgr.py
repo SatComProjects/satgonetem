@@ -1027,3 +1027,100 @@ def test_set_ip_addresses_aggregates_failures_from_both_families():
 
     manager.set_ipv4s_for_all_nodes.assert_called_once()
     manager.set_ipv6s_for_all_nodes.assert_called_once()
+
+
+# ----------------------------------------------------------------------
+# H-09: Inactive links must not get interfaces during initial assignment
+# ----------------------------------------------------------------------
+
+
+def test_assign_interfaces_to_nodes_skips_inactive_links(
+    manager: _InterfaceMgrHost,
+) -> None:
+    sat_0 = manager.add_satellite("Sat0")
+    sat_1 = manager.add_satellite("Sat1")
+    sat_2 = manager.add_satellite("Sat2")
+    active_link = manager.add_link(sat_0, sat_1, is_active=True)
+    inactive_link = manager.add_link(sat_0, sat_2, is_active=False)
+    manager._initialize_address_plan()
+
+    manager._assign_interfaces_to_nodes()
+
+    assert len(active_link.peer_interfaces) == 2
+    assert inactive_link.peer_interfaces == []
+    assert [iface.name for iface in sat_0.interfaces] == ["Sat0.1"]
+    assert [iface.name for iface in sat_1.interfaces] == ["Sat1.0"]
+    assert sat_2.interfaces == []
+    assert manager.interfaces == active_link.peer_interfaces
+
+
+def test_inactive_link_gets_interfaces_and_ip_push_when_later_activated(
+    manager: _InterfaceMgrHost,
+) -> None:
+    sat_0 = manager.add_satellite("Sat0")
+    sat_1 = manager.add_satellite("Sat1")
+    inactive_link = manager.add_link(sat_0, sat_1, is_active=False)
+    manager._initialize_address_plan()
+    manager._assign_interfaces_to_nodes()
+
+    assert inactive_link.peer_interfaces == []
+
+    sat_0.set_ipv4_to_containers = MagicMock()
+    sat_1.set_ipv4_to_containers = MagicMock()
+    manager.status = True
+    inactive_link.is_active = True
+
+    manager._build_interfaces_from_link(inactive_link, set_ip=True, sync_to_node=True)
+
+    assert len(inactive_link.peer_interfaces) == 2
+    sat_0.set_ipv4_to_containers.assert_called_once()
+    sat_1.set_ipv4_to_containers.assert_called_once()
+
+
+# ----------------------------------------------------------------------
+# H-11: Thread-safe interface creation under parallel link additions
+# ----------------------------------------------------------------------
+
+
+def test_build_interfaces_from_link_serializes_shared_state_mutations(
+    manager: _InterfaceMgrHost,
+) -> None:
+    import threading
+    import time
+    from concurrent.futures import ThreadPoolExecutor
+
+    hub = manager.add_satellite("Sat0")
+    peers = [manager.add_satellite(f"Sat{i}") for i in range(1, 9)]
+    links = [manager.add_link(hub, peer) for peer in peers]
+    manager._initialize_address_plan()
+
+    active = 0
+    max_active = 0
+    counter_lock = threading.Lock()
+    orig_create = hub.create_interface
+
+    def slow_create(name: str):
+        nonlocal active, max_active
+        with counter_lock:
+            active += 1
+            max_active = max(max_active, active)
+        time.sleep(0.01)
+        try:
+            return orig_create(name)
+        finally:
+            with counter_lock:
+                active -= 1
+
+    hub.create_interface = slow_create
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        futures = [
+            pool.submit(manager._build_interfaces_from_link, lnk) for lnk in links
+        ]
+        for fut in futures:
+            fut.result()
+
+    assert max_active == 1, f"concurrent interface mutations overlapped: {max_active}"
+    assert len(hub.interfaces) == len(links)
+    assert len(manager.interfaces) == 2 * len(links)
+    assert manager.interface_version == len(links)

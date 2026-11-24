@@ -167,8 +167,10 @@ def test_julian_date_ignores_tzinfo_metadata() -> None:
     assert float(julian_date(aware)) == float(julian_date(naive))
 
 
-def test_geodetic_to_orbital_returns_documented_keys() -> None:
-    result = geodetic_to_orbital(10.0, 45.0, 500.0, 45.0)
+def test_geodetic_to_orbital_returns_documented_keys_and_real_elements() -> None:
+    epoch = datetime(2025, 6, 10, 12, 0, 0, tzinfo=timezone.utc)
+    result = geodetic_to_orbital(10.0, 45.0, 500.0, 45.0, epoch=epoch)
+    expected_sgp4 = geodetic_to_orbital_sgp4(10.0, 45.0, 500.0, 45.0, epoch)
 
     assert set(result) == {
         "inclination_deg",
@@ -178,19 +180,32 @@ def test_geodetic_to_orbital_returns_documented_keys() -> None:
         "raan_deg",
     }
     assert result["inclination_deg"] == pytest.approx(45.0)
-    assert result["mean_motion_rev_per_day"] == pytest.approx(1.0)
+    assert result["mean_motion_rev_per_day"] == pytest.approx(
+        float(expected_sgp4["mean_motion_rev_per_day"]), abs=1e-9
+    )
     assert result["argument_of_perigee_deg"] == pytest.approx(0.0)
-    assert result["mean_anomaly_deg"] == pytest.approx(0.0)
-    assert result["raan_deg"] == pytest.approx(0.0)
+    assert result["mean_anomaly_deg"] == pytest.approx(
+        math.degrees(float(expected_sgp4["mean_anomaly_rad"])), abs=1e-9
+    )
+    assert result["raan_deg"] == pytest.approx(
+        math.degrees(float(expected_sgp4["raan_rad"])), abs=1e-9
+    )
 
 
-def test_geodetic_to_orbital_ignores_position_arguments() -> None:
-    # The implementation echoes only the inclination and constant placeholders;
-    # latitude, longitude, altitude, and epoch do not affect the result.
-    at_equator = geodetic_to_orbital(0.0, 0.0, 0.0, 45.0)
-    at_off_nadir = geodetic_to_orbital(80.0, 120.0, 1000.0, 45.0)
+def test_geodetic_to_orbital_depends_on_position_and_defaults_epoch() -> None:
+    epoch = datetime(2025, 6, 10, 12, 0, 0, tzinfo=timezone.utc)
+    at_equator = geodetic_to_orbital(0.0, 0.0, 500.0, 45.0, epoch=epoch)
+    at_higher_orbit = geodetic_to_orbital(30.0, 120.0, 1000.0, 45.0, epoch=epoch)
 
-    assert at_equator == at_off_nadir
+    assert (
+        at_equator["mean_motion_rev_per_day"]
+        > at_higher_orbit["mean_motion_rev_per_day"]
+    )
+    assert at_equator["raan_deg"] != pytest.approx(at_higher_orbit["raan_deg"])
+
+    with_default_epoch = geodetic_to_orbital(10.0, 45.0, 500.0, 45.0)
+    assert all(math.isfinite(float(v)) for v in with_default_epoch.values())
+    assert with_default_epoch["mean_motion_rev_per_day"] > 10.0
 
 
 def test_geodetic_to_orbital_sgp4_returns_keys_and_finite_values() -> None:

@@ -306,9 +306,12 @@ class TopologyManager(
         # interfaces are built. Initialised eagerly so the add thread pool
         # cannot race on first use.
         self._failed_link_adds: set[frozenset[str]] = set()
+        self._failed_link_updates: set[frozenset[str]] = set()
         # Links whose backend add succeeded while their local interfaces or
         # addresses are still pending. Retries must not repeat LinkAdd.
         self._backend_link_adds: set[frozenset[str]] = set()
+        self._link_update_many_unavailable: bool = False
+        self._interface_lock: threading.Lock = threading.Lock()
         self.interfaces: list[Interface] = []  # List of all interfaces in the network
         self.interface_version = 0
 
@@ -527,11 +530,14 @@ class TopologyManager(
         print("Resetting simulation to start time")
         if self.simulation_manager is None:
             raise ValueError("Simulation manager is not set")
-        self.simulation_manager.time_manager.set_time(
-            self.simulation_manager.time_manager.start_date
-        )
-        self.current_time_step = 0
-        self.simulation_manager.time_manager.execute_actions()
+        with self._get_simulation_lock():
+            self.simulation_manager.time_manager.set_time(
+                self.simulation_manager.time_manager.start_date
+            )
+            self.current_time_step = 0
+            self.simulation_manager.time_manager.execute_actions()
+            if getattr(self, "initial_sync", False):
+                self.update_simulation(advance_timestep=False)
 
     def _update_simulation_manager_time(self) -> None:
         """Tick the simulation manager by one update interval."""

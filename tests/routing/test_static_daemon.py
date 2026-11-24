@@ -1384,3 +1384,55 @@ class TestStaticRoutingDaemonFailureTracking:
         # Once recovered and installed, an unchanged topology is a no-op.
         daemon.update([])
         assert len(client.requests) == 1
+
+    def test_equalize_preserves_previous_table_for_failed_node(self, daemon, topology):
+        node = Node("Sat0")
+        old_entry = make_entry(dst="10.0.0.1", prefix=32)
+        failed_entry = make_entry(dst="10.0.0.2", prefix=32)
+        node.ipv4_previous_routing_table = [old_entry]
+        node.ipv4_routing_table = [failed_entry]
+        daemon._failed_nodes.add("Sat0")
+        topology.get_satellites.return_value = [node]
+        topology.get_ground_stations.return_value = []
+
+        daemon._equalize_routing_tables()
+
+        assert node.ipv4_previous_routing_table == [old_entry]
+        assert node.ipv4_routing_table == []
+
+    def test_failed_node_deletes_stale_and_retries_all_desired_routes(self, daemon):
+        node = Node("Sat0")
+        iface = Interface("Sat0.1")
+        node.interfaces.append(iface)
+
+        stale_entry = make_entry(
+            dst="10.0.0.1", gw="10.1.0.1", iface_name="Sat0.1", prefix=32
+        )
+        kept_entry = make_entry(
+            dst="10.0.0.2", gw="10.1.0.1", iface_name="Sat0.1", prefix=32
+        )
+        added_entry = make_entry(
+            dst="10.0.0.3", gw="10.1.0.1", iface_name="Sat0.1", prefix=32
+        )
+
+        # Simulate prior confirmed table [stale_entry, kept_entry] and new
+        # desired table [kept_entry, added_entry] after a failed install.
+        node.ipv4_previous_routing_table = [stale_entry, kept_entry]
+        node.ipv4_routing_table = [kept_entry, added_entry]
+        daemon._failed_nodes.add("Sat0")
+
+        captured_batches: dict = {}
+
+        def fake_install(batches, max_workers=128):
+            captured_batches.update(batches)
+            return static_daemon._BatchOutcome(ok_nodes={"Sat0"})
+
+        with patch.object(daemon, "_install_route_batches", side_effect=fake_install):
+            daemon._apply_route_changes([node])
+
+        assert node in captured_batches
+        ops = captured_batches[node]
+        assert ("del", "10.0.0.1/32") in [(op.action, op.destination) for op in ops]
+        assert ("replace", "10.0.0.2/32") in [(op.action, op.destination) for op in ops]
+        assert ("replace", "10.0.0.3/32") in [(op.action, op.destination) for op in ops]
+        assert "Sat0" not in daemon._failed_nodes

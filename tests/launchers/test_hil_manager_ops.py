@@ -1339,3 +1339,112 @@ def test_teardown_all_tears_down_each_tracked_bridge(
     manager.teardown_all()
 
     assert teardown.call_args_list == [call("Gnd0"), call("Gnd2")]
+
+
+def test_teardown_bridge_treats_enodev_as_already_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pyroute2.netlink.exceptions import NetlinkError
+
+    manager = HILManager({"Gnd0": "eth1"})
+    manager._hil_bridges["Gnd0"] = "brhil0"
+    manager._hil_veths["Gnd0"] = "hil0"
+    ipr = _fake_iproute({}, fail=NetlinkError(19, "No such device"))
+    monkeypatch.setattr(hil_manager, "IPRoute", MagicMock(return_value=ipr))
+
+    assert manager._teardown_bridge("Gnd0") is True
+    assert manager._hil_bridges == {}
+    assert manager._hil_veths == {}
+
+
+def test_create_veth_recovers_when_stale_peer_only_exists_on_host(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pyroute2.netlink.exceptions import NetlinkError
+
+    manager = HILManager({"Gnd0": "eth1"})
+    libc = MagicMock()
+    libc.setns.return_value = 0
+    monkeypatch.setattr(
+        hil_manager, "ctypes", SimpleNamespace(CDLL=MagicMock(return_value=libc))
+    )
+
+    saved_ns = _FakeNsFile(11)
+    sat_ns_1 = _FakeNsFile(22)
+    sat_ns_2 = _FakeNsFile(23)
+    sat_opens = iter([sat_ns_1, sat_ns_2])
+    real_open = builtins.open
+
+    def fake_open(path, *args, **kwargs):
+        key = str(path)
+        if key == "/proc/self/ns/net":
+            return saved_ns
+        if key == "/proc/4242/ns/net":
+            return next(sat_opens)
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "open", fake_open)
+
+    sat_ipr = MagicMock()
+    sat_ipr.__enter__.return_value = sat_ipr
+    sat_ipr.__exit__.return_value = False
+    add_attempts = 0
+
+    def sat_link(action, **kwargs):
+        nonlocal add_attempts
+        if action == "add":
+            add_attempts += 1
+            if add_attempts == 1:
+                raise NetlinkError(17, "File exists")
+            return None
+        if action == "get" and kwargs.get("ifname") == "eth3":
+            if add_attempts == 1:
+                raise NetlinkError(19, "No such device")
+            return [{"index": 101}]
+        return None
+
+    sat_ipr.link.side_effect = sat_link
+
+    host_cleanup_ipr = _fake_iproute({"hil3": 303})
+    host_up_ipr = _fake_iproute({"hil3": 202})
+    monkeypatch.setattr(
+        hil_manager,
+        "IPRoute",
+        MagicMock(side_effect=[sat_ipr, host_cleanup_ipr, host_up_ipr]),
+    )
+
+    assert manager._create_veth("Sat1", 4242, 3) is True
+    assert add_attempts == 2
+    host_cleanup_ipr.link.assert_any_call("del", index=303)
+    sat_ipr.link.assert_any_call("set", index=101, state="up")
+    host_up_ipr.link.assert_any_call("set", index=202, state="up")
+    assert libc.setns.call_args_list == [
+        call(22, CLONE_NEWNET),
+        call(11, CLONE_NEWNET),
+        call(23, CLONE_NEWNET),
+        call(11, CLONE_NEWNET),
+    ]
+
+
+def test_teardown_all_attempts_every_bridge_and_raises_on_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = HILManager({"Gnd0": "eth1", "Gnd1": "eth2", "Gnd2": "eth3"})
+    manager._hil_bridges = {
+        "Gnd0": "brhil0",
+        "Gnd1": "brhil1",
+        "Gnd2": "brhil2",
+    }
+    results = {"Gnd0": False, "Gnd1": True, "Gnd2": False}
+    attempted: list[str] = []
+
+    def fake_teardown(gnd_name: str) -> bool:
+        attempted.append(gnd_name)
+        return results[gnd_name]
+
+    monkeypatch.setattr(manager, "_teardown_bridge", fake_teardown)
+
+    with pytest.raises(RuntimeError, match="Gnd0.*Gnd2"):
+        manager.teardown_all()
+
+    assert attempted == ["Gnd0", "Gnd1", "Gnd2"]

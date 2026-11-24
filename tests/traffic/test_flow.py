@@ -40,7 +40,7 @@ class _RecordingFlow(ThreadedFlow):
 
 
 def test_flow_stopped_during_delay_does_not_execute() -> None:
-    """Ping/Hping3-style flows must not wake up and run after stop()."""
+    """Ping/Hping3-style flows must not wake up or kill sibling processes during delay."""
     flow = _RecordingFlow(delay=60.0)
 
     flow.start()
@@ -48,7 +48,36 @@ def test_flow_stopped_during_delay_does_not_execute() -> None:
 
     assert flow.status() == _Status.ERROR
     assert flow.executed is False, "stopped flow still ran its traffic action"
-    assert flow.stop_calls == 1
+    assert flow.stop_calls == 0
     assert flow.is_alive() is False
     assert flow._error is not None
     assert "stopped before it could start" in str(flow._error)
+
+
+def test_flow_stopped_after_entering_execute_calls_stop_process() -> None:
+    """Stopping an actively executing flow must invoke _stop_process()."""
+    import threading
+
+    entered = threading.Event()
+    release = threading.Event()
+
+    class _BlockingFlow(_RecordingFlow):
+        def _execute(self) -> Any:
+            self.executed = True
+            entered.set()
+            release.wait(timeout=5.0)
+            return "ran"
+
+        def _stop_process(self) -> None:
+            super()._stop_process()
+            release.set()
+
+    flow = _BlockingFlow(delay=0.0)
+    flow.start()
+    assert entered.wait(timeout=2.0)
+
+    flow.stop()
+
+    assert flow.executed is True
+    assert flow.stop_calls == 1
+    assert flow.is_alive() is False

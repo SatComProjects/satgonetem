@@ -4,13 +4,34 @@ import numpy as np
 
 
 def geodetic_to_orbital(lat_deg, lon_deg, alt_km, incl_deg, epoch=None):
+    """Convert geodetic coordinates to circular Keplerian orbital elements (degrees).
 
+    Args:
+        lat_deg: Geodetic latitude in degrees.
+        lon_deg: Geodetic longitude in degrees.
+        alt_km: Altitude above the WGS-84 ellipsoid in kilometres.
+        incl_deg: Orbital inclination in degrees (non-zero).
+        epoch: UTC datetime for the ECEF-to-ECI rotation; defaults to current UTC time.
+
+    Returns:
+        Dict with keys ``inclination_deg``, ``mean_motion_rev_per_day``,
+        ``argument_of_perigee_deg``, ``mean_anomaly_deg``, and ``raan_deg``.
+    """
+    if epoch is None:
+        epoch = datetime.now(timezone.utc)
+    elements = geodetic_to_orbital_sgp4(
+        lat_deg=lat_deg,
+        lon_deg=lon_deg,
+        alt_km=alt_km,
+        inc_deg=incl_deg,
+        epoch=epoch,
+    )
     return {
         "inclination_deg": float(incl_deg),
-        "mean_motion_rev_per_day": float(1),
-        "argument_of_perigee_deg": 0.0,
-        "mean_anomaly_deg": 0.0,
-        "raan_deg": 0.0,
+        "mean_motion_rev_per_day": float(elements["mean_motion_rev_per_day"]),
+        "argument_of_perigee_deg": float(np.degrees(elements["arg_perigee_rad"])),
+        "mean_anomaly_deg": float(np.degrees(elements["mean_anomaly_rad"])),
+        "raan_deg": float(np.degrees(elements["raan_rad"])),
     }
 
 

@@ -416,12 +416,18 @@ class GroundStationSpec:
             {"name", "latitude", "longitude", "elevation_km"},
             label,
         )
-        latitude = _number(data.get("latitude"), f"{label}.latitude")
-        longitude = _number(data.get("longitude"), f"{label}.longitude")
-        if not -90.0 <= latitude <= 90.0:
-            raise ScenarioError(f"{label}.latitude must be in [-90, 90]")
-        if not -180.0 <= longitude <= 180.0:
-            raise ScenarioError(f"{label}.longitude must be in [-180, 180]")
+        latitude = _number(
+            data.get("latitude"),
+            f"{label}.latitude",
+            minimum=-90.0,
+            maximum=90.0,
+        )
+        longitude = _number(
+            data.get("longitude"),
+            f"{label}.longitude",
+            minimum=-180.0,
+            maximum=180.0,
+        )
         return cls(
             name=_non_empty_str(data.get("name"), f"{label}.name"),
             latitude=latitude,

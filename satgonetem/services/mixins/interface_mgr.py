@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import TYPE_CHECKING
@@ -132,9 +133,23 @@ class InterfaceMgrMixin:
                 )
             self.interfaces.append(node.loopback)
 
+    def _get_interface_lock(self) -> threading.Lock:
+        """Return the per-instance lock guarding interface mutations.
+
+        ``TopologyManager`` initializes ``_interface_lock`` eagerly in
+        ``__init__``. Lightweight test harnesses that compose the mixin
+        without that initializer get a per-instance lock lazily here.
+        """
+        lock = getattr(self, "_interface_lock", None)
+        if lock is None:
+            lock = self.__dict__.setdefault("_interface_lock", threading.Lock())
+        return lock
+
     def _assign_interfaces_to_nodes(self) -> None:
-        """Create and configure interfaces for every link."""
+        """Create and configure interfaces for every active link."""
         for link in self.links.values():
+            if not link.is_active:
+                continue
             self._build_interfaces_from_link(link)
 
     def _build_interfaces_from_link(
@@ -146,11 +161,7 @@ class InterfaceMgrMixin:
         If a later step fails, newly allocated slots and partially created
         interfaces are rolled back so a retry starts from a clean state.
         """
-        if link.peer_interfaces:
-            # Idempotent: a link that already has interfaces must not create a
-            # second pair with the same kernel names.
-            return
-
+        lock = self._get_interface_lock()
         source = link.source
         target = link.target
 
@@ -160,82 +171,84 @@ class InterfaceMgrMixin:
         key = None
         new_v4 = False
         new_v6 = False
-
-        if set_ip:
-            if self.address_plan is None:
-                raise RuntimeError(
-                    "IPv4 address plan is not initialized; call "
-                    "_initialize_address_plan() before creating link interfaces"
-                )
-
-            key = self._link_key(link)
-            new_v4 = self.address_plan.link_address(key) is None
-            address = self.address_plan.allocate_link(key, source.id, target.id)
-
-            if getattr(self, "ipv6_enabled", False):
-                plan_v6 = getattr(self, "address_plan_v6", None)
-                if plan_v6 is None:
-                    if new_v4:
-                        self.address_plan.release_link(key)
-                    raise RuntimeError(
-                        "IPv6 address plan is not initialized; call "
-                        "_initialize_address_plan() before creating link interfaces"
-                    )
-                new_v6 = plan_v6.link_address(key) is None
-                try:
-                    address_v6 = plan_v6.allocate_link(key, source.id, target.id)
-                except Exception:
-                    if new_v4:
-                        self.address_plan.release_link(key)
-                    raise
-
         created: list[tuple[Node, Interface]] = []
         version_incremented = False
 
         try:
-            int1 = source.create_interface(f"{source.name}.{str(target.id)}")
-            created.append((source, int1))
-            int2 = target.create_interface(f"{target.name}.{str(source.id)}")
-            created.append((target, int2))
+            with lock:
+                if link.peer_interfaces:
+                    # Idempotent: a link that already has interfaces must not create a
+                    # second pair with the same kernel names.
+                    return
 
-            # Set delays
-            int1.delay = link.delay
-            int2.delay = link.delay
+                if set_ip:
+                    if self.address_plan is None:
+                        raise RuntimeError(
+                            "IPv4 address plan is not initialized; call "
+                            "_initialize_address_plan() before creating link interfaces"
+                        )
 
-            # Set type
-            if "Gnd" in source.name[:3] and "Gnd" in target.name[:3]:
-                int1.type = "GroundObjectLink"
-                int2.type = "GroundObjectLink"
-            elif "Gnd" in [source.name[:3], target.name[:3]]:
-                int1.type = "GroundStationLink"
-                int2.type = "GroundStationLink"
+                    key = self._link_key(link)
+                    was_allocated_v4 = self.address_plan.link_address(key) is not None
+                    address = self.address_plan.allocate_link(key, source.id, target.id)
+                    new_v4 = not was_allocated_v4
 
-            elif "Sat" in [source.name[:3], target.name[:3]]:
-                int1.type = "InterSatelliteLink"
-                int2.type = "InterSatelliteLink"
-            else:
-                logging.info(f"Unknown link type for {source.name} -> {target.name}")
+                    if getattr(self, "ipv6_enabled", False):
+                        plan_v6 = getattr(self, "address_plan_v6", None)
+                        if plan_v6 is None:
+                            raise RuntimeError(
+                                "IPv6 address plan is not initialized; call "
+                                "_initialize_address_plan() before creating link interfaces"
+                            )
+                        was_allocated_v6 = plan_v6.link_address(key) is not None
+                        address_v6 = plan_v6.allocate_link(key, source.id, target.id)
+                        new_v6 = not was_allocated_v6
 
-            # Set peer
-            int1.peer = int2
-            int2.peer = int1
+                int1 = source.create_interface(f"{source.name}.{str(target.id)}")
+                created.append((source, int1))
+                int2 = target.create_interface(f"{target.name}.{str(source.id)}")
+                created.append((target, int2))
 
-            # Set state
-            int1.is_active = link.is_active
-            int2.is_active = link.is_active
+                # Set delays
+                int1.delay = link.delay
+                int2.delay = link.delay
 
-            link.peer_interfaces.extend([int1, int2])
-            self.interfaces.extend([int1, int2])
-            self.interface_version = getattr(self, "interface_version", 0) + 1
-            version_incremented = True
+                # Set type
+                if "Gnd" in source.name[:3] and "Gnd" in target.name[:3]:
+                    int1.type = "GroundObjectLink"
+                    int2.type = "GroundObjectLink"
+                elif "Gnd" in [source.name[:3], target.name[:3]]:
+                    int1.type = "GroundStationLink"
+                    int2.type = "GroundStationLink"
 
-            if address is not None:
-                int1.set_ipv4(str(address.source.ip), address.prefix_len)
-                int2.set_ipv4(str(address.target.ip), address.prefix_len)
+                elif "Sat" in [source.name[:3], target.name[:3]]:
+                    int1.type = "InterSatelliteLink"
+                    int2.type = "InterSatelliteLink"
+                else:
+                    logging.info(
+                        f"Unknown link type for {source.name} -> {target.name}"
+                    )
 
-            if address_v6 is not None:
-                int1.set_ipv6(str(address_v6.source.ip), address_v6.prefix_len)
-                int2.set_ipv6(str(address_v6.target.ip), address_v6.prefix_len)
+                # Set peer
+                int1.peer = int2
+                int2.peer = int1
+
+                # Set state
+                int1.is_active = link.is_active
+                int2.is_active = link.is_active
+
+                link.peer_interfaces.extend([int1, int2])
+                self.interfaces.extend([int1, int2])
+                self.interface_version = getattr(self, "interface_version", 0) + 1
+                version_incremented = True
+
+                if address is not None:
+                    int1.set_ipv4(str(address.source.ip), address.prefix_len)
+                    int2.set_ipv4(str(address.target.ip), address.prefix_len)
+
+                if address_v6 is not None:
+                    int1.set_ipv6(str(address_v6.source.ip), address_v6.prefix_len)
+                    int2.set_ipv6(str(address_v6.target.ip), address_v6.prefix_len)
 
             # Push the planned addresses while the rollback block still owns
             # both the interfaces and the newly allocated slots. A transport
@@ -249,21 +262,22 @@ class InterfaceMgrMixin:
                     source.set_ipv6_to_containers(interface=int1, set_lo=False)
                     target.set_ipv6_to_containers(interface=int2, set_lo=False)
         except Exception:
-            for owner, created_interface in created:
-                if created_interface in owner.interfaces:
-                    owner.interfaces.remove(created_interface)
-                if created_interface in link.peer_interfaces:
-                    link.peer_interfaces.remove(created_interface)
-                if created_interface in self.interfaces:
-                    self.interfaces.remove(created_interface)
-            if version_incremented:
-                self.interface_version = max(
-                    getattr(self, "interface_version", 1) - 1, 0
-                )
-            if new_v4 and self.address_plan is not None and key is not None:
-                self.address_plan.release_link(key)
-            if new_v6 and plan_v6 is not None and key is not None:
-                plan_v6.release_link(key)
+            with lock:
+                for owner, created_interface in created:
+                    if created_interface in owner.interfaces:
+                        owner.interfaces.remove(created_interface)
+                    if created_interface in link.peer_interfaces:
+                        link.peer_interfaces.remove(created_interface)
+                    if created_interface in self.interfaces:
+                        self.interfaces.remove(created_interface)
+                if version_incremented:
+                    self.interface_version = max(
+                        getattr(self, "interface_version", 1) - 1, 0
+                    )
+                if new_v4 and self.address_plan is not None and key is not None:
+                    self.address_plan.release_link(key)
+                if new_v6 and plan_v6 is not None and key is not None:
+                    plan_v6.release_link(key)
             raise
 
     def set_ipv4s_for_all_nodes(

@@ -633,3 +633,58 @@ def test_longest_connection_strategy_estimates_each_candidate_once(capsys):
     assert sorted(call_log) == ["Sat0", "Sat1", "Sat2"]
     assert len(result.new_ground_object_connections) == 3
     assert capsys.readouterr().out == ""
+
+
+def test_estimator_returns_zero_for_below_horizon_satellite():
+    """H-24: a satellite below the horizon (s0z < 0) must return 0.0, not positive time."""
+    # Station is at (+R_E, 0, 0); satellite is on the opposite side of Earth at
+    # (-R_E - 700 km, 0, 0), so elevation is -90 deg (s0z < 0, but s0z^2 > |s0|^2 sin^2(10)).
+    estimate = _estimate(
+        np.array([-(WGS84_SEMI_MAJOR_AXIS_M / 1000.0 + 700.0), 0.0, 0.0]),
+        np.array([0.0, 7.5, 0.0]),
+        minimum_elevation=10.0,
+    )
+
+    assert estimate == 0.0
+
+
+@pytest.mark.parametrize(
+    "strategy_cls", [LongestConnectionTimeStrategy, WeightedConnection]
+)
+def test_strategies_allow_unlimited_links_when_maximum_connected_satellites_is_none(
+    strategy_cls,
+):
+    """H-24: maximum_connected_satellites=None means unlimited connections."""
+    ground_object = _make_ground_object(maximum_connected_satellites=1)
+    ground_object.ground_object_domain.maximum_connected_satellites = None
+    satellites = [
+        Satellite(satellite_name=f"Sat{index}", topology_uniq_id=index)
+        for index in range(3)
+    ]
+    existing_link = GroundToSpaceLink(source=satellites[0], destination=ground_object)
+    ground_object.links.append(existing_link)
+    visible_satellites = [
+        VisibleSatellite(satellite=satellite, elevation_above_horizon=elevation)
+        for satellite, elevation in zip(satellites, [70.0, 60.0, 50.0], strict=True)
+    ]
+
+    with (
+        patch(
+            "satgonetem.utils.custom_connection_strategies.get_visible_satellites",
+            return_value=visible_satellites,
+        ),
+        patch.object(
+            LongestConnectionTimeStrategy,
+            "estimate_time_until_disconnection_2",
+            return_value=120.0,
+        ),
+    ):
+        result = strategy_cls().compute_ground_object_connection_strategy(
+            ground_object=ground_object,
+            satellites=satellites,
+        )
+
+    assert result.obsolete_links == []
+    assert sorted(
+        conn.satellite.satellite_name for conn in result.new_ground_object_connections
+    ) == ["Sat1", "Sat2"]

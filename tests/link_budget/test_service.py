@@ -156,3 +156,38 @@ class TestLinkBudgetServiceComputeOneWay:
         )
         cap = service.compute_one_way(inputs)
         assert cap == 0
+        assert service.last_link_unclosable is False
+
+    @patch("satgonetem.link_budget.service.calculate_atmospheric_attenuation_dB")
+    @patch("satgonetem.link_budget.service.calculate_free_space_loss_db")
+    def test_sub_kbps_positive_capacity_clamps_to_one_kbps(self, mock_fsl, mock_atm):
+        mock_fsl.return_value = 200.0
+        mock_atm.return_value = (1.0, 0.5, 0.2, 0.2, 0.1)
+
+        class _SubKbpsStrategy:
+            def compute_capacity(self, cn0_dbhz: float, bandwidth_hz: float) -> float:
+                return 500.0  # 0.5 kbps
+
+        service = LinkBudgetService(capacity_strategy=_SubKbpsStrategy())
+        cap = service.compute_one_way(self._valid_inputs())
+
+        assert cap == 1
+        assert service.last_link_unclosable is False
+
+    @patch("satgonetem.link_budget.service.calculate_atmospheric_attenuation_dB")
+    @patch("satgonetem.link_budget.service.calculate_free_space_loss_db")
+    def test_unclosable_link_returns_zero_and_sets_unclosable_flag(
+        self, mock_fsl, mock_atm
+    ):
+        mock_fsl.return_value = 300.0
+        mock_atm.return_value = (1.0, 0.5, 0.2, 0.2, 0.1)
+
+        class _UnclosableStrategy:
+            def compute_capacity(self, cn0_dbhz: float, bandwidth_hz: float) -> float:
+                raise RuntimeError("No suitable ModCod")
+
+        service = LinkBudgetService(capacity_strategy=_UnclosableStrategy())
+        cap = service.compute_one_way(self._valid_inputs())
+
+        assert cap == 0
+        assert service.last_link_unclosable is True

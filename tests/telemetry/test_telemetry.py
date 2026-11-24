@@ -93,6 +93,32 @@ def test_sample_records_last_error():
     assert sample["last_error"] == "tick failed"
 
 
+def test_sample_snapshots_links_against_concurrent_mutation():
+    topology, link = _topology()
+
+    def mutating_capacity():
+        topology.links["added"] = _Link(
+            SimpleNamespace(name="Sat1"), SimpleNamespace(name="Gnd0")
+        )
+        return 5000
+
+    link.get_capacity = mutating_capacity
+
+    sample = MetricsCollector(topology).sample()
+
+    assert len(sample["links"]) == 1
+
+
+def test_sample_tolerates_none_links():
+    topology, _ = _topology()
+    topology.links = None
+
+    sample = MetricsCollector(topology).sample()
+
+    assert sample["links"] == []
+    assert sample["topology"]["links"] == 0
+
+
 def test_jsonl_writer_appends_samples(tmp_path):
     path = tmp_path / "metrics.jsonl"
     with JsonlMetricsWriter(path) as writer:

@@ -207,16 +207,55 @@ def _group_satellites_by_orbital_plane(
                     current_sub = [inclination_group[i]]
             planes.append(current_sub)
 
-    # Keep average RAAN for sorting, then strip RAAN, altitude and inclination
-    planes_with_raan = []
+    # Compute circular mean RAAN plus shell metrics (inclination, altitude) for
+    # each plane so planes are grouped by shell before sorting by RAAN.
+    plane_entries = []
     for plane in planes:
-        avg_raan = sum(s[1] for s in plane) / len(plane)
+        avg_raan = (
+            math.degrees(
+                math.atan2(
+                    sum(math.sin(math.radians(s[1])) for s in plane),
+                    sum(math.cos(math.radians(s[1])) for s in plane),
+                )
+            )
+            % 360.0
+        )
+        avg_alt = sum(s[3] for s in plane) / len(plane)
+        avg_inc = sum(s[4] for s in plane) / len(plane)
         stripped = [(s[0], s[2]) for s in plane]
-        planes_with_raan.append((avg_raan, stripped))
+        plane_entries.append((avg_inc, avg_alt, avg_raan, stripped))
 
-    # Sort planes by average RAAN so adjacent planes are truly adjacent in space
-    planes_with_raan.sort(key=lambda x: x[0])
-    return [p[1] for p in planes_with_raan]
+    # Group planes into shells by inclination then altitude using the same
+    # thresholds so multi-shell constellations do not interleave across shells.
+    plane_entries.sort(key=lambda x: x[0])
+    inc_shell_groups = []
+    current_inc_group = [plane_entries[0]]
+    for entry in plane_entries[1:]:
+        if entry[0] - current_inc_group[0][0] < inclination_threshold:
+            current_inc_group.append(entry)
+        else:
+            inc_shell_groups.append(current_inc_group)
+            current_inc_group = [entry]
+    inc_shell_groups.append(current_inc_group)
+
+    ordered_planes: list[list[tuple[SatComSatellite, float]]] = []
+    for inc_group in inc_shell_groups:
+        inc_group.sort(key=lambda x: x[1])
+        alt_shells = []
+        current_shell = [inc_group[0]]
+        for entry in inc_group[1:]:
+            if entry[1] - current_shell[0][1] < max_altitude_difference:
+                current_shell.append(entry)
+            else:
+                alt_shells.append(current_shell)
+                current_shell = [entry]
+        alt_shells.append(current_shell)
+
+        for shell in alt_shells:
+            shell.sort(key=lambda x: x[2])
+            ordered_planes.extend(entry[3] for entry in shell)
+
+    return ordered_planes
 
 
 def _angular_distance_degrees(first: float, second: float) -> float:

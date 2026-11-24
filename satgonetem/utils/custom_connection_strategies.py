@@ -23,7 +23,7 @@ from sgp4.api import jday
 def _retain_or_obsolete_existing_ground_links(
     ground_object: GroundObject,
     visible_satellites,
-    maximum_number_of_links: int,
+    maximum_number_of_links: int | None,
     result: ComputedGroundObjectConnectionsResult,
 ) -> set[int]:
     """Partition existing ground-to-space links into retained and obsolete.
@@ -62,9 +62,9 @@ def _retain_or_obsolete_existing_ground_links(
     retained_link_ids: set[int] = set()
     for link in candidates:
         satellite_id = id(link.source)
-        if (
-            satellite_id not in retained_satellite_ids
-            and len(retained_satellite_ids) < maximum_number_of_links
+        if satellite_id not in retained_satellite_ids and (
+            maximum_number_of_links is None
+            or len(retained_satellite_ids) < maximum_number_of_links
         ):
             retained_satellite_ids.add(satellite_id)
             retained_link_ids.add(id(link))
@@ -200,8 +200,8 @@ class LongestConnectionTimeStrategy(GroundToSpaceConnectionStrategy):
         B = 2 * (s0z * vz - s0_dot_v * sin2_eps)
         C = s0z**2 - s0_sq * sin2_eps
 
-        # Check if currently visible
-        if C <= 0:
+        # Check if currently visible (preserve sign of s0z before squaring)
+        if s0z <= np.sqrt(s0_sq) * sin_eps or (sin_eps >= 0 and C <= 0):
             return 0.0  # Already at or below minimum elevation
 
         # Solve for roots
@@ -333,11 +333,18 @@ class LongestConnectionTimeStrategy(GroundToSpaceConnectionStrategy):
             result=computed_ground_object_connections_result,
         )
 
-        if len(retained_satellite_ids) >= maximum_number_of_links:
+        if (
+            maximum_number_of_links is not None
+            and len(retained_satellite_ids) >= maximum_number_of_links
+        ):
             # If the retained links already fill the budget, stop here.
             return computed_ground_object_connections_result
 
-        remaining_capacity = maximum_number_of_links - len(retained_satellite_ids)
+        remaining_capacity = (
+            None
+            if maximum_number_of_links is None
+            else maximum_number_of_links - len(retained_satellite_ids)
+        )
 
         list_of_satellites = []
 
@@ -362,7 +369,8 @@ class LongestConnectionTimeStrategy(GroundToSpaceConnectionStrategy):
 
         for visible_satellite, _time_until_disconnection in list_of_satellites:
             if (
-                len(
+                remaining_capacity is not None
+                and len(
                     computed_ground_object_connections_result.new_ground_object_connections
                 )
                 >= remaining_capacity
@@ -426,11 +434,18 @@ class WeightedConnection(GroundToSpaceConnectionStrategy):
             result=computed_ground_object_connections_result,
         )
 
-        if len(retained_satellite_ids) >= maximum_number_of_links:
+        if (
+            maximum_number_of_links is not None
+            and len(retained_satellite_ids) >= maximum_number_of_links
+        ):
             # If the retained links already fill the budget, stop here.
             return computed_ground_object_connections_result
 
-        remaining_capacity = maximum_number_of_links - len(retained_satellite_ids)
+        remaining_capacity = (
+            None
+            if maximum_number_of_links is None
+            else maximum_number_of_links - len(retained_satellite_ids)
+        )
 
         # Create a list to store the weighted visible satellites
         weighted_visible_satellites = []
@@ -467,7 +482,8 @@ class WeightedConnection(GroundToSpaceConnectionStrategy):
         for visible_satellite, _weight in weighted_visible_satellites:
             # Check if we have reached the maximum number of links
             if (
-                len(
+                remaining_capacity is not None
+                and len(
                     computed_ground_object_connections_result.new_ground_object_connections
                 )
                 >= remaining_capacity

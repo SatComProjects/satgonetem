@@ -45,7 +45,7 @@ class GroundStation(Node, QoSCapableMixin):
         self.city: str | None = None
         self.traffic_models: list = []
 
-        self.satcom_object: SatComGroundStation
+        self.satcom_object: SatComGroundStation | None = None
 
         self.type = "GroundStation"
 

@@ -46,8 +46,10 @@ class NetworkLifecycleMixin:
                 "A GoNetEm project is still retained from a failed stop; "
                 "call stop_gonetem() to retry before starting again."
             )
-        # A fresh start has no retained project to force-close.
+        # A fresh start has no retained project to force-close and must not
+        # inherit backend link-tracking state from an earlier session.
         self._pending_force_close = False
+        self._reset_backend_link_tracking()
 
         from satgonetem.launchers.registry import create_launcher
 
@@ -381,6 +383,8 @@ class NetworkLifecycleMixin:
             self.project_id = None
             self.client = None
             self.request = None
+            self._reset_backend_link_tracking()
+            self._clear_node_runtime_handles()
 
         if teardown_error is not None:
             raise teardown_error
@@ -452,6 +456,8 @@ class NetworkLifecycleMixin:
             self.client = None
             self.request = None
             self._pending_force_close = False
+            self._reset_backend_link_tracking()
+            self._clear_node_runtime_handles()
             self.set_status(False)
             self.set_gonetem_status(False)
             self.set_routing_initiated(False)
@@ -461,6 +467,24 @@ class NetworkLifecycleMixin:
             raise teardown_error
 
         return time.perf_counter() - tic
+
+    def _reset_backend_link_tracking(self) -> None:
+        """Clear per-session backend link tracking state."""
+        for attr in ("_backend_link_adds", "_failed_link_adds", "_failed_link_updates"):
+            state = getattr(self, attr, None)
+            if isinstance(state, set):
+                state.clear()
+        self._link_update_many_unavailable = False
+
+    def _clear_node_runtime_handles(self) -> None:
+        """Clear per-session container and gRPC handles from all nodes."""
+        nodes = list(getattr(self, "satellites", {}).values()) + list(
+            getattr(self, "ground_stations", {}).values()
+        )
+        for node in nodes:
+            for attr in ("container", "container_pid", "grpc_client", "project_id"):
+                if hasattr(node, attr):
+                    setattr(node, attr, None)
 
     def set_ip_addresses(
         self, satellites: bool = True, ground_stations: bool = True

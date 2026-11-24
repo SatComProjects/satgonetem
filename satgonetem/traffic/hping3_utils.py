@@ -1,4 +1,5 @@
 import enum
+import shlex
 from typing import TYPE_CHECKING
 
 from satgonetem.traffic.flow import ThreadedFlow
@@ -46,7 +47,11 @@ class Hping3Flow(ThreadedFlow):
         return Hping3Results(raw_output=raw, config=self.config)
 
     def _stop_process(self) -> None:
-        self.source.execute_command("pkill -x hping3", detach=True)
+        dst_ip = self.destination.loopback.ipv4
+        pattern = f"[h]ping3 .* {dst_ip}"
+        self.source.execute_command(
+            f"pkill -f {shlex.quote(pattern)} 2>/dev/null; true", detach=True
+        )
 
 
 def run_hping3(

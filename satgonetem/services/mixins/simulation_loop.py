@@ -229,6 +229,9 @@ class SimulationLoopMixin:
             self.current_time_step = int(
                 (new_time - self.start_time).total_seconds() / self.update_time
             )
+            update_simulation = getattr(self, "update_simulation", None)
+            if callable(update_simulation):
+                update_simulation(advance_timestep=False)
             self.rebuild_routing_for_current_timestep()
 
     def rebuild_routing_for_current_timestep(self):

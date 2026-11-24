@@ -100,6 +100,35 @@ def test_stack_pass_prunes_non_addressable_satellite_cache() -> None:
     assert "10.9.9.9/32" in sat.commands[0][2]
 
 
+def test_stack_pass_prune_preserves_sid_pass_gs_fallback_routes() -> None:
+    sat = _RecordingSatellite(1, "Sat1", "10.0.0.1")
+    sat.set_addressable(False)
+    topology = _FakeTopology([sat], [])
+    label_manager = _FakeLabelManager({1: 16001})
+    gs_fallback = "ip route replace 10.0.0.2/32 via 10.10.0.2 dev Sat1.2"
+    old_gs_stack = (
+        "ip route replace 10.0.0.2/32 encap mpls 16002 via 10.10.0.2 dev Sat1.2"
+    )
+    stale_remote = (
+        "ip route replace 10.9.9.9/32 encap mpls 16009 via 10.0.0.9 dev Sat1.9"
+    )
+    prev_stack = {1: [old_gs_stack, stale_remote]}
+    prev_sid = {1: ["ip -f mpls route replace 16001 dev lo", gs_fallback]}
+    sr_lfib = {1: [_stack_entry(old_gs_stack), _stack_entry(stale_remote)]}
+
+    errors = SRMPLSRouteInstaller(topology).apply_sr_routes_to_satellites(
+        label_manager, sr_lfib, prev_stack, prev_sid
+    )
+
+    assert errors == 0
+    assert 1 not in prev_stack
+    assert 1 not in sr_lfib
+    assert len(sat.commands) == 1
+    batch = sat.commands[0][2]
+    assert "10.9.9.9/32" in batch
+    assert "10.0.0.2/32" not in batch
+
+
 def test_sid_pass_installs_own_sid_and_neighbour_forward_only() -> None:
     sat = _RecordingSatellite(1, "Sat1", "10.0.0.1")
     gs = _RecordingGroundStation(2, "Gnd2", "10.0.0.2")
@@ -133,27 +162,28 @@ def test_sid_pass_installs_own_sid_and_neighbour_forward_only() -> None:
     assert len(sat.commands) == 1
 
 
-def test_ground_station_pass_uses_full_string_set_diff() -> None:
+def test_ground_station_pass_replaces_updated_route_without_delete() -> None:
     gs = _RecordingGroundStation(2, "Gnd2", "10.0.0.2")
     topology = _FakeTopology((), [gs])
     manager = _FakeLabelManager({2: 16002})
     previous = "ip route replace 10.0.0.9/32 via 10.0.0.1 dev Gnd2.1"
+    removed = "ip route replace 10.0.0.8/32 via 10.0.0.1 dev Gnd2.1"
     desired = "ip route replace 10.0.0.9/32 via 10.0.0.3 dev Gnd2.3"
-    prev: dict[int, list[str]] = {2: [previous]}
+    prev: dict[int, list[str]] = {2: [previous, removed]}
 
     errors = SRMPLSRouteInstaller(topology).apply_sr_routes_to_ground_stations(
         manager, {2: [_stack_entry(desired)]}, prev
     )
 
     assert errors == 0
-    # The full-string diff deletes the old spelling even though the route
-    # identity (prefix) is unchanged.
+    # Updated prefix uses atomic replace without deleting 10.0.0.9/32 first;
+    # removed prefix 10.0.0.8/32 is still deleted.
     assert gs.commands == [
         [
             "sh",
             "-lc",
-            "set -e; if ip route show exact 10.0.0.9/32 2>&1 | grep -q .; "
-            "then ip route del 10.0.0.9/32; fi; "
+            "set -e; if ip route show exact 10.0.0.8/32 2>&1 | grep -q .; "
+            "then ip route del 10.0.0.8/32; fi; "
             "ip -f mpls route replace 16002 dev lo; " + desired,
         ]
     ]

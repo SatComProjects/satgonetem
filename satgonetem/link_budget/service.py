@@ -94,6 +94,7 @@ class LinkBudgetService:
 
     def __init__(self, capacity_strategy: CapacityStrategy | None = None) -> None:
         self.capacity_strategy = capacity_strategy or ShannonCapacityStrategy()
+        self.last_link_unclosable: bool = False
 
     def compute_one_way(self, inputs: LinkBudgetInputs) -> int:
         """Compute one-way capacity in kbps.
@@ -105,12 +106,15 @@ class LinkBudgetService:
             inputs: All RF and geometric parameters for the link.
 
         Returns:
-            Capacity in kbps (rounded down).  Returns *0* when an antenna is
-            missing, when a numeric input (frequency, distance, bandwidth) is
-            not finite and positive, when gain/EIRP computation fails, when
-            free-space loss or :math:`C/N_0` cannot be computed, or when
-            atmospheric attenuation cannot be computed.
+            Capacity in kbps (rounded down, with positive sub-kbps rates
+            clamped to 1 kbps).  Returns *0* when an antenna is missing, when a
+            numeric input (frequency, distance, bandwidth) is not finite and
+            positive, when gain/EIRP computation fails, when free-space loss or
+            :math:`C/N_0` cannot be computed, when atmospheric attenuation
+            cannot be computed, or when the link is physically unclosable (in
+            which case ``self.last_link_unclosable`` is set to ``True``).
         """
+        self.last_link_unclosable = False
         if inputs.tx_antenna is None or inputs.rx_antenna is None:
             logger.debug("Link budget inputs are missing an antenna")
             return 0
@@ -193,9 +197,13 @@ class LinkBudgetService:
                 cn0_dbhz, inputs.bandwidth_hz
             )
         except RuntimeError as exc:
-            logger.debug("Capacity strategy failed: %s", exc)
+            logger.debug("Capacity strategy could not close link: %s", exc)
+            self.last_link_unclosable = True
             return 0
-        if not math.isfinite(capacity_bps) or capacity_bps <= 0.0:
+        if not math.isfinite(capacity_bps) or capacity_bps < 0.0:
+            return 0
+        if capacity_bps == 0.0:
+            self.last_link_unclosable = True
             return 0
 
-        return int(capacity_bps / 1000.0)
+        return max(1, int(capacity_bps / 1000.0))
