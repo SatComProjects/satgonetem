@@ -260,10 +260,10 @@ def generate_iperf2_plots(
     df = pd.DataFrame(data_rows)
 
     # ---------- Plot helper ----------
-    def plot_metric(df, metric, ylabel, title, filename):
+    def plot_metric(df, metric, ylabel, title, filename, scale=1.0):
         plt.figure(figsize=(10, 5))
         for label, g in df.groupby("_label"):
-            plt.plot(g["end"], g[metric], label=label)
+            plt.plot(g["end"], g[metric] / scale, label=label)
         plt.xlabel("Time (s)")
         plt.ylabel(ylabel)
         plt.title(title)
@@ -284,6 +284,7 @@ def generate_iperf2_plots(
             "Throughput (Mbps)",
             f"{protocol} Throughput per Socket",
             f"{log_file_name}_{protocol.lower()}_throughput.png",
+            scale=_BITS_PER_MEGABIT,
         )
     )
 
@@ -295,6 +296,7 @@ def generate_iperf2_plots(
             "Bytes (MB)",
             f"{protocol} Bytes per Socket",
             f"{log_file_name}_{protocol.lower()}_bytes.png",
+            scale=_BYTES_PER_MIB,
         )
     )
 

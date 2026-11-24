@@ -403,6 +403,50 @@ def test_grouping_sorts_planes_by_average_raan() -> None:
     assert _plane_raans(planes) == [{100.0, 101.0}, {350.0, 351.0}]
 
 
+def test_grouping_uses_circular_mean_for_raan_wrapping_across_zero() -> None:
+    # {358, 1, 4} straddles 0/360: its circular mean is ~1 deg, whereas its
+    # arithmetic mean is 121 deg (which would misplace it after the 60 deg plane).
+    sats = [
+        _sat(358.0),
+        _sat(1.0),
+        _sat(4.0),
+        _sat(60.0),
+        _sat(61.0),
+        _sat(180.0),
+        _sat(181.0),
+    ]
+
+    planes = _group_satellites_by_orbital_plane(sats, None)
+
+    assert _plane_raans(planes) == [{1.0, 4.0, 358.0}, {60.0, 61.0}, {180.0, 181.0}]
+
+
+def test_grouping_does_not_interleave_multi_shell_planes() -> None:
+    # Two shells with interleaved RAANs must stay grouped by shell so adjacent
+    # plane links do not jump back and forth across shells.
+    shell_a = [
+        _sat(0.0, 0.0, 550.0, inc_deg=53.0),
+        _sat(20.0, 0.0, 550.0, inc_deg=53.0),
+        _sat(40.0, 0.0, 550.0, inc_deg=53.0),
+    ]
+    shell_b = [
+        _sat(10.0, 0.0, 550.0, inc_deg=70.0),
+        _sat(30.0, 0.0, 550.0, inc_deg=70.0),
+        _sat(50.0, 0.0, 550.0, inc_deg=70.0),
+    ]
+
+    planes = _group_satellites_by_orbital_plane(shell_a + shell_b, None)
+
+    assert _plane_raans(planes) == [
+        {0.0},
+        {20.0},
+        {40.0},
+        {10.0},
+        {30.0},
+        {50.0},
+    ]
+
+
 def test_grouping_separates_same_raan_and_altitude_by_inclination() -> None:
     # Equal RAAN and altitude but different inclinations describe intersecting
     # orbital planes: intra-plane links inside one merged group would be

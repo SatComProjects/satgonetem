@@ -267,12 +267,9 @@ class SRMPLSRouteInstaller:
                 route_commands.append(entry.to_iproute2_command())
 
             prev = prev_gs_routes.get(gs.id, [])
-            prev_set = set(prev)
-            new_set = set(route_commands)
-            changed = [line for line in route_commands if line not in prev_set]
-            stale = [line for line in prev if line not in new_set]
+            stale, changed = route_changes(prev, route_commands, set())
 
-            if changed or stale:
+            if stale or changed:
                 batch_cmd = build_batch(stale, changed)
                 try:
                     gs.execute_command(["sh", "-lc", batch_cmd])
@@ -350,7 +347,8 @@ class SRMPLSRouteInstaller:
                 continue
             sat = self._topology.satellites.get(sat_id)
             if sat is not None and sat.container:
-                stale, _ = route_changes(cached, [], set())
+                foreign_keys = cached_route_keys(prev_node_sid_routes.get(sat_id, []))
+                stale, _ = route_changes(cached, [], foreign_keys)
                 if stale:
                     try:
                         sat.execute_command(["sh", "-lc", build_batch(stale, [])])

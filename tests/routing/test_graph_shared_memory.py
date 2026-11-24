@@ -168,3 +168,100 @@ def test_read_snapshot_gives_up_after_bounded_version_zero_retries(monkeypatch):
     finally:
         owner.close()
         owner.unlink()
+
+
+def test_read_snapshot_retries_on_odd_in_progress_version(monkeypatch) -> None:
+    name = unique_name()
+    owner = GraphSharedMemory(name, max_edges=2, create=True)
+    try:
+        owner.write_edges([make_edge(src_name=1)])
+        # Simulate a writer mid-update (odd seqlock version).
+        owner.header[0]["version"] = 3
+
+        sleeps: list[float] = []
+
+        def fake_sleep(delay: float) -> None:
+            sleeps.append(delay)
+            if len(sleeps) == 1:
+                owner.write_edges([make_edge(src_name=2)])
+
+        monkeypatch.setattr(graph_shm_module.time, "sleep", fake_sleep)
+
+        snapshot = GraphSharedMemory.read_snapshot(name, retries=2, retry_delay=0.01)
+
+        assert sleeps == [0.01]
+        assert snapshot.version % 2 == 0
+        assert int(snapshot.edges[0]["src_name"]) == 2
+    finally:
+        owner.close()
+        owner.unlink()
+
+
+def test_read_snapshot_times_out_when_version_stays_odd(monkeypatch) -> None:
+    name = unique_name()
+    owner = GraphSharedMemory(name, max_edges=1, create=True)
+    try:
+        owner.write_edges([make_edge(src_name=1)])
+        owner.header[0]["version"] = 3
+        monkeypatch.setattr(graph_shm_module.time, "sleep", MagicMock())
+
+        with pytest.raises(TimeoutError, match="version 3"):
+            GraphSharedMemory.read_snapshot(name, retries=2, retry_delay=0)
+    finally:
+        owner.close()
+        owner.unlink()
+
+
+def test_write_edges_preserves_seqlock_parity_after_mid_write_exception() -> None:
+    name = unique_name()
+    owner = GraphSharedMemory(name, max_edges=2, create=True)
+    try:
+        owner.write_edges([make_edge(src_name=1)])
+        assert int(owner.header[0]["version"]) % 2 == 0
+
+        # Trigger an exception mid-write on the second edge.
+        with pytest.raises(ValueError):
+            owner.write_edges([make_edge(src_name=2), make_edge(src_ip="not-an-ip")])
+
+        # Interrupted write must leave an odd version so readers retry/timeout.
+        assert int(owner.header[0]["version"]) % 2 == 1
+        with pytest.raises(TimeoutError):
+            GraphSharedMemory.read_snapshot(name, retries=0)
+
+        # A subsequent valid write must still publish an even version.
+        owner.write_edges([make_edge(src_name=3)])
+        assert int(owner.header[0]["version"]) % 2 == 0
+        snapshot = GraphSharedMemory.read_snapshot(name, retries=0)
+        assert snapshot.version % 2 == 0
+        assert snapshot.num_edges == 1
+        assert int(snapshot.edges[0]["src_name"]) == 3
+    finally:
+        owner.close()
+        owner.unlink()
+
+
+def test_write_edges_clears_trailing_edges_before_publishing_end_version() -> None:
+    name = unique_name()
+    owner = GraphSharedMemory(name, max_edges=2, create=True)
+    try:
+        owner.write_edges([make_edge(src_name=1), make_edge(src_name=2)])
+        real_header = owner.header
+        observed_trailing_weights: list[float] = []
+
+        class _HeaderRowProxy:
+            def __getitem__(self, key: str):
+                return real_header[0][key]
+
+            def __setitem__(self, key: str, value) -> None:
+                if key == "version" and int(value) % 2 == 0:
+                    observed_trailing_weights.append(float(owner.edges[1]["weight"]))
+                real_header[0][key] = value
+
+        owner.header = [_HeaderRowProxy()]  # type: ignore[assignment]
+        owner.write_edges([make_edge(src_name=10)])
+        owner.header = real_header
+
+        assert observed_trailing_weights == [-1.0]
+    finally:
+        owner.close()
+        owner.unlink()

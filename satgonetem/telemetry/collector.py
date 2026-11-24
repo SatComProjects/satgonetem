@@ -66,7 +66,8 @@ class MetricsCollector:
 
         usage = self._usage_map()
         links: list[dict[str, Any]] = []
-        for link in getattr(topology, "links", {}).values():
+        link_snapshot = list((getattr(topology, "links", None) or {}).values())
+        for link in link_snapshot:
             source = getattr(link, "source", None)
             target = getattr(link, "target", None)
             src = getattr(source, "name", "")

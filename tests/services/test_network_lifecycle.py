@@ -249,3 +249,104 @@ def test_stop_gonetem_closes_project_when_hil_teardown_fails():
     launcher.close_project.assert_called_once()
     assert topology.gonetem_status is False
     assert topology.launcher is None
+
+
+def test_stop_gonetem_clears_backend_link_tracking_and_node_runtime_handles():
+    topology = DummyTopology()
+    sat = SimpleNamespace(
+        name="Sat0",
+        container=object(),
+        container_pid=1234,
+        grpc_client=object(),
+        project_id="proj-1",
+    )
+    gnd = SimpleNamespace(
+        name="Gnd0",
+        container=object(),
+        container_pid=5678,
+        grpc_client=object(),
+        project_id="proj-1",
+    )
+    topology.satellites = {0: sat}
+    topology.ground_stations = {0: gnd}
+    topology._backend_link_adds = {frozenset(("Sat0", "Gnd0"))}
+    topology._failed_link_adds = {frozenset(("Sat0", "Sat1"))}
+    topology._failed_link_updates = {frozenset(("Sat0", "Sat2"))}
+    topology._link_update_many_unavailable = True
+    topology.gonetem_status = True
+    topology.launcher = MagicMock()
+
+    topology.stop_gonetem()
+
+    assert topology._backend_link_adds == set()
+    assert topology._failed_link_adds == set()
+    assert topology._failed_link_updates == set()
+    assert topology._link_update_many_unavailable is False
+    for node in (sat, gnd):
+        assert node.container is None
+        assert node.container_pid is None
+        assert node.grpc_client is None
+        assert node.project_id is None
+
+
+def test_force_stop_gonetem_clears_backend_link_tracking_and_node_runtime_handles():
+    topology = DummyTopology()
+    sat = SimpleNamespace(
+        name="Sat0",
+        container=object(),
+        container_pid=1234,
+        grpc_client=object(),
+        project_id="proj-1",
+    )
+    gnd = SimpleNamespace(
+        name="Gnd0",
+        container=object(),
+        container_pid=5678,
+        grpc_client=object(),
+        project_id="proj-1",
+    )
+    topology.satellites = {0: sat}
+    topology.ground_stations = {0: gnd}
+    topology._backend_link_adds = {frozenset(("Sat0", "Gnd0"))}
+    topology._failed_link_adds = {frozenset(("Sat0", "Sat1"))}
+    topology._failed_link_updates = {frozenset(("Sat0", "Sat2"))}
+    topology._link_update_many_unavailable = True
+    topology.launcher = MagicMock()
+
+    with pytest.warns(ResourceWarning):
+        topology.force_stop_gonetem()
+
+    assert topology._backend_link_adds == set()
+    assert topology._failed_link_adds == set()
+    assert topology._failed_link_updates == set()
+    assert topology._link_update_many_unavailable is False
+    for node in (sat, gnd):
+        assert node.container is None
+        assert node.container_pid is None
+        assert node.grpc_client is None
+        assert node.project_id is None
+
+
+def test_start_gonetem_clears_stale_backend_link_tracking():
+    topology = DummyTopology()
+    topology.satellites = {}
+    topology.ground_stations = {}
+    topology.links = {}
+    topology._backend_link_adds = {frozenset(("Sat0", "Gnd0"))}
+    topology._failed_link_adds = {frozenset(("Sat0", "Sat1"))}
+    topology._failed_link_updates = {frozenset(("Sat0", "Sat2"))}
+    topology._link_update_many_unavailable = True
+
+    fake_launcher = MagicMock()
+    fake_launcher.start_containers.return_value = (1.0, 2.0)
+
+    with patch(
+        "satgonetem.launchers.gonetem_launcher.GoNetEmLauncher",
+        return_value=fake_launcher,
+    ):
+        topology.start_gonetem()
+
+    assert topology._backend_link_adds == set()
+    assert topology._failed_link_adds == set()
+    assert topology._failed_link_updates == set()
+    assert topology._link_update_many_unavailable is False

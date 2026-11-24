@@ -113,9 +113,15 @@ def main() -> None:
                 except Exception:
                     pass
 
+            resize_pending = False
+
+            def _handle_sigwinch(_sig, _frame) -> None:
+                nonlocal resize_pending
+                resize_pending = True
+
             # Forward initial terminal size.
             send_resize()
-            signal.signal(signal.SIGWINCH, lambda _sig, _frame: send_resize())
+            signal.signal(signal.SIGWINCH, _handle_sigwinch)
 
             def recv_loop() -> None:
                 try:
@@ -141,7 +147,13 @@ def main() -> None:
             recv_thread.start()
 
             while not done_event.is_set():
+                if resize_pending:
+                    resize_pending = False
+                    send_resize()
                 ready, _, _ = select.select([fd], [], [], 0.05)
+                if resize_pending:
+                    resize_pending = False
+                    send_resize()
                 if ready:
                     try:
                         data = os.read(fd, 4096)

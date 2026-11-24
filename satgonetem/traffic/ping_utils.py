@@ -1,5 +1,6 @@
 import enum
 import re
+import shlex
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -238,7 +239,12 @@ class PingFlow(ThreadedFlow):
         return PingResults(raw_output=raw, config=self.config)
 
     def _stop_process(self) -> None:
-        self.source.execute_command("pkill -x ping", detach=True)
+        dst_ip = self.destination.loopback.ipv4
+        bind_ip = self.source.loopback.ipv4
+        pattern = f"[p]ing .*-I {bind_ip} .* {dst_ip}"
+        self.source.execute_command(
+            f"pkill -f {shlex.quote(pattern)} 2>/dev/null; true", detach=True
+        )
 
 
 def run_ping(

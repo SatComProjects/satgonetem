@@ -198,11 +198,16 @@ class GraphSharedMemory:
                 max_edges = int(header["max_edges"])
                 schema_version = int(header["schema_version"])
 
-                if version == 0:
+                if version == 0 or version % 2 == 1:
                     if attempt == retries:
+                        if version == 0:
+                            raise TimeoutError(
+                                f"Graph shared memory {name!r} is still at version 0 "
+                                f"after {retries} retries"
+                            )
                         raise TimeoutError(
-                            f"Graph shared memory {name!r} is still at version 0 "
-                            f"after {retries} retries"
+                            f"Graph shared memory {name!r} is still being written "
+                            f"(version {version}) after {retries} retries"
                         )
                     time.sleep(retry_delay)
                     continue
@@ -266,10 +271,13 @@ class GraphSharedMemory:
         if num_edges > self.max_edges:
             raise ValueError(f"Too many edges {num_edges}")
 
-        # Mark the write in progress before touching records. A reader that
-        # copies during the write sees a different version on its second
-        # header read and retries instead of accepting a torn graph.
+        # Seqlock protocol: publish an odd version before mutating records and
+        # an even version once all records (including cleared trailing slots)
+        # and num_edges are in place. Readers retry on 0, odd versions, or any
+        # version change across their copy.
         start_version = max(int(self.header[0]["version"]) + 1, self._version_floor + 1)
+        if start_version % 2 == 0:
+            start_version += 1
         self.header[0]["version"] = start_version
 
         for i, edge in enumerate(edge_list):
@@ -286,12 +294,12 @@ class GraphSharedMemory:
                 edge["weight"],
             )
 
-        self.header[0]["num_edges"] = num_edges
-        end_version = max(start_version + 1, self._version_floor + 2)
-        self.header[0]["version"] = end_version
-        self._version_floor = end_version
         if num_edges < self.max_edges:
             self.edges[num_edges:] = (0, 0, 0, 0, 0, 0, 0, 0, 0, -1.0)
+        self.header[0]["num_edges"] = num_edges
+        end_version = start_version + 1
+        self.header[0]["version"] = end_version
+        self._version_floor = end_version
 
     def clear(self):
         self.edges[:] = (0, 0, 0, 0, 0, 0, 0, 0, 0, -1.0)

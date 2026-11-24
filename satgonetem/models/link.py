@@ -269,7 +269,14 @@ class Link:
         )
         dl_capacity = dl_service.compute_one_way(dl_inputs)
         if dl_capacity > 0:
-            self.peer1_capacity = dl_capacity
+            resolved_dl = dl_capacity
+        elif getattr(dl_service, "last_link_unclosable", False) is True:
+            logger.warning(
+                "Downlink physically unclosable for %s->%s; setting capacity to 0 kbps",
+                sat.name,
+                gs.name,
+            )
+            resolved_dl = 0
         else:
             logger.warning(
                 "Downlink budget failed for %s->%s; using default %d kbps",
@@ -277,7 +284,7 @@ class Link:
                 gs.name,
                 self.default_capacity_kbps,
             )
-            self.peer1_capacity = self.default_capacity_kbps
+            resolved_dl = self.default_capacity_kbps
 
         # Uplink (GS → SAT) – Shannon upper bound
         ul_inputs = LinkBudgetInputs(
@@ -296,7 +303,14 @@ class Link:
         ul_service = LinkBudgetService(capacity_strategy=self.uplink_capacity_strategy)
         ul_capacity = ul_service.compute_one_way(ul_inputs)
         if ul_capacity > 0:
-            self.peer2_capacity = ul_capacity
+            resolved_ul = ul_capacity
+        elif getattr(ul_service, "last_link_unclosable", False) is True:
+            logger.warning(
+                "Uplink physically unclosable for %s->%s; setting capacity to 0 kbps",
+                gs.name,
+                sat.name,
+            )
+            resolved_ul = 0
         else:
             logger.warning(
                 "Uplink budget failed for %s->%s; using default %d kbps",
@@ -304,15 +318,22 @@ class Link:
                 sat.name,
                 self.default_capacity_kbps,
             )
-            self.peer2_capacity = self.default_capacity_kbps
+            resolved_ul = self.default_capacity_kbps
+
+        if self.source is sat:
+            self.peer1_capacity = resolved_dl
+            self.peer2_capacity = resolved_ul
+        else:
+            self.peer1_capacity = resolved_ul
+            self.peer2_capacity = resolved_dl
 
         logger.debug(
             "Link budget %s->%s | elev=%.2f deg, DL=%d kbps, UL=%d kbps",
             sat.name,
             gs.name,
             elevation,
-            self.peer1_capacity,
-            self.peer2_capacity,
+            resolved_dl,
+            resolved_ul,
         )
 
     # Sync helpers

@@ -374,12 +374,24 @@ class GoNetEmLifecycleMixin(GoNetEmClientMixin):
                 ) from exc
 
             if len(response.results) != len(chunk):
+                if response.status.code != netem_pb2.OK:
+                    detail = (
+                        response.status.error or f"status code {response.status.code}"
+                    )
+                    raise RuntimeError(
+                        "GoNetEmLauncher: LinkUpdateMany failed for "
+                        f"{len(chunk)} link(s): {detail}"
+                    )
                 raise RuntimeError(
                     "GoNetEmLauncher: LinkUpdateMany returned "
                     f"{len(response.results)} result(s) for {len(chunk)} link(s)"
                 )
 
-            merged.status.CopyFrom(response.status)
+            if (
+                merged.status.code == netem_pb2.OK
+                and response.status.code != netem_pb2.OK
+            ):
+                merged.status.CopyFrom(response.status)
             merged.results.extend(response.results)
             merged.updated += response.updated
 

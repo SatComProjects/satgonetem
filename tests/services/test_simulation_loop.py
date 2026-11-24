@@ -305,3 +305,46 @@ def test_valid_batch_removes_every_link_and_updates_once():
         second.satcom_object,
     ]
     assert harness.updates == 1
+
+
+def test_move_to_time_syncs_topology_before_rebuilding_routing():
+    from datetime import datetime, timedelta
+
+    events: list[tuple[str, bool]] = []
+
+    class MoveHarness(SimulationLoopMixin):
+        def __init__(self) -> None:
+            self.start_time = datetime(2026, 1, 1, 0, 0, 0)
+            self.update_time = 60
+            self.current_time_step = 0
+            self.routing_daemon = None
+            self._simulation_lock = threading.RLock()
+            self.simulation_manager = SimpleNamespace(
+                time_manager=SimpleNamespace(
+                    set_time=lambda t: events.append(
+                        ("set_time", self._simulation_lock._is_owned())
+                    ),
+                    execute_actions=lambda: events.append(
+                        ("execute_actions", self._simulation_lock._is_owned())
+                    ),
+                )
+            )
+
+        def update_simulation(self, advance_timestep: bool = True) -> None:
+            assert advance_timestep is False
+            events.append(("update_simulation", self._simulation_lock._is_owned()))
+
+        def rebuild_routing_for_current_timestep(self) -> None:
+            events.append(("rebuild_routing", self._simulation_lock._is_owned()))
+
+    harness = MoveHarness()
+    target = harness.start_time + timedelta(seconds=180)
+    harness.move_to_time(target)
+
+    assert harness.current_time_step == 3
+    assert events == [
+        ("set_time", True),
+        ("execute_actions", True),
+        ("update_simulation", True),
+        ("rebuild_routing", True),
+    ]

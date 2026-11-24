@@ -55,6 +55,53 @@ def test_failed_link_add_state_is_initialised(topology_manager):
     assert topology_manager._failed_link_adds == set()
 
 
+def test_failed_link_update_and_interface_lock_are_initialised(topology_manager):
+    """H-11: _failed_link_updates and _interface_lock must be eagerly initialized."""
+    import threading
+
+    assert topology_manager._failed_link_updates == set()
+    assert isinstance(topology_manager._interface_lock, type(threading.Lock()))
+
+
+def test_reset_simulation_acquires_lock_and_syncs_topology(topology_manager):
+    """H-13: reset_simulation must hold _simulation_lock and sync topology."""
+    events: list[tuple[str, bool]] = []
+    time_manager = topology_manager.simulation_manager.time_manager
+    orig_set_time = time_manager.set_time
+    orig_execute = time_manager.execute_actions
+
+    def tracked_set_time(t):
+        events.append(("set_time", topology_manager._simulation_lock._is_owned()))
+        return orig_set_time(t)
+
+    def tracked_execute():
+        events.append(
+            ("execute_actions", topology_manager._simulation_lock._is_owned())
+        )
+        return orig_execute()
+
+    def tracked_update(advance_timestep: bool = True):
+        assert advance_timestep is False
+        events.append(
+            ("update_simulation", topology_manager._simulation_lock._is_owned())
+        )
+
+    topology_manager.current_time_step = 5
+    with (
+        patch.object(time_manager, "set_time", side_effect=tracked_set_time),
+        patch.object(time_manager, "execute_actions", side_effect=tracked_execute),
+        patch.object(topology_manager, "update_simulation", side_effect=tracked_update),
+    ):
+        topology_manager.reset_simulation()
+
+    assert topology_manager.current_time_step == 0
+    assert events == [
+        ("set_time", True),
+        ("execute_actions", True),
+        ("update_simulation", True),
+    ]
+
+
 class TestSetLinkBudgetConfig:
     def test_sets_config_on_manager(self, mock_tm):
         cfg = LinkBudgetConfig(downlink_freq_ghz=20.0, uplink_freq_ghz=15.0)

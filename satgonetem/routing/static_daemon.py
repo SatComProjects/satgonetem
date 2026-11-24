@@ -278,11 +278,28 @@ class StaticRoutingDaemon(RoutingDaemon):
         """
         batches = {}
         for node in nodes:
-            ops = self._emit_route_operations(
-                node.ipv4_previous_routing_table,
-                node.ipv4_routing_table,
-                live_devs={iface.get_iname() for iface in node.interfaces},
-            )
+            live_devs = {iface.get_iname() for iface in node.interfaces}
+            if node.name in self._failed_nodes:
+                diff_ops = self._emit_route_operations(
+                    node.ipv4_previous_routing_table,
+                    node.ipv4_routing_table,
+                    live_devs=live_devs,
+                )
+                deletes = [op for op in diff_ops if op.action == "del"]
+                replaces = self._emit_route_operations(
+                    [],
+                    node.ipv4_routing_table,
+                    live_devs=live_devs,
+                )
+                ops = deletes + replaces
+                if not ops:
+                    self._failed_nodes.discard(node.name)
+            else:
+                ops = self._emit_route_operations(
+                    node.ipv4_previous_routing_table,
+                    node.ipv4_routing_table,
+                    live_devs=live_devs,
+                )
             if ops:
                 batches[node] = ops
 
@@ -395,14 +412,13 @@ class StaticRoutingDaemon(RoutingDaemon):
 
         The old list is kept by reference so the diff can compare against it;
         allocating a fresh list for the new table avoids copying every entry.
+        Nodes whose last install failed keep their last confirmed previous
+        table so routes that should have been deleted are not forgotten.
         """
         for node in list(self.topology.get_satellites()) + list(
             self.topology.get_ground_stations()
         ):
-            if node.name in self._failed_nodes:
-                # The last install failed; retry every desired route.
-                node.ipv4_previous_routing_table = []
-            else:
+            if node.name not in self._failed_nodes:
                 node.ipv4_previous_routing_table = node.ipv4_routing_table
             node.ipv4_routing_table = []
 

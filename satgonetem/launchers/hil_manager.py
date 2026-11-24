@@ -42,6 +42,7 @@ Privileges required:
 """
 
 import ctypes
+import errno
 import logging
 import subprocess
 
@@ -51,6 +52,14 @@ from satgonetem.ports import CommandRunner, default_runner
 
 CLONE_NEWNET = 0x40000000
 HOST_NS_PATH = "/proc/1/ns/net"
+
+
+def _is_enodev(exc: Exception) -> bool:
+    """Return True if *exc* represents ENODEV (no such device)."""
+    return (
+        getattr(exc, "code", None) == errno.ENODEV
+        or getattr(exc, "errno", None) == errno.ENODEV
+    )
 
 
 class _NamespaceRestoreError(RuntimeError):
@@ -392,11 +401,47 @@ class HILManager:
                     if "exist" not in str(exc).lower():
                         raise
                     # A previous rollback may have left the SAT-side veth
-                    # behind. Remove it and retry once; deleting the SAT side
-                    # also removes the kernel-created host peer.
-                    stale = ipr.link("get", ifname=sat_iface)
+                    # behind, or left only the host-side peer (hil{gnd_id}).
+                    # Remove whichever stale side exists and retry once.
+                    try:
+                        stale = ipr.link("get", ifname=sat_iface)
+                    except Exception as get_exc:
+                        if not _is_enodev(get_exc):
+                            raise
+                        stale = []
                     if stale:
                         ipr.link("del", index=stale[0]["index"])
+                    else:
+                        if libc.setns(saved_ns.fileno(), CLONE_NEWNET) != 0:
+                            logging.error(
+                                "HIL: failed to restore host network namespace "
+                                "for %s (pid %d)",
+                                sat_name,
+                                sat_pid,
+                            )
+                            raise _NamespaceRestoreError(
+                                "HIL: failed to restore host network namespace "
+                                f"for {sat_name} (pid {sat_pid})"
+                            ) from exc
+                        restored_host_ns = True
+                        with IPRoute() as host_ipr:
+                            try:
+                                host_stale = host_ipr.link("get", ifname=host_iface)
+                            except Exception as host_exc:
+                                if not _is_enodev(host_exc):
+                                    raise
+                                host_stale = []
+                            if host_stale:
+                                host_ipr.link("del", index=host_stale[0]["index"])
+                        with open(f"/proc/{sat_pid}/ns/net", "rb") as reenter_fd:
+                            if libc.setns(reenter_fd.fileno(), CLONE_NEWNET) != 0:
+                                logging.error(
+                                    "HIL: failed to re-enter namespace of %s (pid %d)",
+                                    sat_name,
+                                    sat_pid,
+                                )
+                                return False
+                            restored_host_ns = False
                     ipr.link(
                         "add",
                         ifname=sat_iface,
@@ -612,7 +657,12 @@ class HILManager:
 
         try:
             with IPRoute() as ipr:
-                br_links = ipr.link("get", ifname=br_name)
+                try:
+                    br_links = ipr.link("get", ifname=br_name)
+                except Exception as exc:
+                    if not _is_enodev(exc):
+                        raise
+                    br_links = []
                 if br_links:
                     ipr.link("del", index=br_links[0]["index"])
             logging.info("HIL: bridge %s torn down for %s", br_name, gnd_name)
@@ -861,6 +911,14 @@ class HILManager:
         Called by TopologyManager during project teardown, before the launcher
         removes satellite containers. Deleting bridges releases hardware
         interfaces cleanly. Container removal cascades to veth peer deletion.
+
+        Raises:
+            RuntimeError: If one or more bridges failed to tear down.
         """
+        failed: list[str] = []
         for gnd_name in list(self._hil_bridges.keys()):
-            self._teardown_bridge(gnd_name)
+            if self._teardown_bridge(gnd_name) is False:
+                failed.append(gnd_name)
+        if failed:
+            names = ", ".join(failed)
+            raise RuntimeError(f"HIL: failed to tear down bridge(s) for: {names}")

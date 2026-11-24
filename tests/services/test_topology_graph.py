@@ -133,3 +133,17 @@ class TestBuildCurrentGraph:
             for _, _, data in graph.edges(data=True)
         )
         topology.preference = "latency_prefer_ISLs"
+
+    def test_removes_admin_down_edge(self, topology):
+        """H-14: Links with admin_up=False must be excluded from the routable graph."""
+        active_link = next(link for link in topology.links.values() if link.is_active)
+        u = active_link.source.satcom_object.topology_uniq_id
+        v = active_link.target.satcom_object.topology_uniq_id
+
+        assert build_current_graph(topology).has_edge(u, v)
+
+        active_link.admin_up = False
+        try:
+            assert not build_current_graph(topology).has_edge(u, v)
+        finally:
+            active_link.admin_up = True

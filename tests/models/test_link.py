@@ -758,3 +758,88 @@ class TestLinkMissingPosition:
         assert compute.call_count == 2
         assert link.peer1_capacity == 1234
         assert link.peer2_capacity == 5678
+
+
+class TestLinkBudgetDirectionAndUnclosable:
+    """Regression tests for H-19: direction assignment and unclosable links."""
+
+    def _attach_antennas(self, sat_node, gnd_node):
+        from satgonetem.link_budget.antenna import Antenna
+
+        sat_node.type = "Satellite"
+        gnd_node.type = "GroundStation"
+        sat_node.antenna = Antenna(
+            diameter=1.0, efficiency=0.6, sspa_output_power_db=40.0
+        )
+        gnd_node.antenna = Antenna(
+            diameter=2.0, efficiency=0.6, sspa_output_power_db=30.0
+        )
+
+    def test_sat_to_gs_assigns_downlink_to_peer1_and_uplink_to_peer2(
+        self, sat_node, gnd_node
+    ):
+        self._attach_antennas(sat_node, gnd_node)
+        with patch.object(
+            LinkBudgetService, "compute_one_way", side_effect=[1200, 300]
+        ):
+            link = Link(
+                source=sat_node,
+                target=gnd_node,
+                distance=550_000.0,
+                type="GroundStationLink",
+                default_capacity_kbps=777,
+                use_budget=True,
+            )
+
+        assert link.peer1_capacity == 1200
+        assert link.peer2_capacity == 300
+
+    def test_gs_to_sat_assigns_uplink_to_peer1_and_downlink_to_peer2(
+        self, sat_node, gnd_node
+    ):
+        self._attach_antennas(sat_node, gnd_node)
+        with patch.object(
+            LinkBudgetService, "compute_one_way", side_effect=[1200, 300]
+        ):
+            link = Link(
+                source=gnd_node,
+                target=sat_node,
+                distance=550_000.0,
+                type="GroundStationLink",
+                default_capacity_kbps=777,
+                use_budget=True,
+            )
+
+        assert link.peer1_capacity == 300
+        assert link.peer2_capacity == 1200
+
+    @patch("satgonetem.link_budget.service.calculate_atmospheric_attenuation_dB")
+    @patch("satgonetem.link_budget.service.calculate_free_space_loss_db")
+    def test_physically_unclosable_link_stays_zero_instead_of_default(
+        self, mock_fsl, mock_atm, sat_node, gnd_node
+    ):
+        self._attach_antennas(sat_node, gnd_node)
+        mock_fsl.return_value = 300.0
+        mock_atm.return_value = (1.0, 0.5, 0.2, 0.2, 0.1)
+
+        class _UnclosableStrategy:
+            def compute_capacity(self, cn0_dbhz: float, bandwidth_hz: float) -> float:
+                raise RuntimeError("No suitable ModCod")
+
+        class _FixedStrategy:
+            def compute_capacity(self, cn0_dbhz: float, bandwidth_hz: float) -> float:
+                return 500_000.0  # 500 kbps
+
+        link = Link(
+            source=sat_node,
+            target=gnd_node,
+            distance=550_000.0,
+            type="GroundStationLink",
+            default_capacity_kbps=777,
+            use_budget=True,
+            downlink_capacity_strategy=_UnclosableStrategy(),
+            uplink_capacity_strategy=_FixedStrategy(),
+        )
+
+        assert link.peer1_capacity == 0
+        assert link.peer2_capacity == 500

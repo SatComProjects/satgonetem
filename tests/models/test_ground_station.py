@@ -36,13 +36,17 @@ class TestGroundStationInit:
         gs = GroundStation("Gnd0")
         assert gs.interfaces == []
 
+    def test_satcom_object_is_none_by_default(self):
+        gs = GroundStation("Gnd0")
+        assert gs.satcom_object is None
+
 
 class TestGroundStationSyncPositionFromSatcom:
     """Tests for GroundStation.sync_position_from_satcom."""
 
     def test_raises_when_satcom_object_not_set(self):
         gs = GroundStation("Gnd0")
-        with pytest.raises((ValueError, AttributeError)):
+        with pytest.raises(ValueError, match="Satcom object is not set"):
             gs.sync_position_from_satcom()
 
     def test_updates_latitude_longitude_altitude(self):

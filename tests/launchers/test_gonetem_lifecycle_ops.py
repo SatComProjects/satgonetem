@@ -563,6 +563,53 @@ def test_update_links_wraps_generic_failure_with_chunk_size():
     assert excinfo.value.__cause__ is cause
 
 
+def test_update_links_reports_server_error_when_status_not_ok_and_results_short():
+    launcher = _new_launcher()
+    launcher._client = MagicMock()
+    launcher._request = netem_pb2.ProjectRequest(id="prj-1")
+    launcher._client.LinkUpdateMany.return_value = netem_pb2.LinkUpdateManyResponse(
+        status=netem_pb2.Status(
+            code=netem_pb2.StatusCode.ERROR, error="project stopped"
+        )
+    )
+
+    with pytest.raises(RuntimeError, match="project stopped"):
+        launcher.update_links([_link(), _link()])
+
+
+def test_update_links_preserves_non_ok_status_across_chunks():
+    from satgonetem.launchers.gonetem_launcher import LINK_UPDATE_CHUNK_SIZE
+
+    launcher = _new_launcher()
+    launcher._client = MagicMock()
+    launcher._request = netem_pb2.ProjectRequest(id="prj-1")
+    links = [_link() for _ in range(LINK_UPDATE_CHUNK_SIZE + 1)]
+
+    chunk1_resp = netem_pb2.LinkUpdateManyResponse(
+        status=netem_pb2.Status(
+            code=netem_pb2.StatusCode.ERROR, error="partial failure"
+        ),
+        updated=LINK_UPDATE_CHUNK_SIZE - 1,
+    )
+    for _ in range(LINK_UPDATE_CHUNK_SIZE):
+        chunk1_resp.results.add(status=netem_pb2.Status(code=netem_pb2.OK))
+
+    chunk2_resp = netem_pb2.LinkUpdateManyResponse(
+        status=netem_pb2.Status(code=netem_pb2.OK),
+        updated=1,
+    )
+    chunk2_resp.results.add(status=netem_pb2.Status(code=netem_pb2.OK))
+
+    launcher._client.LinkUpdateMany.side_effect = [chunk1_resp, chunk2_resp]
+
+    merged = launcher.update_links(links)
+
+    assert merged.status.code == netem_pb2.StatusCode.ERROR
+    assert merged.status.error == "partial failure"
+    assert len(merged.results) == len(links)
+    assert merged.updated == LINK_UPDATE_CHUNK_SIZE
+
+
 def test_start_containers_deletes_project_file_on_failure(grpc_client, tmp_path):
     project_file = tmp_path / "project.gnet"
     project_file.write_bytes(b"project")

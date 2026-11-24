@@ -188,3 +188,43 @@ def test_runner_passes_none_path_for_generated_scenario(tmp_path):
     runner.run(output_dir=tmp_path / "run", live=False, realtime=False)
 
     assert calls[0][0] is None
+
+
+def test_ground_station_from_mapping_accepts_negative_coordinates(tmp_path):
+    path = _write(
+        tmp_path,
+        {
+            "name": "southern-western",
+            "duration_s": 60,
+            "shells": [{"identifier": "LEO"}],
+            "ground_stations": [
+                {"name": "Santiago", "latitude": -33.4489, "longitude": -70.6693},
+                {"name": "SouthPole", "latitude": -90.0, "longitude": -180.0},
+            ],
+        },
+    )
+
+    scenario = Scenario.from_file(path)
+
+    assert scenario.ground_stations[0] == GroundStationSpec(
+        "Santiago", -33.4489, -70.6693
+    )
+    assert scenario.ground_stations[1] == GroundStationSpec("SouthPole", -90.0, -180.0)
+
+
+@pytest.mark.parametrize(
+    ("latitude", "longitude", "field"),
+    [
+        (-90.1, 0.0, "latitude"),
+        (90.1, 0.0, "latitude"),
+        (0.0, -180.1, "longitude"),
+        (0.0, 180.1, "longitude"),
+    ],
+)
+def test_ground_station_from_mapping_rejects_out_of_range_coordinates(
+    latitude, longitude, field
+):
+    with pytest.raises(ScenarioError, match=field):
+        GroundStationSpec.from_mapping(
+            {"name": "Out", "latitude": latitude, "longitude": longitude}
+        )

@@ -379,3 +379,18 @@ def test_flow_accepts_exit_code_one_and_reports_full_loss():
     assert flow.status() == Hping3Status.DONE
     assert flow.results().packet_loss_percent == 100.0
     assert src.execute_command.call_args.kwargs["ok_exit_codes"] == (0, 1)
+
+
+def test_hping3_flow_stop_process_scopes_pkill_to_target_ip():
+    """H-22: stopping an Hping3Flow must not kill unrelated hping3 processes."""
+    src = _make_node("gs0", "10.0.0.1")
+    dst = _make_node("gs1", "10.0.0.2")
+    flow = Hping3Flow(src, dst, Hping3Config(count=5))
+
+    flow._stop_process()
+
+    cmd = src.execute_command.call_args.args[0]
+    assert "pkill -x hping3" not in cmd
+    assert "pkill -f" in cmd
+    assert "[h]ping3" in cmd
+    assert "10.0.0.2" in cmd

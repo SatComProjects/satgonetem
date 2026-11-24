@@ -89,7 +89,7 @@ def test_create_dummy_interface_raises_when_host_namespace_restore_fails(
     target_ns = _FakeNsFile(22)
     _install_fake_open(
         monkeypatch,
-        {"/proc/self/ns/net": saved_ns, "/proc/123/ns/net": target_ns},
+        {"/proc/thread-self/ns/net": saved_ns, "/proc/123/ns/net": target_ns},
     )
     ipr = _fake_iproute()
     monkeypatch.setattr(pyroute2, "IPRoute", MagicMock(return_value=ipr))
@@ -119,7 +119,7 @@ def test_create_veth_raises_when_host_namespace_restore_fails(
     _install_fake_open(
         monkeypatch,
         {
-            "/proc/self/ns/net": saved_ns,
+            "/proc/thread-self/ns/net": saved_ns,
             "/proc/10/ns/net": source_ns,
             "/proc/11/ns/net": destination_ns,
         },
@@ -157,7 +157,7 @@ def test_create_dummy_interface_does_not_restore_after_failed_entry(
     target_ns = _FakeNsFile(22)
     _install_fake_open(
         monkeypatch,
-        {"/proc/self/ns/net": saved_ns, "/proc/123/ns/net": target_ns},
+        {"/proc/thread-self/ns/net": saved_ns, "/proc/123/ns/net": target_ns},
     )
     iproute_factory = MagicMock()
     monkeypatch.setattr(pyroute2, "IPRoute", iproute_factory)
@@ -173,3 +173,101 @@ def test_create_dummy_interface_does_not_restore_after_failed_entry(
     ]
     assert saved_ns.closed is True
     assert target_ns.closed is True
+
+
+def test_create_dummy_interface_opens_thread_self_netns(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    libc = MagicMock()
+    libc.setns.return_value = 0
+    monkeypatch.setattr(ctypes, "CDLL", MagicMock(return_value=libc))
+
+    saved_ns = _FakeNsFile(11)
+    target_ns = _FakeNsFile(22)
+    opened: list[str] = []
+
+    def fake_open(path, *args, **kwargs):
+        key = str(path)
+        opened.append(key)
+        if key == "/proc/thread-self/ns/net":
+            return saved_ns
+        if key == "/proc/123/ns/net":
+            return target_ns
+        raise AssertionError(f"Unexpected path opened: {key}")
+
+    monkeypatch.setattr(builtins, "open", fake_open)
+    ipr = _fake_iproute()
+    monkeypatch.setattr(pyroute2, "IPRoute", MagicMock(return_value=ipr))
+
+    LinuxNetworkNamespace().create_dummy_interface(123, "dummy0")
+
+    assert "/proc/thread-self/ns/net" in opened
+    assert "/proc/self/ns/net" not in opened
+    assert saved_ns.closed is True
+
+
+def test_create_veth_opens_thread_self_netns(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    libc = MagicMock()
+    libc.setns.return_value = 0
+    monkeypatch.setattr(ctypes, "CDLL", MagicMock(return_value=libc))
+
+    saved_ns = _FakeNsFile(11)
+    source_ns = _FakeNsFile(22)
+    destination_ns = _FakeNsFile(33)
+    opened: list[str] = []
+
+    def fake_open(path, *args, **kwargs):
+        key = str(path)
+        opened.append(key)
+        mapping = {
+            "/proc/thread-self/ns/net": saved_ns,
+            "/proc/10/ns/net": source_ns,
+            "/proc/11/ns/net": destination_ns,
+        }
+        if key in mapping:
+            return mapping[key]
+        raise AssertionError(f"Unexpected path opened: {key}")
+
+    monkeypatch.setattr(builtins, "open", fake_open)
+    ipr = _fake_iproute()
+    monkeypatch.setattr(pyroute2, "IPRoute", MagicMock(return_value=ipr))
+
+    LinuxNetworkNamespace().create_veth(10, 11, "eth0", "eth1")
+
+    assert "/proc/thread-self/ns/net" in opened
+    assert "/proc/self/ns/net" not in opened
+    assert saved_ns.closed is True
+
+
+def test_create_dummy_interface_falls_back_to_proc_self_when_thread_self_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    libc = MagicMock()
+    libc.setns.return_value = 0
+    monkeypatch.setattr(ctypes, "CDLL", MagicMock(return_value=libc))
+
+    saved_ns = _FakeNsFile(11)
+    target_ns = _FakeNsFile(22)
+    opened: list[str] = []
+
+    def fake_open(path, *args, **kwargs):
+        key = str(path)
+        opened.append(key)
+        if key == "/proc/thread-self/ns/net":
+            raise FileNotFoundError(key)
+        if key == "/proc/self/ns/net":
+            return saved_ns
+        if key == "/proc/123/ns/net":
+            return target_ns
+        raise AssertionError(f"Unexpected path opened: {key}")
+
+    monkeypatch.setattr(builtins, "open", fake_open)
+    ipr = _fake_iproute()
+    monkeypatch.setattr(pyroute2, "IPRoute", MagicMock(return_value=ipr))
+
+    LinuxNetworkNamespace().create_dummy_interface(123, "dummy0")
+
+    assert opened[:2] == ["/proc/thread-self/ns/net", "/proc/self/ns/net"]
+    assert saved_ns.closed is True

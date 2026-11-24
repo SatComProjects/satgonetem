@@ -148,13 +148,20 @@ class LinuxNetworkNamespace:
             errno = ctypes.get_errno()
             raise OSError(errno, f"setns failed for {target}")
 
+    @staticmethod
+    def _open_current_netns() -> Any:
+        try:
+            return open("/proc/thread-self/ns/net", "rb")
+        except FileNotFoundError:
+            return open("/proc/self/ns/net", "rb")
+
     def create_dummy_interface(self, pid: int, name: str) -> None:
         import ctypes
 
         from pyroute2 import IPRoute
 
         libc = ctypes.CDLL("libc.so.6", use_errno=True)
-        with open("/proc/self/ns/net", "rb") as saved_ns:
+        with self._open_current_netns() as saved_ns:
             entered_target_ns = False
             try:
                 with open(f"/proc/{pid}/ns/net", "rb") as ns_fd:
@@ -182,7 +189,7 @@ class LinuxNetworkNamespace:
         from pyroute2 import IPRoute
 
         libc = ctypes.CDLL("libc.so.6", use_errno=True)
-        with open("/proc/self/ns/net", "rb") as saved_ns:
+        with self._open_current_netns() as saved_ns:
             entered_target_ns = False
             try:
                 with open(f"/proc/{source_pid}/ns/net", "rb") as ns_fd:

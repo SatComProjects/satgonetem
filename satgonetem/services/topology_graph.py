@@ -140,7 +140,11 @@ def build_current_graph(manager: Any):
             return True
         # sat_com_topology 5 keeps the disabled flag on the link object;
         # the exported edge data only carries the model dump on request.
-        return link.is_active and not getattr(link.satcom_object, "disabled", False)
+        return (
+            link.is_active
+            and getattr(link, "admin_up", True)
+            and not getattr(link.satcom_object, "disabled", False)
+        )
 
     graph.remove_edges_from(
         [(u, v) for u, v, data in graph.edges(data=True) if not is_routable(u, v, data)]

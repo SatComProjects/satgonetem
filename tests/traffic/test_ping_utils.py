@@ -265,3 +265,19 @@ def test_flow_accepts_exit_code_one_and_reports_full_loss():
     assert flow.status() == PingStatus.DONE
     assert flow.results().packet_loss_percent == 100.0
     assert src.execute_command.call_args.kwargs["ok_exit_codes"] == (0, 1)
+
+
+def test_ping_flow_stop_process_scopes_pkill_to_target_ip():
+    """H-22: stopping a PingFlow must not kill unrelated ping processes."""
+    src = _make_node("gs0", "10.0.0.1")
+    dst = _make_node("gs1", "10.0.0.2")
+    flow = PingFlow(src, dst, PingConfig(count=5))
+
+    flow._stop_process()
+
+    cmd = src.execute_command.call_args.args[0]
+    assert "pkill -x ping" not in cmd
+    assert "pkill -f" in cmd
+    assert "[p]ing" in cmd
+    assert "10.0.0.2" in cmd
+    assert "10.0.0.1" in cmd

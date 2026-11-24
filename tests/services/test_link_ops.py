@@ -926,3 +926,71 @@ def test_hil_teardown_failure_keeps_link_and_local_state():
     assert fake.links == {key: link}
     fake.address_plan.release_link.assert_not_called()
     assert fake.interfaces == link.peer_interfaces
+
+
+def test_remove_link_after_failed_backend_add_skips_backend_delete_and_cleans_up():
+    """H-10: Removing a link never created on the backend must not loop on LinkDel."""
+    link = make_link(make_satellite("Sat20"), make_satellite("Sat21"))
+    link.to_add = True
+    key = frozenset((link.source.name, link.target.name))
+    launcher = MagicMock()
+    launcher.add_link.side_effect = RuntimeError("LinkAdd failed")
+    launcher.delete_link.side_effect = RuntimeError("link does not exist")
+    address_plan = MagicMock()
+    build_interfaces = MagicMock()
+
+    fake = _FakeTopology(
+        {key: link},
+        launcher=launcher,
+        address_plan=address_plan,
+        interfaces=[],
+        interface_version=0,
+        _build_interfaces_from_link=build_interfaces,
+    )
+
+    # First tick: backend add fails, link stays in _failed_link_adds with no interfaces.
+    LinkOpsMixin.bulk_link_operations(
+        fake,
+        to_del=False,
+        to_update=False,
+        links_to_add=[link],
+        links_to_update=[],
+        links_to_remove=[],
+    )
+    LinkOpsMixin._perform_local_link_operations(
+        fake,
+        to_del=False,
+        to_update=False,
+        links_to_add=[link],
+        links_to_update=[],
+        links_to_remove=[],
+    )
+    assert key in fake._link_add_failures()
+    assert key not in fake._link_backend_adds()
+    assert link.peer_interfaces == []
+
+    # Second tick: link is removed before add ever succeeded.
+    link.to_add = False
+    link.to_remove = True
+    LinkOpsMixin.bulk_link_operations(
+        fake,
+        to_add=False,
+        to_update=False,
+        links_to_add=[],
+        links_to_update=[],
+        links_to_remove=[link],
+    )
+    LinkOpsMixin._perform_local_link_operations(
+        fake,
+        to_add=False,
+        to_update=False,
+        links_to_add=[],
+        links_to_update=[],
+        links_to_remove=[link],
+    )
+
+    launcher.delete_link.assert_not_called()
+    assert link.to_delete is False
+    assert fake.links == {}
+    assert key not in fake._link_add_failures()
+    address_plan.release_link.assert_called_once_with(key)
