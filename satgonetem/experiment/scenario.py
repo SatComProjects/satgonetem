@@ -213,6 +213,8 @@ class EventSpec:
         if self.action in {"link_down", "link_up", "impairment"}:
             _non_empty_str(self.src, "event.src")
             _non_empty_str(self.dst, "event.dst")
+        elif self.action == "node_restart":
+            _non_empty_str(self.src, "event.src")
         _number(self.at_s, "event.at_s")
         _number(self.duration_s, "event.duration_s")
         if self.loss_percent is not None:
@@ -227,6 +229,12 @@ class EventSpec:
             or self.jitter_ms < 0
         ):
             raise ScenarioError("event.jitter_ms must be a non-negative integer")
+        if (
+            self.action == "impairment"
+            and self.loss_percent is None
+            and self.jitter_ms is None
+        ):
+            raise ScenarioError("event impairment requires loss_percent or jitter_ms")
 
     @classmethod
     def from_mapping(cls, data: Mapping[str, Any], label: str = "event") -> EventSpec:
@@ -255,7 +263,7 @@ class EventSpec:
         if action in {"link_down", "link_up", "impairment"}:
             src = _non_empty_str(src, f"{label}.src")
             dst = _non_empty_str(dst, f"{label}.dst")
-        elif src is not None:
+        elif action == "node_restart" or src is not None:
             src = _non_empty_str(src, f"{label}.src")
 
         loss = data.get("loss_percent")

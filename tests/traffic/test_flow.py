@@ -81,3 +81,15 @@ def test_flow_stopped_after_entering_execute_calls_stop_process() -> None:
     assert flow.executed is True
     assert flow.stop_calls == 1
     assert flow.is_alive() is False
+
+
+def test_stop_before_zero_delay_run_prevents_execute() -> None:
+    flow = _RecordingFlow(delay=0.0)
+    flow._status = flow.STATUS.RUNNING
+    flow._waiting_delay = False
+    flow._stop_event.set()
+
+    flow._run()
+
+    assert flow.executed is False
+    assert flow.status() == flow.STATUS.ERROR

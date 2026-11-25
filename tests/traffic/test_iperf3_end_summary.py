@@ -245,3 +245,31 @@ def test_end_section_is_read_dynamically_from_the_shared_document() -> None:
     data["end"]["sum_sent"]["bytes"] = 500
 
     assert summary.total_bytes_sent == 500
+
+
+def test_udp_bidir_sum_and_sum_bidir_reverse_are_aggregated_without_sum_received() -> (
+    None
+):
+    summary = _summary(
+        {
+            "sum": {
+                "packets": 100,
+                "lost_packets": 10,
+                "jitter_ms": 1.0,
+                "out_of_order": 2,
+            },
+            "sum_bidir_reverse": {
+                "packets": 200,
+                "lost_packets": 20,
+                "jitter_ms": 4.0,
+                "out_of_order": 3,
+            },
+        }
+    )
+
+    assert summary.total_packets == 300
+    assert summary.total_lost_packets == 30
+    assert summary.avg_loss_percent == pytest.approx(10.0)
+    # Forward received = 90 (jitter 1.0), reverse received = 180 (jitter 4.0) -> weighted = 3.0
+    assert summary.avg_jitter_ms == pytest.approx(3.0)
+    assert summary.total_out_of_order == 5

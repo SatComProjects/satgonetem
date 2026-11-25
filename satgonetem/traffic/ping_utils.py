@@ -58,7 +58,7 @@ class PingConfig:
 
 _STATS_RE = re.compile(
     r"(\d+) packets transmitted, (\d+) received"
-    r"(?:, \+\d+ errors)?"
+    r"(?:, \+\d+ \w+)*"
     r", ([\d.]+)% packet loss"
 )
 _RTT_RE = re.compile(r"rtt min/avg/max/mdev = ([\d.]+)/([\d.]+)/([\d.]+)/([\d.]+) ms")

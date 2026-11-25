@@ -463,10 +463,16 @@ class WeightedConnection(GroundToSpaceConnectionStrategy):
             )
 
             # Calculate the weight based on elevation and connected stations
+            denom = 90.0 - ground_object.ground_object_domain.elevation_above_horizon
             normalized_elevation = (
-                visible_satellite.elevation_above_horizon
-                - ground_object.ground_object_domain.elevation_above_horizon
-            ) / (90 - ground_object.ground_object_domain.elevation_above_horizon)
+                1.0
+                if denom <= 0.0
+                else (
+                    visible_satellite.elevation_above_horizon
+                    - ground_object.ground_object_domain.elevation_above_horizon
+                )
+                / denom
+            )
             weight = (
                 self.elevation_weight * normalized_elevation
                 + self.connected_stations_weight

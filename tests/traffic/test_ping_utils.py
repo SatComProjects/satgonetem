@@ -281,3 +281,17 @@ def test_ping_flow_stop_process_scopes_pkill_to_target_ip():
     assert "[p]ing" in cmd
     assert "10.0.0.2" in cmd
     assert "10.0.0.1" in cmd
+
+
+def test_ping_results_parses_duplicate_and_corrupted_packet_annotations():
+    raw = (
+        "PING 10.0.0.2 (10.0.0.2) 56(84) bytes of data.\n"
+        "64 bytes from 10.0.0.2: icmp_seq=1 ttl=64 time=1.23 ms\n"
+        "--- 10.0.0.2 ping statistics ---\n"
+        "5 packets transmitted, 5 received, +1 duplicates, 0% packet loss, time 4004ms\n"
+        "rtt min/avg/max/mdev = 1.0/1.2/1.5/0.2 ms\n"
+    )
+    res = PingResults(raw_output=raw, config=PingConfig(count=5))
+    assert res.packets_transmitted == 5
+    assert res.packets_received == 5
+    assert res.packet_loss_percent == 0.0

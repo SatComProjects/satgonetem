@@ -135,3 +135,49 @@ def test_generate_plots_stats_delegate_to_results(tmp_path, capsys):
     assert "Not available" not in out, out
     assert re.search(r"Avg RTT:\s+[\d.]+ ms", out), out
     assert re.search(r"Avg Send CWnd:\s+[\d.]+ KB", out), out
+
+
+def test_generate_plots_skips_omitted_intervals(tmp_path):
+    doc = {
+        "start": {
+            "test_start": {
+                "protocol": "TCP",
+                "duration": 1,
+                "num_streams": 1,
+            }
+        },
+        "intervals": [
+            {
+                "streams": [
+                    {
+                        "socket": 5,
+                        "start": 0.0,
+                        "end": 1.0,
+                        "seconds": 1.0,
+                        "bytes": 999_999_999,
+                        "bits_per_second": 9_999_999_999.0,
+                        "omitted": True,
+                    }
+                ],
+                "sum": {
+                    "start": 0.0,
+                    "end": 1.0,
+                    "seconds": 1.0,
+                    "bytes": 999_999_999,
+                    "bits_per_second": 9_999_999_999.0,
+                    "omitted": True,
+                },
+            }
+        ],
+        "end": {
+            "sum_sent": {"seconds": 1.0, "bytes": 0, "bits_per_second": 0.0},
+            "sum_received": {"seconds": 1.0, "bytes": 0, "bits_per_second": 0.0},
+        },
+    }
+    source = tmp_path / "omitted.json"
+    source.write_text(json.dumps(doc))
+
+    saved = generate_iperf3_plots(str(source), "omitted_run", use_tmp_dir=False)
+
+    # All intervals were omitted=True, so no interval plots should be produced.
+    assert saved == []

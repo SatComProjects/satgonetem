@@ -245,3 +245,24 @@ def test_polygon_and_fast_coverage_agree_at_the_pole() -> None:
     fast = coverage_percentage_fast(sats, elev_min_deg=10.0)
 
     assert polygon == pytest.approx(fast, abs=1.0)
+
+
+def test_polar_ring_with_nonzero_lon0_closes_vertically_to_pole() -> None:
+    lon_deg, lat_deg, polar_flag = coverage_ring_from_elevation(
+        80.0, 170.0, 550.0, 10.0, 36
+    )
+
+    assert polar_flag is True
+    assert lon_deg is not None and lat_deg is not None
+    # The first point before the ring data must share lon with the ring start
+    # so the polygon steps vertically to the pole instead of diagonally across 350 deg.
+    assert lon_deg[1] == pytest.approx(lon_deg[2])
+    assert lat_deg[1] == pytest.approx(90.0)
+    assert lon_deg[-2] == pytest.approx(lon_deg[-3])
+    assert lat_deg[-2] == pytest.approx(90.0)
+
+
+def test_coverage_grid_res_0_3_stays_within_bounds() -> None:
+    sats = [_sat(0.0, 0.0)]
+    fast = coverage_percentage_fast(sats, elev_min_deg=10.0, grid_res_deg=0.3)
+    assert 0.0 <= fast <= 100.0

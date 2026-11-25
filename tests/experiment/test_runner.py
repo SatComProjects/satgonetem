@@ -608,3 +608,41 @@ def test_write_manifest_is_atomic_on_failure(tmp_path):
 
     assert target.read_text() == "original\n"
     assert list(tmp_path.glob(".scenario.yaml*")) == []
+
+
+def test_keyboard_interrupt_stops_active_flows_without_blocking_on_join(tmp_path):
+    join_timeouts: list[float | None] = []
+    stop_called = False
+
+    class _SlowFlow:
+        source = type("N", (), {"name": "Gnd0"})()
+        destination = type("N", (), {"name": "Gnd1"})()
+
+        def join(self, timeout=None):
+            join_timeouts.append(timeout)
+
+        def is_alive(self):
+            return not stop_called
+
+        def stop(self):
+            nonlocal stop_called
+            stop_called = True
+
+    class _InterruptTopology(_FakeTopology):
+        def next_step(self):
+            runner._flows.append(_SlowFlow())
+            raise KeyboardInterrupt()
+
+    topology = _InterruptTopology()
+    scenario = _scenario(tmp_path, traffic=[], events=[])
+    runner = ExperimentRunner(
+        scenario,
+        topology_factory=lambda path, config: topology,
+        collector_factory=lambda topo: _Collector(),
+    )
+
+    with pytest.raises(KeyboardInterrupt):
+        runner.run(output_dir=tmp_path / "run", live=False, realtime=False)
+
+    assert stop_called is True
+    assert not any(t is not None and t > 10.0 for t in join_timeouts)

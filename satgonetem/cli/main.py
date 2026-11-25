@@ -48,9 +48,15 @@ def _check_docker() -> DoctorCheck:
 def _check_server(address: str) -> DoctorCheck:
     try:
         host, port_text = address.rsplit(":", 1)
+        if host.startswith("[") and host.endswith("]"):
+            host = host[1:-1]
         port = int(port_text)
     except (ValueError, AttributeError):
         return DoctorCheck("gonetem", False, f"invalid server address {address!r}")
+    if not (1 <= port <= 65535):
+        return DoctorCheck(
+            "gonetem", False, f"invalid server port {port} in {address!r}"
+        )
     try:
         with socket.create_connection((host, port), timeout=2):
             return DoctorCheck("gonetem", True, f"{host}:{port} reachable")

@@ -48,7 +48,7 @@ class Hping3Flow(ThreadedFlow):
 
     def _stop_process(self) -> None:
         dst_ip = self.destination.loopback.ipv4
-        pattern = f"[h]ping3 .* {dst_ip}"
+        pattern = f"[h]ping3 {dst_ip}( |$)"
         self.source.execute_command(
             f"pkill -f {shlex.quote(pattern)} 2>/dev/null; true", detach=True
         )
