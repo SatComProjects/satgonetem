@@ -131,12 +131,29 @@ def build_connectivity_matrix(
     scheduler.run()
     scheduler.join()
 
+    status_fn = getattr(scheduler, "status", None)
+    if callable(status_fn):
+        from satgonetem.traffic.flow_scheduler import FlowSchedulerStatus
+
+        if status_fn() == FlowSchedulerStatus.ERROR:
+            errors_fn = getattr(scheduler, "errors", None)
+            if callable(errors_fn):
+                errors_fn()
+            raise RuntimeError("Connectivity probe scheduler failed")
+
     results: list[ConnectivityResult] = []
     for flow in flows:
         source_name = str(getattr(getattr(flow, "source", None), "name", ""))
         destination_name = str(getattr(getattr(flow, "destination", None), "name", ""))
         try:
-            parsed = scheduler.results(flow)
+            try:
+                parsed = scheduler.results(flow)
+            except KeyError:
+                flow_results = getattr(flow, "results", None)
+                if callable(flow_results):
+                    parsed = flow_results()
+                else:
+                    raise
             results.append(
                 ConnectivityResult(
                     source=source_name,

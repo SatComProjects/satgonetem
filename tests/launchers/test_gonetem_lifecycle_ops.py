@@ -682,3 +682,25 @@ def test_start_containers_accepts_a_complete_stream_with_no_counts(
     launcher, _connection, _factory = _start_launcher(tmp_path, grpc_client)
 
     assert launcher.start_containers([]) == (0.0, 0.0)
+
+
+def test_close_project_clears_request_only_on_success(grpc_client, tmp_path):
+    grpc_client.TopologyRun.return_value = []
+    launcher, _connection, _factory = _start_launcher(tmp_path, grpc_client)
+    launcher.start_containers([])
+
+    # Failure case: retains _request so force_close_project() can still clean up
+    grpc_client.ProjectClose.side_effect = RuntimeError("close boom")
+    with pytest.raises(RuntimeError, match="close boom"):
+        launcher.close_project()
+    assert launcher._request is not None
+
+    # Success case: clears _request so subsequent force_close_project() is a no-op
+    grpc_client.ProjectClose.side_effect = None
+    grpc_client.ProjectClose.return_value = [
+        netem_pb2.ProjectCloseMsg(code=netem_pb2.ProjectCloseMsg.NODE_COUNT, total=1),
+        netem_pb2.ProjectCloseMsg(code=netem_pb2.ProjectCloseMsg.NODE_CLOSE, total=1),
+    ]
+    launcher._client = grpc_client
+    launcher.close_project()
+    assert launcher._request is None

@@ -438,3 +438,30 @@ def test_link_request_defaults_to_zero_impairments():
     assert request.link.peer2qos.loss == 0.0
     assert request.link.peer1qos.jitter == 0
     assert request.link.peer2qos.jitter == 0
+
+
+def test_link_capacities_preserves_zero_for_unclosable_budget_link():
+    launcher = _open_launcher()
+    link = _link()
+    link.use_budget = True
+    link.peer1_capacity = 0
+    link.peer2_capacity = 500
+
+    assert launcher._link_capacities_for(link) == (0, 500)
+
+
+def test_capture_interface_raises_on_deadline_with_only_empty_stdout_chunks():
+    launcher = _open_launcher()
+
+    class _Deadline(grpc.RpcError):
+        def code(self):
+            return grpc.StatusCode.DEADLINE_EXCEEDED
+
+    def stream(*args, **kwargs):
+        yield netem_pb2.CaptureSrvMsg(code=netem_pb2.CaptureSrvMsg.STDOUT, data=b"")
+        raise _Deadline()
+
+    launcher._client.NodeCapture.side_effect = stream
+
+    with pytest.raises(RuntimeError, match="NodeCapture.*failed"):
+        launcher.capture_interface("Sat0", 1, timeout_s=0.1)

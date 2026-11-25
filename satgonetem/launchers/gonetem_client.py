@@ -62,8 +62,11 @@ class GoNetEmClientMixin:
         return netem_pb2.LinkRequest(prjId=self._request.id, link=link_cfg)
 
     def _link_capacities_for(self, link) -> tuple[int, int]:
-        p1 = int(getattr(link, "peer1_capacity", 0) or 0)
-        p2 = int(getattr(link, "peer2_capacity", 0) or 0)
+        use_budget = bool(getattr(link, "use_budget", False))
+        p1_raw = getattr(link, "peer1_capacity", None)
+        p2_raw = getattr(link, "peer2_capacity", None)
+        p1 = int(p1_raw or 0)
+        p2 = int(p2_raw or 0)
         fb = int(getattr(link, "capacity", 0) or 0)
         link_type = getattr(link, "type", "")
         if link_type == "GroundStationLink":
@@ -72,7 +75,9 @@ class GoNetEmClientMixin:
             default = self.ground_object_capacity_kbps
         else:
             default = self.isl_capacity_kbps
-        return (p1 or fb or default), (p2 or fb or default)
+        rate1 = p1 if (use_budget and p1_raw is not None) else (p1 or fb or default)
+        rate2 = p2 if (use_budget and p2_raw is not None) else (p2 or fb or default)
+        return rate1, rate2
 
     # Lifecycle
 

@@ -155,6 +155,22 @@ class LinuxNetworkNamespace:
         except FileNotFoundError:
             return open("/proc/self/ns/net", "rb")
 
+    @staticmethod
+    def _lookup_interface_index(ipr: Any, name: str) -> int:
+        indices = ipr.link_lookup(ifname=name)
+        if not indices:
+            raise RuntimeError(f"Network interface {name!r} not found after creation")
+        return int(indices[0])
+
+    @staticmethod
+    def _delete_interface_best_effort(ipr: Any, name: str) -> None:
+        try:
+            indices = ipr.link_lookup(ifname=name)
+            if indices:
+                ipr.link("del", index=indices[0])
+        except Exception:  # noqa: BLE001 - best-effort rollback
+            pass
+
     def create_dummy_interface(self, pid: int, name: str) -> None:
         import ctypes
 
@@ -169,8 +185,12 @@ class LinuxNetworkNamespace:
                     entered_target_ns = True
                     with IPRoute() as ipr:
                         ipr.link("add", ifname=name, kind="dummy")
-                        idx = ipr.link_lookup(ifname=name)[0]
-                        ipr.link("set", index=idx, state="up")
+                        try:
+                            idx = self._lookup_interface_index(ipr, name)
+                            ipr.link("set", index=idx, state="up")
+                        except BaseException:
+                            self._delete_interface_best_effort(ipr, name)
+                            raise
             finally:
                 # A failed restore would silently leave this thread in the
                 # target namespace, so surface it instead of ignoring errno.
@@ -191,6 +211,8 @@ class LinuxNetworkNamespace:
         libc = ctypes.CDLL("libc.so.6", use_errno=True)
         with self._open_current_netns() as saved_ns:
             entered_target_ns = False
+            veth_created = False
+            in_destination_ns = False
             try:
                 with open(f"/proc/{source_pid}/ns/net", "rb") as ns_fd:
                     self._setns(libc, ns_fd, f"PID {source_pid}")
@@ -205,14 +227,27 @@ class LinuxNetworkNamespace:
                                 "net_ns_fd": f"/proc/{destination_pid}/ns/net",
                             },
                         )
-                        idx = ipr.link_lookup(ifname=source_name)[0]
+                        veth_created = True
+                        idx = self._lookup_interface_index(ipr, source_name)
                         ipr.link("set", index=idx, state="up")
 
                 with open(f"/proc/{destination_pid}/ns/net", "rb") as ns_fd:
                     self._setns(libc, ns_fd, f"PID {destination_pid}")
+                    in_destination_ns = True
                     with IPRoute() as ipr:
-                        idx = ipr.link_lookup(ifname=destination_name)[0]
+                        idx = self._lookup_interface_index(ipr, destination_name)
                         ipr.link("set", index=idx, state="up")
+            except BaseException:
+                if veth_created:
+                    try:
+                        if in_destination_ns:
+                            with open(f"/proc/{source_pid}/ns/net", "rb") as src_fd:
+                                self._setns(libc, src_fd, f"PID {source_pid}")
+                        with IPRoute() as ipr:
+                            self._delete_interface_best_effort(ipr, source_name)
+                    except Exception:  # noqa: BLE001 - preserve primary error
+                        pass
+                raise
             finally:
                 # A failed restore would silently leave this thread in the
                 # target namespace, so surface it instead of ignoring errno.

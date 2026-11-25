@@ -271,3 +271,72 @@ def test_create_dummy_interface_falls_back_to_proc_self_when_thread_self_missing
 
     assert opened[:2] == ["/proc/thread-self/ns/net", "/proc/self/ns/net"]
     assert saved_ns.closed is True
+
+
+def test_create_veth_cleans_up_on_destination_setup_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    libc = MagicMock()
+    libc.setns.return_value = 0
+    monkeypatch.setattr(ctypes, "CDLL", MagicMock(return_value=libc))
+
+    saved_ns = _FakeNsFile(11)
+    src_ns = _FakeNsFile(22)
+    dst_ns = _FakeNsFile(33)
+
+    def fake_open(path, *args, **kwargs):
+        mapping = {
+            "/proc/thread-self/ns/net": saved_ns,
+            "/proc/10/ns/net": src_ns,
+            "/proc/11/ns/net": dst_ns,
+        }
+        return mapping[str(path)]
+
+    monkeypatch.setattr(builtins, "open", fake_open)
+
+    ipr_src = _fake_iproute()
+    ipr_dst = _fake_iproute()
+    ipr_dst.link_lookup.return_value = []  # triggers failure in destination ns
+    ipr_cleanup = _fake_iproute()
+    monkeypatch.setattr(
+        pyroute2, "IPRoute", MagicMock(side_effect=[ipr_src, ipr_dst, ipr_cleanup])
+    )
+
+    with pytest.raises(RuntimeError, match="eth1"):
+        LinuxNetworkNamespace().create_veth(10, 11, "eth0", "eth1")
+
+    ipr_cleanup.link.assert_any_call("del", index=7)
+
+
+def test_create_dummy_interface_cleans_up_on_set_up_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    libc = MagicMock()
+    libc.setns.return_value = 0
+    monkeypatch.setattr(ctypes, "CDLL", MagicMock(return_value=libc))
+
+    saved_ns = _FakeNsFile(11)
+    target_ns = _FakeNsFile(22)
+    monkeypatch.setattr(
+        builtins,
+        "open",
+        lambda path, *a, **k: {
+            "/proc/thread-self/ns/net": saved_ns,
+            "/proc/123/ns/net": target_ns,
+        }[str(path)],
+    )
+
+    ipr = _fake_iproute()
+
+    def link_side_effect(action, **kwargs):
+        if action == "set":
+            raise OSError("set up failed")
+        return None
+
+    ipr.link.side_effect = link_side_effect
+    monkeypatch.setattr(pyroute2, "IPRoute", MagicMock(return_value=ipr))
+
+    with pytest.raises(OSError, match="set up failed"):
+        LinuxNetworkNamespace().create_dummy_interface(123, "dummy0")
+
+    ipr.link.assert_any_call("del", index=7)
