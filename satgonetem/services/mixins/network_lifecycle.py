@@ -132,11 +132,23 @@ class NetworkLifecycleMixin:
                 )
             else:
                 self.launcher = None
+                self.project_id = None
+                self.client = None
+                self.request = None
                 self._pending_force_close = False
+                self._reset_backend_link_tracking()
+                self._clear_node_runtime_handles()
             self.set_status(False)
             self.set_gonetem_status(False)
             self.set_routing_initiated(False)
             raise
+
+        get_applied = getattr(self, "_link_backend_adds", None)
+        build_key = getattr(self, "_build_link_key", None)
+        if callable(get_applied) and callable(build_key):
+            applied = get_applied()
+            for lnk in (*launch_links, *hil_links):
+                applied.add(build_key(lnk.source, lnk.target))
 
         self.set_status(True)
         self.set_gonetem_status(True)

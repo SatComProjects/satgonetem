@@ -95,11 +95,21 @@ def test_get_node_by_name_returns_satellites_and_ground_stations(
     assert topology.get_node_by_name("Gnd2") is topology.ground_stations[2]
 
 
-@pytest.mark.parametrize("name", ["Sat9", "Gnd9", "Foo0", ""])
+@pytest.mark.parametrize(
+    "name", ["Sat9", "Gnd9", "Foo0", "", "Sat", "Gnd", "SatFoo", "GndBar"]
+)
 def test_get_node_by_name_returns_none_for_unknown_names(
     populated_topology: _DiagnosticsHost, name: str
 ) -> None:
     assert populated_topology.get_node_by_name(name) is None
+
+
+@pytest.mark.parametrize("name", ["Sat", "Gnd", "SatFoo", "GndBar"])
+def test_execute_command_on_rejects_malformed_node_names(
+    populated_topology: _DiagnosticsHost, name: str
+) -> None:
+    result = populated_topology.execute_command_on(name, "echo hi")
+    assert result == {"output": "", "error": f"Invalid node name '{name}'"}
 
 
 def test_get_node_by_id_prefers_satellites_on_id_collision(

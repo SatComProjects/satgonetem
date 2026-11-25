@@ -157,10 +157,10 @@ def apply_runtime_state(manager: Any, runtime_state: dict[str, Any]) -> None:
         record = persisted.get((category, *_endpoint_names(satcom)))
         if record is None:
             continue
-        _apply_link_record(wrapper, record)
+        _apply_link_record(manager, wrapper, record)
 
 
-def _apply_link_record(wrapper: Any, record: dict[str, Any]) -> None:
+def _apply_link_record(manager: Any, wrapper: Any, record: dict[str, Any]) -> None:
     """Restore one link wrapper's persisted state, tolerating bad values."""
     try:
         loss = validate_loss(record["loss"]) if "loss" in record else wrapper.loss
@@ -203,9 +203,24 @@ def _apply_link_record(wrapper: Any, record: dict[str, Any]) -> None:
     satcom = getattr(wrapper, "satcom_object", None)
     if satcom is not None:
         satcom.disabled = disabled
-    wrapper.is_active = is_active and not disabled
+    effective_active = is_active and not disabled
+    wrapper.is_active = effective_active
+    _reconcile_restored_link_interfaces(manager, wrapper, effective_active)
     wrapper.update_link_capacities()
     wrapper.update_interfaces_state()
+
+
+def _reconcile_restored_link_interfaces(
+    manager: Any, wrapper: Any, effective_active: bool
+) -> None:
+    """Build missing interfaces when restore activates an initially inactive link."""
+    peer_interfaces = getattr(wrapper, "peer_interfaces", None)
+    if not isinstance(peer_interfaces, list):
+        return
+    if effective_active and not peer_interfaces:
+        build_fn = getattr(manager, "_build_interfaces_from_link", None)
+        if callable(build_fn):
+            build_fn(wrapper, set_ip=True, sync_to_node=False)
 
 
 def ground_file_restore_path(ground_dir: str, basename: object) -> str:
@@ -548,34 +563,32 @@ def restore_runtime_state(
         except Exception as exc:
             logging.warning(f"Failed to restore ISL {isl}: {exc}")
 
+    sats_by_name = {s.satellite_name: s for s in sim_manager.get_satellites()}
+    gs_by_label = {g.label: g for g in sim_manager.get_ground_stations()}
+    ut_by_label = {u.label: u for u in sim_manager.get_user_terminals()}
+
     for gsl in links.get("ground_station", []):
         try:
-            sat = next(
-                s
-                for s in sim_manager.get_satellites()
-                if s.satellite_name == gsl["source"]
-            )
-            gs = next(
-                g
-                for g in sim_manager.get_ground_stations()
-                if g.label == gsl["destination"]
-            )
+            src_name, dst_name = gsl["source"], gsl["destination"]
+            if src_name in sats_by_name and dst_name in gs_by_label:
+                sat, gs = sats_by_name[src_name], gs_by_label[dst_name]
+            elif dst_name in sats_by_name and src_name in gs_by_label:
+                sat, gs = sats_by_name[dst_name], gs_by_label[src_name]
+            else:
+                raise KeyError(f"endpoints ({src_name!r}, {dst_name!r}) not found")
             sim_manager.create_and_add_ground_station_link_connection(sat, gs)
         except Exception as exc:
             logging.warning(f"Failed to restore GSL {gsl}: {exc}")
 
     for utl in links.get("user_terminal", []):
         try:
-            sat = next(
-                s
-                for s in sim_manager.get_satellites()
-                if s.satellite_name == utl["source"]
-            )
-            ut = next(
-                u
-                for u in sim_manager.get_user_terminals()
-                if u.label == utl["destination"]
-            )
+            src_name, dst_name = utl["source"], utl["destination"]
+            if src_name in sats_by_name and dst_name in ut_by_label:
+                sat, ut = sats_by_name[src_name], ut_by_label[dst_name]
+            elif dst_name in sats_by_name and src_name in ut_by_label:
+                sat, ut = sats_by_name[dst_name], ut_by_label[src_name]
+            else:
+                raise KeyError(f"endpoints ({src_name!r}, {dst_name!r}) not found")
             sim_manager.create_and_add_user_terminal_link_connection(sat, ut)
         except Exception as exc:
             logging.warning(f"Failed to restore user-terminal link {utl}: {exc}")

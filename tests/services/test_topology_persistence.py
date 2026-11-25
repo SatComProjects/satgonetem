@@ -155,3 +155,101 @@ class TestRestore:
         ]
         assert [gs.label for gs in sim_manager.get_ground_stations()] == ["CodecGS"]
         assert sim_manager.time_manager.start_date == datetime(2024, 1, 1, 0, 0, 0)
+
+
+class TestPersistenceBugFixes:
+    def test_apply_runtime_state_builds_interfaces_when_link_becomes_active(self):
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+
+        from satgonetem.models.interface import Interface
+        from satgonetem.services.topology_persistence import apply_runtime_state
+        from tests.support.factories import make_link, make_satellite
+
+        sat0 = make_satellite("Sat0")
+        sat2 = make_satellite("Sat2")
+        link_to_enable = make_link(sat0, sat2)
+        link_to_enable.is_active = False
+        link_to_enable.satcom_object = SimpleNamespace(
+            source=SimpleNamespace(satellite_name="S0"),
+            destination=SimpleNamespace(satellite_name="S2"),
+            disabled=True,
+        )
+        link_to_enable.peer_interfaces = []
+
+        built_calls = []
+
+        def fake_build(lnk, set_ip=True, sync_to_node=False):
+            ia = Interface(f"{lnk.source.name}.{lnk.target.id}")
+            ib = Interface(f"{lnk.target.name}.{lnk.source.id}")
+            lnk.peer_interfaces = [ia, ib]
+            lnk.source.interfaces.append(ia)
+            lnk.target.interfaces.append(ib)
+            manager.interfaces.extend([ia, ib])
+            built_calls.append((lnk, set_ip, sync_to_node))
+
+        manager = SimpleNamespace(
+            links={frozenset(("Sat0", "Sat2")): link_to_enable},
+            interfaces=[],
+            interface_version=0,
+            _build_interfaces_from_link=MagicMock(side_effect=fake_build),
+        )
+
+        runtime_state = {
+            "links": {
+                "inter_satellite": [
+                    {
+                        "source": "S0",
+                        "destination": "S2",
+                        "disabled": False,
+                        "is_active": True,
+                    },
+                ]
+            }
+        }
+        apply_runtime_state(manager, runtime_state)
+
+        assert link_to_enable.is_active is True
+        assert len(link_to_enable.peer_interfaces) == 2
+        assert built_calls == [(link_to_enable, True, False)]
+
+    def test_restore_runtime_state_handles_reversed_gsl_and_utl_endpoints(self):
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock, patch
+
+        from satgonetem.services.network_config import NetworkConfig
+        from satgonetem.services.topology_persistence import restore_runtime_state
+
+        sat = SimpleNamespace(satellite_name="SAT-0")
+        gs = SimpleNamespace(label="GS-0")
+        ut = SimpleNamespace(label="UT-0")
+
+        sim_manager = MagicMock()
+        sim_manager.get_satellites.return_value = [sat]
+        sim_manager.get_ground_stations.return_value = [gs]
+        sim_manager.get_user_terminals.return_value = [ut]
+        sim_manager.get_all_ground_objects.return_value = [gs, ut]
+        sim_manager.get_inter_satellite_links.return_value = []
+        sim_manager.get_ground_station_links.return_value = []
+        sim_manager.get_user_terminal_links.return_value = []
+        sim_manager.get_ground_object_links.return_value = []
+
+        runtime_state = {
+            "simulation_name": "ReversedLinks",
+            "links": {
+                "ground_station": [{"source": "GS-0", "destination": "SAT-0"}],
+                "user_terminal": [{"source": "UT-0", "destination": "SAT-0"}],
+            },
+        }
+        with patch(
+            "satgonetem.services.topology_persistence.create_and_load_simulation",
+            return_value=sim_manager,
+        ):
+            restore_runtime_state(runtime_state, NetworkConfig())
+
+        sim_manager.create_and_add_ground_station_link_connection.assert_called_once_with(
+            sat, gs
+        )
+        sim_manager.create_and_add_user_terminal_link_connection.assert_called_once_with(
+            sat, ut
+        )

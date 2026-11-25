@@ -71,6 +71,8 @@ def test_natural_end_of_stream_closes_terminal_and_rejects_send():
     with terminal:
         terminal._recv_thread.join(timeout=2)
         assert terminal.read(timeout=0) is None
+        # Repeated reads after EOF must return None immediately without blocking.
+        assert terminal.read(timeout=0.1) is None
         with pytest.raises(RuntimeError, match="closed"):
             terminal.send("ls\n")
         with pytest.raises(RuntimeError, match="closed"):

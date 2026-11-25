@@ -10,7 +10,6 @@ from typing import TYPE_CHECKING, Any
 import grpc
 
 from satgonetem.proto import netem_pb2
-from satgonetem.routing.registry import is_known_method
 from satgonetem.services.link_backend import LinkBackend
 from satgonetem.utils.constants import MAX_WORKERS, ROUTE_APPLY_WORKERS
 
@@ -418,13 +417,11 @@ class LinkOpsMixin:
             logging.debug("Skipping routing update - routing daemon not initialized")
             return
 
-        if is_known_method(self.routing, getattr(self, "_daemon_registry", None)):
-            self.routing_daemon.update(new_links, max_workers=max_workers)
-            logging.info(f"Updated {self.routing} routing after link changes")
-        else:
-            logging.warning(
-                f"Unknown routing method '{self.routing}', skipping routing update"
-            )
+        self.routing_daemon.update(new_links, max_workers=max_workers)
+        logging.info(
+            "Updated %s routing after link changes",
+            type(self.routing_daemon).__name__,
+        )
 
     def _execute_link_delete(self, link: Link) -> float:
         """Delete a link's veth pair directly via nsenter+ip.
