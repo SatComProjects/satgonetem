@@ -15,6 +15,25 @@ import re
 from collections.abc import Callable
 from typing import Any
 
+_TC_BYTE_UNITS = {
+    "b": 1,
+    "Kb": 1024,
+    "Mb": 1024**2,
+    "Gb": 1024**3,
+}
+
+_TBF_PATTERN = re.compile(
+    r"rate (\d+(?:\.\d+)?[GMK]?bit)\s+burst (\d+[GMK]?b)\s+"
+    r"(?:lat \d+(?:\.\d+)?(?:s|ms|us)|limit \d+[GMK]?b)"
+)
+
+
+def _parse_tc_bytes(token: str) -> int | None:
+    match = re.fullmatch(r"(\d+)([GMK]?b)", token)
+    if match is None:
+        return None
+    return int(match.group(1)) * _TC_BYTE_UNITS[match.group(2)]
+
 
 class QoSCapableMixin:
     """
@@ -67,6 +86,10 @@ class QoSCapableMixin:
                 test duration, and a non-positive capacity cannot shape any
                 traffic.
         """
+        if tbf_config not in ("limit", "burstlimit"):
+            raise ValueError(
+                f"tbf_config must be 'limit' or 'burstlimit', got {tbf_config!r}"
+            )
         capacity_mbps = int(isl_capacity)
         demand_mbps = int(demand_bit_rate)
         if demand_mbps <= 0:
@@ -86,21 +109,13 @@ class QoSCapableMixin:
         self.execute_command(f"tc qdisc show dev {interface_name}")
         lines = [line for line in self.command_output.strip().splitlines() if line]
 
-        tbf_pattern_latency = r"rate (\d+[GMK]?bit) burst (\d+b) lat (\d+(?:ms|us))"
-        tbf_pattern_limit = r"rate (\d+[GMK]?bit) burst (\d+b) limit (\d+b)"
-
         tbf_rate: str | None = None
         tbf_burst: str | None = None
         for line in lines:
-            match_latency = re.search(tbf_pattern_latency, line)
-            match_limit = re.search(tbf_pattern_limit, line)
-            if match_latency:
-                tbf_rate = match_latency.group(1)
-                tbf_burst = match_latency.group(2)
-                break
-            if match_limit:
-                tbf_rate = match_limit.group(1)
-                tbf_burst = match_limit.group(2)
+            match = _TBF_PATTERN.search(line)
+            if match:
+                tbf_rate = match.group(1)
+                tbf_burst = match.group(2)
                 break
 
         if tbf_rate is None or tbf_burst is None:
@@ -111,8 +126,8 @@ class QoSCapableMixin:
             )
             return
 
-        burst_match = re.search(r"\d+", tbf_burst)
-        if burst_match is None:
+        tbf_burst_int = _parse_tc_bytes(tbf_burst)
+        if tbf_burst_int is None:
             logging.error(
                 "Could not parse TBF burst %r on %s interface %s",
                 tbf_burst,
@@ -120,7 +135,6 @@ class QoSCapableMixin:
                 interface_name,
             )
             return
-        tbf_burst_int = int(burst_match.group())
 
         wire_rate_multiplier = mtu / (mtu - header_bytes)
         total_wire_rate = num_flows * rate_bytes * wire_rate_multiplier
@@ -144,9 +158,7 @@ class QoSCapableMixin:
                     link,
                 )
                 return
-            additional_latency = max(
-                0.0, (required_limit - tbf_burst_int) / capacity_bytes * 1000
-            )
+            additional_latency = max(0.0, required_limit / capacity_bytes * 1000)
             command = (
                 f"tc qdisc change dev {interface_name} parent 1:1 handle 10: "
                 f"tbf rate {tbf_rate} burst {tbf_burst} limit {required_limit}b"

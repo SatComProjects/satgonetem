@@ -216,3 +216,50 @@ class TestQosArithmetic:
             "Configured TBF limit on link Sat0-Sat1" in record.getMessage()
             for record in caplog.records
         )
+
+    def test_parses_kb_burst_and_decimal_rate_latency(self):
+        kb_output = "qdisc tbf 10: root refcnt 2 rate 8.5Mbit burst 16Kb lat 50.0ms"
+        host = _run(
+            kb_output,
+            tbf_config="limit",
+            demand_bit_rate=10,
+            isl_capacity=8,
+            num_of_bytes=1_000_000,
+        )
+
+        assert len(host.commands) == 2
+        capacity_bytes = 8 * 1_000_000 / 8
+        rate_bytes = 10 * 1_000_000 / 8
+        duration = 1_000_000 / rate_bytes
+        total_wire_rate = rate_bytes * MTU / (MTU - HEADER_BYTES)
+        expected_limit = int((total_wire_rate - capacity_bytes) * duration - 16 * 1024)
+        assert host.commands[1] == (
+            "tc qdisc change dev eth0 parent 1:1 handle 10: "
+            f"tbf rate 8.5Mbit burst 16Kb limit {expected_limit}b"
+        )
+
+    def test_unknown_tbf_config_raises_value_error(self):
+        with pytest.raises(ValueError, match="tbf_config"):
+            _run(LATENCY_OUTPUT, tbf_config="unknown")
+
+    def test_limit_mode_additional_latency_does_not_double_subtract_burst(self, caplog):
+        demand_mbps = 10
+        capacity_mbps = 8
+        num_bytes = 1_000_000
+        capacity_bytes = capacity_mbps * 1_000_000 / 8
+        rate_bytes = demand_mbps * 1_000_000 / 8
+        duration = num_bytes / rate_bytes
+        total_wire_rate = rate_bytes * MTU / (MTU - HEADER_BYTES)
+        required_limit = int((total_wire_rate - capacity_bytes) * duration - 1600)
+        expected_latency_ms = required_limit / capacity_bytes * 1000
+
+        with caplog.at_level(logging.INFO):
+            _run(
+                LATENCY_OUTPUT,
+                tbf_config="limit",
+                demand_bit_rate=demand_mbps,
+                isl_capacity=capacity_mbps,
+                num_of_bytes=num_bytes,
+            )
+
+        assert f"additional latency {expected_latency_ms:.2f} ms." in caplog.text

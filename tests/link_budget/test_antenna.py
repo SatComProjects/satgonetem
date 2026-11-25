@@ -60,6 +60,24 @@ class TestAntennaCalculateGainDb:
         diff = ant_full.calculate_gain_db(12.0) - ant_half.calculate_gain_db(12.0)
         assert diff == pytest.approx(10.0 * math.log10(2.0), abs=0.01)
 
+    @pytest.mark.parametrize("freq", [0.0, -12.0, math.nan, math.inf])
+    def test_invalid_frequency_raises_value_error(self, freq):
+        ant = Antenna(diameter=1.0, efficiency=0.6)
+        with pytest.raises(ValueError, match="frequency_ghz"):
+            ant.calculate_gain_db(freq)
+
+    @pytest.mark.parametrize("diameter", [0.0, -1.0, math.nan, math.inf])
+    def test_invalid_diameter_raises_value_error(self, diameter):
+        ant = Antenna(diameter=diameter, efficiency=0.6)
+        with pytest.raises(ValueError, match="diameter"):
+            ant.calculate_gain_db(12.0)
+
+    @pytest.mark.parametrize("efficiency", [0.0, -0.5, 1.5, math.nan])
+    def test_invalid_efficiency_raises_value_error(self, efficiency):
+        ant = Antenna(diameter=1.0, efficiency=efficiency)
+        with pytest.raises(ValueError, match="efficiency"):
+            ant.calculate_gain_db(12.0)
+
 
 class TestAntennaGetEirpDb:
     def test_eirp_from_components(self):

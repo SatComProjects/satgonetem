@@ -27,6 +27,6 @@ def linear_to_db(linear: float) -> float:
     Raises:
         ValueError: If *linear* is not strictly positive.
     """
-    if linear <= 0.0:
-        raise ValueError("Linear value must be greater than 0")
+    if not math.isfinite(linear) or linear <= 0.0:
+        raise ValueError("Linear value must be finite and greater than 0")
     return 10.0 * math.log10(linear)

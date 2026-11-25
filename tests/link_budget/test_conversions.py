@@ -31,6 +31,12 @@ class TestLinearToDb:
         with pytest.raises(ValueError, match="greater than 0"):
             linear_to_db(-1.0)
 
+    def test_raises_on_nan_and_inf(self):
+        with pytest.raises(ValueError, match="finite"):
+            linear_to_db(float("nan"))
+        with pytest.raises(ValueError, match="finite"):
+            linear_to_db(float("inf"))
+
     def test_round_trip(self):
         for value in [0.001, 0.1, 1.0, 10.0, 1000.0]:
             assert db_to_linear(linear_to_db(value)) == pytest.approx(value)

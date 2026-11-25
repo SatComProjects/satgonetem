@@ -53,6 +53,19 @@ class Antenna:
         if self.gain_db is not None:
             return self.gain_db
 
+        if not math.isfinite(frequency_ghz) or frequency_ghz <= 0.0:
+            raise ValueError(
+                f"frequency_ghz must be finite and positive, got {frequency_ghz!r}"
+            )
+        if not math.isfinite(self.diameter) or self.diameter <= 0.0:
+            raise ValueError(
+                f"diameter must be finite and positive, got {self.diameter!r}"
+            )
+        if not math.isfinite(self.efficiency) or not (0.0 < self.efficiency <= 1.0):
+            raise ValueError(
+                f"efficiency must be finite and in (0, 1], got {self.efficiency!r}"
+            )
+
         frequency_hz = frequency_ghz * 1e9
         wavelength = SPEED_OF_LIGHT / frequency_hz
         gain_linear = (math.pi * self.diameter / wavelength) ** 2 * self.efficiency

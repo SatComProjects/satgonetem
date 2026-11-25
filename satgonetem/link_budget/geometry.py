@@ -52,7 +52,8 @@ def get_elevation_angle(
         it is below.
     """
     R_E = 6378.137
-    h = sat_coordinates[2]
+    r_s = R_E + sat_coordinates[2]
+    r_g = R_E + gnd_coordinates[2]
 
     sat_vec = latlonelev_to_xyz(*sat_coordinates)
     gnd_vec = latlonelev_to_xyz(*gnd_coordinates)
@@ -65,7 +66,9 @@ def get_elevation_angle(
 
     sin_theta = math.sin(theta)
     if abs(sin_theta) < 1e-10:
-        return 90.0 if theta < math.pi / 2.0 else -90.0
+        if theta < math.pi / 2.0:
+            return 90.0 if r_s >= r_g else -90.0
+        return -90.0
 
-    numerator = cos_theta - R_E / (R_E + h)
+    numerator = cos_theta - r_g / r_s
     return math.degrees(math.atan(numerator / sin_theta))
