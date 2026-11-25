@@ -702,3 +702,32 @@ def test_update_grows_shared_memory_when_links_exceed_init_capacity(
         if graph is not None:
             graph.close()
             graph.unlink()
+
+
+def test_update_skips_admin_down_and_unpopulated_peer_interface_links(daemon):
+    from satgonetem.models.link import Link
+
+    graph = MagicMock()
+    graph.ensure_capacity.return_value = False
+    daemon.graph_shared_memory = graph
+
+    sat0, sat1, sat2 = (
+        make_satellite("Sat0"),
+        make_satellite("Sat1"),
+        make_satellite("Sat2"),
+    )
+    healthy = _make_export_link(sat0, sat1)
+    admin_down = _make_export_link(sat1, sat2)
+    admin_down.admin_up = False
+    no_ifaces = Link(sat0, sat2, distance=100.0, type="InterSatelliteLink")
+    no_ifaces.is_active = True
+    no_ifaces.peer_interfaces = []
+
+    daemon.topology.links = {0: healthy, 1: admin_down, 2: no_ifaces}
+
+    daemon.update([])
+
+    written = graph.write_edges.call_args.args[0]
+    assert len(written) == 1
+    assert written[0]["src_name"] == 0
+    assert written[0]["dst_name"] == 1

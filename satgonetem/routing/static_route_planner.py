@@ -274,17 +274,26 @@ class StaticRoutePlanner:
         dst_array = gs_array + addressable_sats
 
         ig_graph = ig.Graph.from_networkx(graph)
-        nx_names = ig_graph.vs["_nx_name"]
+        nx_names = (
+            ig_graph.vs["_nx_name"]
+            if ig_graph.vcount() > 0 and "_nx_name" in ig_graph.vs.attributes()
+            else []
+        )
         name_to_idx = {name: idx for idx, name in enumerate(nx_names)}
+        has_edges = ig_graph.ecount() > 0
+        weights_arg = "weight" if "weight" in ig_graph.es.attributes() else None
 
         next_hops: dict[int, dict[int, int]] = {}
         for dst in dst_array:
             dst_id = dst.id
+            if not has_edges or dst_id not in name_to_idx:
+                next_hops[dst_id] = {}
+                continue
             dst_idx = name_to_idx[dst_id]
             paths = ig_graph.get_shortest_paths(
                 v=dst_idx,
                 to=None,
-                weights="weight",
+                weights=weights_arg,
                 output="vpath",
             )
             next_hops[dst_id] = {
