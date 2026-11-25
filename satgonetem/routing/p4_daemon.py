@@ -61,8 +61,17 @@ def interface_port(interface: Interface) -> int:
 
 
 def build_edge_from_link(link: Link) -> dict:
-    interface_source: Interface = link.peer_interfaces[0]
-    interface_destination: Interface = link.peer_interfaces[1]
+    if len(link.peer_interfaces) < 2:
+        raise ValueError(
+            f"Link {link.source.name}--{link.target.name} has fewer than 2 peer_interfaces"
+        )
+    src_iface_name = f"{link.source.name}.{link.target.id}"
+    dst_iface_name = f"{link.target.name}.{link.source.id}"
+    by_name = {iface.name: iface for iface in link.peer_interfaces}
+    interface_source: Interface = by_name.get(src_iface_name, link.peer_interfaces[0])
+    interface_destination: Interface = by_name.get(
+        dst_iface_name, link.peer_interfaces[1]
+    )
 
     src_ip = interface_source.ipv4
     dst_ip = interface_destination.ipv4
@@ -363,9 +372,11 @@ class P4Daemon(RoutingDaemon):
             build_edge_from_link(link)
             for link in self.topology.links.values()
             if link.is_active
+            and getattr(link, "admin_up", True)
             and not getattr(link, "to_remove", False)
             and not getattr(link, "disabled", False)
             and not getattr(getattr(link, "satcom_object", None), "disabled", False)
+            and (not isinstance(link, Link) or len(link.peer_interfaces) >= 2)
         ]
 
         if self.graph_shared_memory.ensure_capacity(len(edges)):

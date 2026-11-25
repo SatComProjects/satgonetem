@@ -512,6 +512,23 @@ class TestLinkCapacityRefresh:
 
         mock_refresh.assert_called_once()
 
+    def test_link_is_hashable_and_consistent_with_eq(self, sat_node, gnd_node):
+        l1 = Link(
+            source=sat_node,
+            target=gnd_node,
+            distance=100.0,
+            type="GroundStationLink",
+        )
+        l2 = Link(
+            source=sat_node,
+            target=gnd_node,
+            distance=200.0,
+            type="GroundStationLink",
+        )
+        assert l1 == l2
+        assert hash(l1) == hash(l2)
+        assert len({l1, l2}) == 1
+
 
 class TestLinkUseBudget:
     """Tests for Link.use_budget flag."""

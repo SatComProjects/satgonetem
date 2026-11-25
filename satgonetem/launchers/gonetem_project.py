@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import tarfile
@@ -73,11 +74,26 @@ class GoNetEmProjectBuilder:
     def __init__(self, launcher) -> None:
         self._launcher = launcher
         self._topology_manager = launcher._topology_manager
-        self.isl_capacity_kbps = launcher.isl_capacity_kbps
-        self.gnd_capacity_kbps = launcher.gnd_capacity_kbps
-        self.ground_object_capacity_kbps = launcher.ground_object_capacity_kbps
-        self.netem_limit = launcher.netem_limit
-        self.txqueuelen = launcher.txqueuelen
+
+    @property
+    def isl_capacity_kbps(self) -> int:
+        return self._launcher.isl_capacity_kbps
+
+    @property
+    def gnd_capacity_kbps(self) -> int:
+        return self._launcher.gnd_capacity_kbps
+
+    @property
+    def ground_object_capacity_kbps(self) -> int:
+        return self._launcher.ground_object_capacity_kbps
+
+    @property
+    def netem_limit(self) -> int:
+        return self._launcher.netem_limit
+
+    @property
+    def txqueuelen(self) -> int:
+        return self._launcher.txqueuelen
 
     # Project file generation
 
@@ -164,21 +180,16 @@ class GoNetEmProjectBuilder:
     def _write_controller_switch_links(self, satellites, ground_stations) -> str:
         # Link from every node to the controller switch with high capacity and low latency
         result = ""
-        for sat in satellites:
-            eth_id = self._controller_iface_suffix(sat)
-            burst, buffer = _tbf_qos(1_000_000, 1)
-            peer1 = _yaml_scalar(f"Controller.{sat.id}")
-            peer2 = _yaml_scalar(f"{sat.name}.{eth_id}")
-            result += (
-                f" - {{peer1: {peer1}, peer2: {peer2},"
-                f" peer1qos: {{ rate: 1000000, buffer: {buffer}, jitter: 0, delay: 1, burst: {burst}}},"
-                f" peer2qos: {{ rate: 1000000, buffer: {buffer}, jitter: 0, delay: 1, burst: {burst}}}}} \n"
-            )
-        for gs in ground_stations:
-            eth_id = self._controller_iface_suffix(gs)
-            burst, buffer = _tbf_qos(1_000_000, 1)
-            peer1 = _yaml_scalar(f"Controller.{gs.id}")
-            peer2 = _yaml_scalar(f"{gs.name}.{eth_id}")
+        used_ports: set[int] = set()
+        burst, buffer = _tbf_qos(1_000_000, 1)
+        for node in (*satellites, *ground_stations):
+            port = node.id
+            if port in used_ports:
+                port = max(used_ports) + 1
+            used_ports.add(port)
+            eth_id = self._controller_iface_suffix(node)
+            peer1 = _yaml_scalar(f"Controller.{port}")
+            peer2 = _yaml_scalar(f"{node.name}.{eth_id}")
             result += (
                 f" - {{peer1: {peer1}, peer2: {peer2},"
                 f" peer1qos: {{ rate: 1000000, buffer: {buffer}, jitter: 0, delay: 1, burst: {burst}}},"
@@ -225,8 +236,13 @@ class GoNetEmProjectBuilder:
             if not getattr(link, "is_active", True):
                 continue
             delay = max(int(link.delay), 1)
-            rate = link.get_capacity()
-            burst, buffer = _tbf_qos(rate, delay)
+            fallback_rate = link.get_capacity()
+            p1_raw = getattr(link, "peer1_capacity", None)
+            p2_raw = getattr(link, "peer2_capacity", None)
+            rate1 = fallback_rate if p1_raw is None else int(p1_raw)
+            rate2 = fallback_rate if p2_raw is None else int(p2_raw)
+            burst1, buffer1 = _tbf_qos(rate1, delay)
+            burst2, buffer2 = _tbf_qos(rate2, delay)
             queue = f"limit: {self.netem_limit}, txqueuelen: {self.txqueuelen}"
             loss = float(getattr(link, "loss", 0.0) or 0.0)
             jitter = int(getattr(link, "jitter", 0) or 0)
@@ -238,8 +254,8 @@ class GoNetEmProjectBuilder:
             result += (
                 f" - {{peer1: {peer1},"
                 f" peer2: {peer2},"
-                f" peer1qos: {{ rate: {rate}, buffer: {buffer},{loss_token} jitter: {jitter}, delay: {delay}, burst: {burst}, {queue}}},"
-                f" peer2qos: {{ rate: {rate}, buffer: {buffer},{loss_token} jitter: {jitter}, delay: {delay}, burst: {burst}, {queue}}}}}"
+                f" peer1qos: {{ rate: {rate1}, buffer: {buffer1},{loss_token} jitter: {jitter}, delay: {delay}, burst: {burst1}, {queue}}},"
+                f" peer2qos: {{ rate: {rate2}, buffer: {buffer2},{loss_token} jitter: {jitter}, delay: {delay}, burst: {burst2}, {queue}}}}}"
                 f" #Latency of {delay}ms \n"
             )
         return result
@@ -271,6 +287,11 @@ class GoNetEmProjectBuilder:
                 network_file.write(data)
             fd, gnet_path = tempfile.mkstemp(suffix=".gnet", dir=dest_dir)
             os.close(fd)
-            with tarfile.open(gnet_path, "w:gz") as tar:
-                tar.add(network_yml, arcname="network.yml")
+            try:
+                with tarfile.open(gnet_path, "w:gz") as tar:
+                    tar.add(network_yml, arcname="network.yml")
+            except BaseException:
+                with contextlib.suppress(OSError):
+                    os.unlink(gnet_path)
+                raise
         return gnet_path

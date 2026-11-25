@@ -67,6 +67,12 @@ class Iperf3EndSummary:
                 return int(value)
         return 0
 
+    def _bidir_udp_keys(self) -> tuple[str, ...]:
+        end = self._end()
+        if "sum_bidir_reverse" in end:
+            return ("sum_received", "sum")
+        return ("sum_received",)
+
     @property
     def total_packets(self) -> int:
         """Total UDP packets transmitted, across both directions for --bidir.
@@ -78,40 +84,43 @@ class Iperf3EndSummary:
         ``sum.packets`` already reports the sender's transmitted count.
         """
         if self.is_bidir():
-            packets = self.pair_value("sum_received", "packets")
-            lost = self.pair_value("sum_received", "lost_packets")
-            if packets or lost:
-                return int(packets or lost)
+            for key in self._bidir_udp_keys():
+                packets = self.pair_value(key, "packets")
+                lost = self.pair_value(key, "lost_packets")
+                if packets or lost:
+                    return int(packets or lost)
         return int(self.value("sum", "packets"))
 
     @property
     def avg_jitter_ms(self) -> float:
         """Mean one-way jitter in milliseconds (UDP)."""
         if self.is_bidir():
-            forward_packets = self.value("sum_received", "packets")
-            forward_lost = self.value("sum_received", "lost_packets")
-            reverse_packets = self.value("sum_received_bidir_reverse", "packets")
-            reverse_lost = self.value("sum_received_bidir_reverse", "lost_packets")
-            forward_received = max(forward_packets - forward_lost, 0)
-            reverse_received = max(reverse_packets - reverse_lost, 0)
-            weighted_packets = forward_received + reverse_received
-            if weighted_packets > 0:
-                weighted = (
-                    self.value("sum_received", "jitter_ms") * forward_received
-                    + self.value("sum_received_bidir_reverse", "jitter_ms")
-                    * reverse_received
-                )
-                return weighted / weighted_packets
+            for key in self._bidir_udp_keys():
+                rev_key = f"{key}_bidir_reverse"
+                forward_packets = self.value(key, "packets")
+                forward_lost = self.value(key, "lost_packets")
+                reverse_packets = self.value(rev_key, "packets")
+                reverse_lost = self.value(rev_key, "lost_packets")
+                forward_received = max(forward_packets - forward_lost, 0)
+                reverse_received = max(reverse_packets - reverse_lost, 0)
+                weighted_packets = forward_received + reverse_received
+                if weighted_packets > 0:
+                    weighted = (
+                        self.value(key, "jitter_ms") * forward_received
+                        + self.value(rev_key, "jitter_ms") * reverse_received
+                    )
+                    return weighted / weighted_packets
         return self.value("sum", "jitter_ms")
 
     @property
     def total_lost_packets(self) -> int:
         """Total lost UDP packets, across both directions for --bidir."""
         if self.is_bidir():
-            received = self.pair_value("sum_received", "packets")
-            lost = self.pair_value("sum_received", "lost_packets")
-            if received or lost:
-                return int(lost)
+            for key in self._bidir_udp_keys():
+                received = self.pair_value(key, "packets")
+                lost = self.pair_value(key, "lost_packets")
+                if received or lost:
+                    return int(lost)
         return int(self.value("sum", "lost_packets"))
 
     @property
@@ -123,24 +132,27 @@ class Iperf3EndSummary:
         already included in that count and is not added to the denominator.
         """
         if self.is_bidir():
-            packets = self.pair_value("sum_received", "packets")
-            lost = self.pair_value("sum_received", "lost_packets")
-            transmitted = packets or lost
-            if transmitted > 0:
-                return 100.0 * lost / transmitted
+            for key in self._bidir_udp_keys():
+                packets = self.pair_value(key, "packets")
+                lost = self.pair_value(key, "lost_packets")
+                transmitted = packets or lost
+                if transmitted > 0:
+                    return 100.0 * lost / transmitted
         return self.value("sum", "lost_percent")
 
     @property
     def total_out_of_order(self) -> int:
         """Total out-of-order UDP packets, aggregated across end streams."""
         end = self._end()
+        streams = list(end.get("streams", [])) + list(
+            end.get("streams_bidir_reverse", [])
+        )
         total = sum(
-            int(stream.get("udp", {}).get("out_of_order", 0) or 0)
-            for stream in end.get("streams", [])
+            int(stream.get("udp", {}).get("out_of_order", 0) or 0) for stream in streams
         )
         if total:
             return total
-        return int(end.get("sum", {}).get("out_of_order", 0) or 0)
+        return int(self.pair_value("sum", "out_of_order"))
 
 
 __all__ = ["Iperf3EndSummary"]

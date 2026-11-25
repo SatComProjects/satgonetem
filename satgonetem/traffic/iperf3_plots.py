@@ -49,6 +49,8 @@ def generate_iperf3_plots(
         sum_rows = []
         for it in intervals:
             for s in it.get("streams", []):
+                if s.get("omitted", False):
+                    continue
                 row = dict(s)
                 row["_t"] = s.get("end", s.get("start"))
                 row["_label"] = f"Socket {s.get('socket', '?')}"
@@ -60,7 +62,7 @@ def generate_iperf3_plots(
                 "sum_bidir",
                 "sum_bidir_reverse",
             ]:
-                if sum_key in it:
+                if sum_key in it and not it[sum_key].get("omitted", False):
                     s = dict(it[sum_key])
                     s["_t"] = s.get("end", s.get("start"))
                     s["_label"] = sum_key
@@ -146,14 +148,12 @@ def generate_iperf3_plots(
             plt.title(f"{title_prefix} — {pretty}")
             plt.legend()
             plt.grid(True)
-            fname = f"{json_file_name}_{stem_prefix}_{metric_key}.png"
-            fpath = out_dir / fname
-            plt.savefig(fpath, bbox_inches="tight", dpi=150)
-            fname = f"{json_file_name}_{stem_prefix}_{metric_key}.pdf"
-            fpath = out_dir / fname
-            plt.savefig(fpath, bbox_inches="tight", dpi=150)
+            png_path = out_dir / f"{json_file_name}_{stem_prefix}_{metric_key}.png"
+            plt.savefig(png_path, bbox_inches="tight", dpi=150)
+            pdf_path = out_dir / f"{json_file_name}_{stem_prefix}_{metric_key}.pdf"
+            plt.savefig(pdf_path, bbox_inches="tight", dpi=150)
             plt.close()
-            saved.append(str(fpath))
+            saved.append(str(pdf_path))
         return saved
 
     saved_files = []
@@ -204,14 +204,12 @@ def generate_iperf3_plots(
             plt.title(f"{title_prefix} — Cumulative Data Transmitted")
             plt.legend()
             plt.grid(True)
-            fname = f"{json_file_name}_{stem_prefix}_cumulative_data.png"
-            fpath = out_dir / fname
-            plt.savefig(fpath, bbox_inches="tight", dpi=150)
-            fname = f"{json_file_name}_{stem_prefix}_cumulative_data.pdf"
-            fpath = out_dir / fname
-            plt.savefig(fpath, bbox_inches="tight", dpi=150)
+            png_path = out_dir / f"{json_file_name}_{stem_prefix}_cumulative_data.png"
+            plt.savefig(png_path, bbox_inches="tight", dpi=150)
+            pdf_path = out_dir / f"{json_file_name}_{stem_prefix}_cumulative_data.pdf"
+            plt.savefig(pdf_path, bbox_inches="tight", dpi=150)
             plt.close()
-            saved.append(str(fpath))
+            saved.append(str(pdf_path))
 
         return saved
 

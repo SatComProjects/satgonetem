@@ -123,7 +123,10 @@ def main() -> None:
             send_resize()
             signal.signal(signal.SIGWINCH, _handle_sigwinch)
 
+            stream_error: BaseException | None = None
+
             def recv_loop() -> None:
+                nonlocal stream_error
                 try:
                     for response in stream:
                         if (
@@ -132,13 +135,18 @@ def main() -> None:
                         ):
                             sys.stdout.buffer.write(response.data)
                             sys.stdout.buffer.flush()
-                        elif response.code in (
-                            netem_pb2.ExecSrvMsg.ERROR,
-                            netem_pb2.ExecSrvMsg.CLOSE,
-                        ):
+                        elif response.code == netem_pb2.ExecSrvMsg.ERROR:
+                            detail = response.data.decode(
+                                "utf-8", errors="replace"
+                            ).strip()
+                            stream_error = RuntimeError(
+                                detail or "server reported ERROR"
+                            )
                             break
-                except Exception:
-                    pass
+                        elif response.code == netem_pb2.ExecSrvMsg.CLOSE:
+                            break
+                except Exception as exc:
+                    stream_error = exc
                 finally:
                     done_event.set()
                     input_queue.put(None)
@@ -146,31 +154,36 @@ def main() -> None:
             recv_thread = threading.Thread(target=recv_loop, daemon=True)
             recv_thread.start()
 
-            while not done_event.is_set():
-                if resize_pending:
-                    resize_pending = False
-                    send_resize()
-                ready, _, _ = select.select([fd], [], [], 0.05)
-                if resize_pending:
-                    resize_pending = False
-                    send_resize()
-                if ready:
-                    try:
-                        data = os.read(fd, 4096)
-                    except OSError:
-                        break
-                    if not data:
-                        break
-                    input_queue.put(
-                        netem_pb2.ExecCltMsg(
-                            code=netem_pb2.ExecCltMsg.DATA,
-                            prjId=project_id,
-                            node=node_name,
-                            data=data,
+            try:
+                while not done_event.is_set():
+                    if resize_pending:
+                        resize_pending = False
+                        send_resize()
+                    ready, _, _ = select.select([fd], [], [], 0.05)
+                    if resize_pending:
+                        resize_pending = False
+                        send_resize()
+                    if ready:
+                        try:
+                            data = os.read(fd, 4096)
+                        except OSError:
+                            break
+                        if not data:
+                            break
+                        input_queue.put(
+                            netem_pb2.ExecCltMsg(
+                                code=netem_pb2.ExecCltMsg.DATA,
+                                prjId=project_id,
+                                node=node_name,
+                                data=data,
+                            )
                         )
-                    )
+            finally:
+                input_queue.put(None)
 
             recv_thread.join(timeout=2)
+            if stream_error is not None:
+                raise stream_error
 
         finally:
             restore_tty()

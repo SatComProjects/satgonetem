@@ -191,3 +191,17 @@ class TestLinkBudgetServiceComputeOneWay:
 
         assert cap == 0
         assert service.last_link_unclosable is True
+
+    def test_below_horizon_elevation_returns_zero_and_sets_unclosable_flag(self):
+        service = LinkBudgetService()
+        cap = service.compute_one_way(self._valid_inputs(elevation_angle=-5.0))
+
+        assert cap == 0
+        assert service.last_link_unclosable is True
+
+    def test_nan_elevation_returns_zero_without_setting_unclosable_flag(self):
+        service = LinkBudgetService()
+        cap = service.compute_one_way(self._valid_inputs(elevation_angle=math.nan))
+
+        assert cap == 0
+        assert service.last_link_unclosable is False

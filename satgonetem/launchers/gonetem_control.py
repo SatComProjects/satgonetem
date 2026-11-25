@@ -195,7 +195,8 @@ class GoNetEmControlMixin:
         try:
             for msg in client.NodeCapture(capture_request, timeout=timeout_s):
                 if msg.code == netem_pb2.CaptureSrvMsg.STDOUT:
-                    chunks.append(msg.data)
+                    if msg.data:
+                        chunks.append(msg.data)
                 elif msg.code == netem_pb2.CaptureSrvMsg.OK:
                     completed = True
                 elif msg.code == netem_pb2.CaptureSrvMsg.ERROR:

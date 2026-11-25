@@ -118,6 +118,25 @@ class TestRoutingEntryValidation:
                 protocol="ipv4",
             )
 
+    def test_routing_entry_is_hashable_and_consistent_with_eq(self, iface):
+        e1 = RoutingEntry(
+            destination="10.1.2.3",
+            interface=iface,
+            gateway="10.0.0.1",
+            prefix=16,
+            target_node="Sat1",
+        )
+        e2 = RoutingEntry(
+            destination="10.1.9.9",
+            interface=iface,
+            gateway="10.0.0.1",
+            prefix=16,
+            target_node="Sat2",
+        )
+        assert e1 == e2
+        assert hash(e1) == hash(e2)
+        assert len({e1, e2}) == 1
+
     def test_ipv4_prefix_above_32_raises_value_error(self, iface):
         with pytest.raises(ValueError, match="Invalid prefix"):
             RoutingEntry(

@@ -394,3 +394,14 @@ def test_hping3_flow_stop_process_scopes_pkill_to_target_ip():
     assert "pkill -f" in cmd
     assert "[h]ping3" in cmd
     assert "10.0.0.2" in cmd
+
+    # The pkill regex must actually match the command built by Hping3Config.
+    import re
+    import shlex
+
+    tokens = shlex.split(cmd.split(" 2>/dev/null")[0])
+    pattern = tokens[tokens.index("-f") + 1]
+    running_cmd = Hping3Config(count=5).build_command("10.0.0.2", "10.0.0.1")
+    assert re.search(pattern, running_cmd) is not None
+    other_cmd = Hping3Config(count=5).build_command("10.0.0.20", "10.0.0.1")
+    assert re.search(pattern, other_cmd) is None

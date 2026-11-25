@@ -91,3 +91,27 @@ def test_build_edge_gateway_flags_cover_node_type_combinations():
             iface.set_mac_address("00:00:00:00:00:00")
 
         assert build_edge_from_link(link)["flag_gateway"] == expected
+
+
+def test_reversed_peer_interfaces_match_endpoint_names():
+    from satgonetem.models.interface import Interface
+    from satgonetem.models.link import Link
+
+    sat0 = make_satellite("Sat0")
+    sat1 = make_satellite("Sat1")
+    iface0 = Interface("Sat0.1")
+    iface0.set_ipv4("10.128.0.2")
+    iface0.set_mac_address("00:00:00:00:00:01")
+    iface1 = Interface("Sat1.0")
+    iface1.set_ipv4("10.128.0.3")
+    iface1.set_mac_address("00:00:00:00:00:02")
+    link = Link(sat0, sat1, distance=100.0, type="InterSatelliteLink")
+    # Deliberately reversed order in peer_interfaces.
+    link.peer_interfaces = [iface1, iface0]
+
+    edge = build_edge_from_link(link)
+
+    assert edge["src_ip"] == "10.128.0.2"
+    assert edge["dst_ip"] == "10.128.0.3"
+    assert edge["src_port"] == 1
+    assert edge["dst_port"] == 0

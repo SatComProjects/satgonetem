@@ -156,6 +156,10 @@ class LinkBudgetService:
             return 0
 
         # --- Atmospheric attenuation ---
+        if not math.isfinite(inputs.elevation_angle) or inputs.elevation_angle < 0.0:
+            if math.isfinite(inputs.elevation_angle):
+                self.last_link_unclosable = True
+            return 0
         try:
             attenuations = calculate_atmospheric_attenuation_dB(
                 lat_GS=inputs.gs_lat,

@@ -443,6 +443,15 @@ class DiagnosticsMixin:
             "Install one of: gnome-terminal, xterm, konsole, alacritty, kitty."
         )
 
+    @staticmethod
+    def _parse_node_name(name: str) -> tuple[str, int] | None:
+        if len(name) <= 3:
+            return None
+        prefix, suffix = name[:3], name[3:]
+        if prefix not in ("Sat", "Gnd") or not (suffix.isascii() and suffix.isdigit()):
+            return None
+        return prefix, int(suffix)
+
     def execute_command_on(self, node: str = "", command: str = "") -> dict[str, Any]:
         """Execute a command on a specified node and return the output.
 
@@ -452,35 +461,16 @@ class DiagnosticsMixin:
         Returns:
             A dictionary containing the output and error messages from the command execution.
         """
-        if node.startswith("Sat"):
-            node_id = int(node[3:]) if len(node) > 3 else 0
-            match self.satellites.get(node_id):
-                case Satellite() as target_node:
-                    pass
-                case None:
-                    logging.warning(f"Node '{node}' not found in topology")
-                    return {"output": "", "error": f"Node '{node}' not found"}
-                case _ as unexpected:
-                    raise TypeError(
-                        f"Expected Satellite in satellites, got {type(unexpected)}"
-                    )
-        elif node.startswith("Gnd"):
-            node_id = int(node[3:]) if len(node) > 3 else 0
-            match self.ground_stations.get(node_id):
-                case GroundStation() as target_node:  # type: ignore[misc]
-                    pass
-                case None:
-                    logging.warning(f"Node '{node}' not found in topology")
-                    return {"output": "", "error": f"Node '{node}' not found"}
-                case _ as unexpected:
-                    raise TypeError(
-                        f"Expected GroundStation in ground_stations, got {type(unexpected)}"
-                    )
-        else:
+        if self._parse_node_name(node) is None:
             logging.warning(
-                f"Invalid node name '{node}'. Must start with 'Sat' or 'Gnd'."
+                f"Invalid node name '{node}'. Must start with 'Sat' or 'Gnd' followed by digits."
             )
             return {"output": "", "error": f"Invalid node name '{node}'"}
+
+        target_node = self.get_node_by_name(node)
+        if target_node is None:
+            logging.warning(f"Node '{node}' not found in topology")
+            return {"output": "", "error": f"Node '{node}' not found"}
 
         if not hasattr(target_node, "container") or target_node.container is None:
             logging.warning(
@@ -497,8 +487,12 @@ class DiagnosticsMixin:
 
     def get_node_by_name(self, name: str) -> Node | None:
         """Get a node (satellite or ground station) by its name."""
-        if name.startswith("Sat"):
-            match self.satellites.get(int(name[3:])):
+        parsed = self._parse_node_name(name)
+        if parsed is None:
+            return None
+        prefix, node_id = parsed
+        if prefix == "Sat":
+            match self.satellites.get(node_id):
                 case Satellite() as node:
                     return node
                 case None:
@@ -507,17 +501,15 @@ class DiagnosticsMixin:
                     raise TypeError(
                         f"Expected Satellite in satellites, got {type(unexpected)}"
                     )
-        elif name.startswith("Gnd"):
-            match self.ground_stations.get(int(name[3:])):
-                case GroundStation() as node:  # type: ignore[misc]
-                    return node
-                case None:
-                    return None
-                case _ as unexpected:
-                    raise TypeError(
-                        f"Expected GroundStation in ground_stations, got {type(unexpected)}"
-                    )
-        return None
+        match self.ground_stations.get(node_id):
+            case GroundStation() as node:  # type: ignore[misc]
+                return node
+            case None:
+                return None
+            case _ as unexpected:
+                raise TypeError(
+                    f"Expected GroundStation in ground_stations, got {type(unexpected)}"
+                )
 
     def get_node_by_id(self, node_id: int) -> Node | None:
         """Get a node (satellite or ground station) by its ID."""

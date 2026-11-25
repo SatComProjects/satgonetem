@@ -62,6 +62,8 @@ def _install_fake_open(
         opened.append(key)
         if key in files:
             return files[key]
+        if key == "/proc/thread-self/ns/net" and "/proc/self/ns/net" in files:
+            raise FileNotFoundError(key)
         return real_open(path, *args, **kwargs)
 
     monkeypatch.setattr(builtins, "open", fake_open)
@@ -1377,7 +1379,7 @@ def test_create_veth_recovers_when_stale_peer_only_exists_on_host(
 
     def fake_open(path, *args, **kwargs):
         key = str(path)
-        if key == "/proc/self/ns/net":
+        if key in ("/proc/thread-self/ns/net", "/proc/self/ns/net"):
             return saved_ns
         if key == "/proc/4242/ns/net":
             return next(sat_opens)
@@ -1448,3 +1450,40 @@ def test_teardown_all_attempts_every_bridge_and_raises_on_failures(
         manager.teardown_all()
 
     assert attempted == ["Gnd0", "Gnd1", "Gnd2"]
+
+
+def test_link_capacity_kbps_uses_peer2_when_satellite_is_target() -> None:
+    manager = HILManager({"Gnd0": "eth1"})
+    link = SimpleNamespace(
+        source=SimpleNamespace(name="Gnd0"),
+        target=SimpleNamespace(name="Sat0"),
+        peer1_capacity=1200,
+        peer2_capacity=5000,
+    )
+
+    assert manager._link_capacity_kbps(link) == 5000
+
+
+def test_create_veth_opens_thread_self_netns(monkeypatch: pytest.MonkeyPatch) -> None:
+    manager = HILManager({"Gnd0": "eth1"})
+    libc = MagicMock()
+    libc.setns.return_value = 0
+    monkeypatch.setattr(
+        hil_manager, "ctypes", SimpleNamespace(CDLL=MagicMock(return_value=libc))
+    )
+
+    saved_ns = _FakeNsFile(11)
+    sat_ns = _FakeNsFile(22)
+    opened = _install_fake_open(
+        monkeypatch,
+        {"/proc/thread-self/ns/net": saved_ns, "/proc/4242/ns/net": sat_ns},
+    )
+    sat_ipr = _fake_iproute({"eth0": 101})
+    host_ipr = _fake_iproute({"hil0": 202})
+    monkeypatch.setattr(
+        hil_manager, "IPRoute", MagicMock(side_effect=[sat_ipr, host_ipr])
+    )
+
+    assert manager._create_veth("Sat0", 4242, 0) is True
+    assert "/proc/thread-self/ns/net" in opened
+    assert "/proc/self/ns/net" not in opened

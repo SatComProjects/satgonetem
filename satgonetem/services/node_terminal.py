@@ -164,6 +164,7 @@ class NodeTerminal:
 
         response = self._response_queue.get(timeout=timeout)
         if response is None:
+            self._response_queue.put(None)
             return None
         code_map = {
             netem_pb2.ExecSrvMsg.STDOUT: "stdout",

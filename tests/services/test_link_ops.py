@@ -994,3 +994,17 @@ def test_remove_link_after_failed_backend_add_skips_backend_delete_and_cleans_up
     assert fake.links == {}
     assert key not in fake._link_add_failures()
     address_plan.release_link.assert_called_once_with(key)
+
+
+def test_update_routing_after_link_changes_uses_active_daemon_even_if_routing_differs():
+    daemon = MagicMock()
+    fake = _FakeTopology(
+        {},
+        routing="not-a-valid-default",
+        routing_daemon=daemon,
+        get_routing_initiated=lambda: True,
+    )
+
+    LinkOpsMixin._update_routing_after_link_changes(fake, [], max_workers=4)
+
+    daemon.update.assert_called_once_with([], max_workers=4)

@@ -251,16 +251,20 @@ class HILManager:
     def _link_capacity_kbps(self, link) -> int:
         """Return the satellite-side capacity for a link in kbps.
 
-        Preference order matches the documented QoS model: peer1_capacity,
-        the link's capacity, then the configured ground-station default.
+        Preference order matches the documented QoS model: the satellite peer's
+        capacity (``peer2_capacity`` when the ground station is ``source``,
+        otherwise ``peer1_capacity``), then the other peer / link capacity,
+        then the configured ground-station default.
         """
-        p1 = self._positive_int(getattr(link, "peer1_capacity", 0))
-        if p1:
-            return p1
+        source_name = getattr(getattr(link, "source", None), "name", None)
+        sat_is_target = source_name in self._gnd_hardware_map
+        primary_attr = "peer2_capacity" if sat_is_target else "peer1_capacity"
+        secondary_attr = "peer1_capacity" if sat_is_target else "peer2_capacity"
 
-        capacity = self._positive_int(getattr(link, "capacity", 0))
-        if capacity:
-            return capacity
+        for attr in (primary_attr, secondary_attr, "capacity"):
+            cap = self._positive_int(getattr(link, attr, 0))
+            if cap:
+                return cap
 
         get_capacity = getattr(link, "get_capacity", None)
         if callable(get_capacity):
@@ -373,7 +377,10 @@ class HILManager:
         host_iface = f"hil{gnd_id}"
 
         libc = ctypes.CDLL("libc.so.6", use_errno=True)
-        saved_ns = open("/proc/self/ns/net", "rb")  # noqa: SIM115 - fd must stay open across namespaces
+        try:
+            saved_ns = open("/proc/thread-self/ns/net", "rb")  # noqa: SIM115 - fd must stay open across namespaces
+        except FileNotFoundError:
+            saved_ns = open("/proc/self/ns/net", "rb")  # noqa: SIM115 - fd must stay open across namespaces
         entered_satellite_ns = False
         restored_host_ns = False
         veth_created = False

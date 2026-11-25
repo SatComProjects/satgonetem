@@ -117,6 +117,16 @@ class SRMPLSRouteInstaller:
         all_gs = list(self._topology.ground_stations.values())
         if not all_sats:
             return 0
+        links_map = getattr(self._topology, "links", None)
+
+        def _is_link_usable(src_name: str, dst_name: str) -> bool:
+            if not isinstance(links_map, dict):
+                return True
+            link = links_map.get(frozenset((src_name, dst_name)))
+            if link is None:
+                return True
+            return bool(link.is_active and getattr(link, "admin_up", True))
+
         workers = min(32, (os.cpu_count() or 4) * 4, len(all_sats))
 
         def install_sr_forwarding(sat: Satellite) -> bool:
@@ -168,6 +178,9 @@ class SRMPLSRouteInstaller:
                             f"Expected Satellite in satellites, got {type(unexpected)}"
                         )
 
+                if not _is_link_usable(sat.name, neighbor_name):
+                    continue
+
                 fwd_entry = SRForwardEntry(
                     target_sid=neighbor_sid,
                     next_hop=next_hop_ip,
@@ -176,21 +189,29 @@ class SRMPLSRouteInstaller:
                 )
                 route_commands.append(fwd_entry.to_iproute2_command())
 
-            for gs in all_gs:
-                iface = self._topology._get_interface_to_peer(sat, gs.id)
+            fallback_peers = [
+                *all_gs,
+                *(s for s in all_sats if s.id != sat.id and s.is_addressable()),
+            ]
+            for peer_node in fallback_peers:
+                if not _is_link_usable(sat.name, peer_node.name):
+                    continue
+                iface = self._topology._get_interface_to_peer(sat, peer_node.id)
                 if iface is None or iface.peer is None:
                     continue
-                gs_loopback = gs.loopback.ipv4 if gs.loopback else None
-                if not gs_loopback:
+                peer_loopback = peer_node.loopback.ipv4 if peer_node.loopback else None
+                if not peer_loopback:
                     continue
                 # The label-stack pass owns this prefix when it has an SR route;
                 # keep the plain route only as a fallback when it does not.
-                if ("ip", f"{gs_loopback}/32") in stack_keys:
+                if ("ip", f"{peer_loopback}/32") in stack_keys:
                     continue
-                gs_ip = iface.peer.ipv4
+                peer_ip = iface.peer.ipv4
+                if not peer_ip or peer_ip == "0.0.0.0":
+                    continue
                 iface_name = iface.get_iname()
                 route_commands.append(
-                    f"ip route replace {gs_loopback}/32 via {gs_ip} dev {iface_name}"
+                    f"ip route replace {peer_loopback}/32 via {peer_ip} dev {iface_name}"
                 )
 
             prev = prev_node_sid_routes.get(sat.id, [])

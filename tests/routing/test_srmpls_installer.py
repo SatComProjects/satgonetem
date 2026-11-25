@@ -222,3 +222,51 @@ def test_enable_pass_uses_the_supplied_callable_and_counts_failures() -> None:
     errors = SRMPLSRouteInstaller(topology).enable_mpls_on_all_nodes(1, enable)
 
     assert errors == 1
+
+
+def test_node_sid_pass_installs_php_fallback_for_addressable_sat_and_skips_admin_down() -> (
+    None
+):
+    from types import SimpleNamespace
+
+    sat0 = _RecordingSatellite(0, "Sat0", "10.128.0.1")
+    sat1 = _RecordingSatellite(1, "Sat1", "10.128.0.65")
+    sat1.set_addressable(True)
+    sat2 = _RecordingSatellite(2, "Sat2", "10.128.0.129")
+
+    # Sat0 -- Sat1 (active, admin_up=True)
+    if01 = Interface("Sat0.1")
+    if10 = Interface("Sat1.0")
+    if01.set_ipv4("10.128.0.2")
+    if10.set_ipv4("10.128.0.3")
+    if01.peer = if10
+    if10.peer = if01
+    sat0.interfaces.append(if01)
+
+    # Sat0 -- Sat2 (admin_up=False)
+    if02 = Interface("Sat0.2")
+    if20 = Interface("Sat2.0")
+    if02.set_ipv4("10.128.0.4")
+    if20.set_ipv4("10.128.0.5")
+    if02.peer = if20
+    if20.peer = if02
+    sat0.interfaces.append(if02)
+
+    topology = _FakeTopology([sat0, sat1, sat2], [])
+    topology.links = {
+        frozenset(("Sat0", "Sat1")): SimpleNamespace(is_active=True, admin_up=True),
+        frozenset(("Sat0", "Sat2")): SimpleNamespace(is_active=True, admin_up=False),
+    }
+    manager = _FakeLabelManager({0: 16000, 1: 16001, 2: 16002})
+    prev_sid: dict[int, list[str]] = {}
+
+    errors = SRMPLSRouteInstaller(topology).apply_sr_node_sids_to_satellites(
+        manager, {}, prev_sid, {}
+    )
+
+    assert errors == 0
+    sat0_routes = prev_sid[0]
+    # Plain IPv4 /32 fallback route for directly connected addressable Sat1
+    assert "ip route replace 10.128.0.65/32 via 10.128.0.3 dev eth1" in sat0_routes
+    # Must NOT emit MPLS forward rule over admin_up=False Sat0--Sat2 link
+    assert not any("16002" in cmd for cmd in sat0_routes)

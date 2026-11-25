@@ -71,3 +71,27 @@ class TestGetElevationAngle:
             gnd_coordinates=(0.0, 0.0, 0.0),
         )
         assert angle == pytest.approx(expected, abs=1e-4)
+
+    def test_ground_altitude_is_included_in_elevation(self):
+        R_E = 6378.137
+        h_sat = 550.0
+        h_gnd = 5.0
+        theta_deg = 20.0
+        theta = math.radians(theta_deg)
+        expected = math.degrees(
+            math.atan(
+                (math.cos(theta) - (R_E + h_gnd) / (R_E + h_sat)) / math.sin(theta)
+            )
+        )
+        angle = get_elevation_angle(
+            sat_coordinates=(0.0, 20.0, h_sat),
+            gnd_coordinates=(0.0, 0.0, h_gnd),
+        )
+        assert angle == pytest.approx(expected, abs=1e-4)
+
+    def test_same_lat_lon_sat_below_ground_returns_negative_90(self):
+        angle = get_elevation_angle(
+            sat_coordinates=(0.0, 0.0, 1.0),
+            gnd_coordinates=(0.0, 0.0, 5.0),
+        )
+        assert angle == pytest.approx(-90.0, abs=1e-6)

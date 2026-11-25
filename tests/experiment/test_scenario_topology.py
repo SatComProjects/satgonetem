@@ -228,3 +228,14 @@ def test_ground_station_from_mapping_rejects_out_of_range_coordinates(
         GroundStationSpec.from_mapping(
             {"name": "Out", "latitude": latitude, "longitude": longitude}
         )
+
+
+def test_event_spec_validates_node_restart_src_and_programmatic_impairment():
+    from satgonetem.experiment.scenario import EventSpec
+
+    with pytest.raises(ScenarioError, match="src"):
+        EventSpec(at_s=1.0, action="node_restart")
+    with pytest.raises(ScenarioError, match="src"):
+        EventSpec.from_mapping({"at_s": 1.0, "action": "node_restart"})
+    with pytest.raises(ScenarioError, match="loss_percent or jitter_ms"):
+        EventSpec(at_s=1.0, action="impairment", src="Sat0", dst="Sat1")

@@ -276,7 +276,9 @@ class ExperimentRunner:
         logging.error(message)
         self._errors.append(message)
 
-    def _collect_flows(self, timeout_s: float = 300.0) -> list[dict[str, Any]]:
+    def _collect_flows(
+        self, timeout_s: float = 300.0, *, interrupted: bool = False
+    ) -> list[dict[str, Any]]:
         collected: list[dict[str, Any]] = []
         for flow in self._flows:
             source = getattr(getattr(flow, "source", None), "name", "")
@@ -298,16 +300,29 @@ class ExperimentRunner:
                 stop()
 
             try:
-                join = getattr(flow, "join", None)
-                if callable(join):
-                    join(timeout=timeout_s)
-                if getattr(flow, "is_alive", lambda: False)():
-                    stop_flow()
-                    entry["error"] = "flow did not finish before the timeout"
+                if interrupted:
+                    if getattr(flow, "is_alive", lambda: False)():
+                        stop_flow()
+                        entry["error"] = "flow stopped due to interruption"
+                    else:
+                        result = flow.results()
+                        to_json = getattr(result, "to_json", None)
+                        entry["result"] = (
+                            to_json() if callable(to_json) else repr(result)
+                        )
                 else:
-                    result = flow.results()
-                    to_json = getattr(result, "to_json", None)
-                    entry["result"] = to_json() if callable(to_json) else repr(result)
+                    join = getattr(flow, "join", None)
+                    if callable(join):
+                        join(timeout=timeout_s)
+                    if getattr(flow, "is_alive", lambda: False)():
+                        stop_flow()
+                        entry["error"] = "flow did not finish before the timeout"
+                    else:
+                        result = flow.results()
+                        to_json = getattr(result, "to_json", None)
+                        entry["result"] = (
+                            to_json() if callable(to_json) else repr(result)
+                        )
             except Exception as exc:  # noqa: BLE001 - one flow must not abort
                 entry["error"] = str(exc)
             finally:
@@ -366,9 +381,11 @@ class ExperimentRunner:
         run_dir: Path,
         topology: Any,
         live: bool,
+        *,
+        interrupted: bool = False,
     ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         try:
-            flows = self._collect_flows()
+            flows = self._collect_flows(interrupted=interrupted)
         except Exception as exc:  # noqa: BLE001 - artifacts must still be written
             self._record_error(f"collecting flow results failed: {exc}")
             flows = []
@@ -538,7 +555,9 @@ class ExperimentRunner:
         except BaseException as exc:  # noqa: BLE001 - finalize before re-raising
             interrupted = exc
 
-        flows, summary = self._finalize_run(run_dir, topology, live)
+        flows, summary = self._finalize_run(
+            run_dir, topology, live, interrupted=interrupted is not None
+        )
         result = RunResult(
             run_dir=run_dir,
             summary=summary,

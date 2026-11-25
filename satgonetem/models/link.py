@@ -388,6 +388,9 @@ class Link:
             return NotImplemented
         return self.source == other.source and self.target == other.target
 
+    def __hash__(self) -> int:
+        return hash((self.source, self.target))
+
     def get_names(self) -> tuple[str, str]:
         return self.source.name + "." + str(
             self.target.id

@@ -255,3 +255,36 @@ def test_shell_reports_unknown_command(tmp_path):
     shell._input = lambda prompt="": next(responses)
     shell.run()
     assert any("unknown command" in line for line in output)
+
+
+@pytest.mark.parametrize("addr", ["localhost:99999", "localhost:-1", "localhost:0"])
+def test_check_server_rejects_out_of_range_ports_without_crashing(addr):
+    from satgonetem.cli.main import _check_server
+
+    check = _check_server(addr)
+    assert check.ok is False
+    assert "port" in check.detail.lower() or "invalid" in check.detail.lower()
+
+
+def test_check_server_strips_brackets_for_ipv6_literal(monkeypatch):
+    import socket
+
+    from satgonetem.cli.main import _check_server
+
+    seen = []
+
+    class _DummySock:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    def fake_connect(addr, timeout=None):
+        seen.append(addr)
+        return _DummySock()
+
+    monkeypatch.setattr(socket, "create_connection", fake_connect)
+    check = _check_server("[::1]:10110")
+    assert check.ok is True
+    assert seen == [("::1", 10110)]

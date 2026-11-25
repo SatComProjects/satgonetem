@@ -113,6 +113,17 @@ class LinkBudgetCalculator:
             ),
         )
 
+    @staticmethod
+    def _require_positive_finite(pairs: tuple[tuple[str, object], ...]) -> None:
+        for name, value in pairs:
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(float(value))
+                or float(value) <= 0
+            ):
+                raise ValueError(f"{name} must be positive and finite, got {value!r}")
+
     def compute_one_way_shannon_capacity(
         self,
         tx_node: object,
@@ -144,6 +155,14 @@ class LinkBudgetCalculator:
         Returns:
             Capacity in kbps.
         """
+        self._require_positive_finite(
+            (
+                ("frequency_ghz", frequency_ghz),
+                ("distance_km", distance_km),
+                ("bandwidth_hz", bandwidth_hz),
+                ("rx_tsys_k", self.rx_tsys_k),
+            )
+        )
         ant = getattr(tx_node, "antenna", None)
         if ant is None:
             return 0
@@ -227,19 +246,15 @@ class LinkBudgetCalculator:
             ValueError: If a required numeric input is not finite and positive,
                 a node lacks its position, or an antenna/EIRP value is missing.
         """
-        for name, value in (
-            ("distance_km", distance_km),
-            ("frequency_ghz_downlink", self.frequency_ghz_downlink),
-            ("bandwidth_hz_downlink", self.bandwidth_hz_downlink),
-            ("gs_diameter", gs_diameter),
-        ):
-            if (
-                isinstance(value, bool)
-                or not isinstance(value, (int, float))
-                or not math.isfinite(float(value))
-                or float(value) <= 0
-            ):
-                raise ValueError(f"{name} must be positive and finite, got {value!r}")
+        self._require_positive_finite(
+            (
+                ("distance_km", distance_km),
+                ("frequency_ghz_downlink", self.frequency_ghz_downlink),
+                ("bandwidth_hz_downlink", self.bandwidth_hz_downlink),
+                ("gs_diameter", gs_diameter),
+                ("rx_tsys_k", self.rx_tsys_k),
+            )
+        )
         if (
             isinstance(self.rolloff_factor, bool)
             or not isinstance(self.rolloff_factor, (int, float))

@@ -283,6 +283,8 @@ class GoNetEmLifecycleMixin(GoNetEmClientMixin):
             if progress_cb:
                 progress_cb("CLOSE_ERROR", 0, 0)
             raise
+        else:
+            self._request = None
         finally:
             self._close_transport()
             if progress_cb:

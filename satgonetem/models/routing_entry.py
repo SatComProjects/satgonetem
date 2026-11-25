@@ -61,6 +61,9 @@ class RoutingEntry:
             and self.prefix == other.prefix
         )
 
+    def __hash__(self) -> int:
+        return hash((self.destination, self.interface, self.gateway, self.prefix))
+
     @classmethod
     def from_validated(
         cls,

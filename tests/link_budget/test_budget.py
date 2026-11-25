@@ -427,3 +427,53 @@ class TestIntegrationNoMocks:
 
         assert isinstance(capacity_kbps, int)
         assert capacity_kbps > 0
+
+    @pytest.mark.parametrize(
+        ("kwargs", "match"),
+        [
+            ({"frequency_ghz": 0.0}, "frequency_ghz"),
+            ({"frequency_ghz": -19.0}, "frequency_ghz"),
+            ({"distance_km": -550.0}, "distance_km"),
+            ({"bandwidth_hz": 0.0}, "bandwidth_hz"),
+        ],
+    )
+    def test_shannon_rejects_non_positive_inputs(self, kwargs, match):
+        from satgonetem.link_budget.antenna import Antenna
+        from satgonetem.link_budget.budget import LinkBudgetCalculator
+
+        calc = LinkBudgetCalculator(rx_tsys_k=150.0)
+
+        class _Node:
+            antenna = Antenna(diameter=1.0, efficiency=0.6, gain_db=35.0)
+
+        params = dict(
+            tx_node=_Node(),
+            rx_node=_Node(),
+            frequency_ghz=19.0,
+            distance_km=550.0,
+            elevation_angle=90.0,
+            gs_lat=48.0,
+            gs_lon=2.0,
+            gs_diameter=1.2,
+            bandwidth_hz=100e6,
+        )
+        params.update(kwargs)
+        with pytest.raises(ValueError, match=match):
+            calc.compute_one_way_shannon_capacity(**params)
+
+    def test_modcod_rejects_nan_rx_tsys_k(self):
+        from satgonetem.link_budget.budget import LinkBudgetCalculator
+
+        calc = LinkBudgetCalculator(rx_tsys_k=float("nan"))
+        sat = self._make_sat_node(eirp_db=60.0, lat=48.0, lon=2.0, alt_km=550.0)
+        gs = self._make_gs_node(diameter=1.2, lat=48.0, lon=2.0)
+
+        with pytest.raises(ValueError, match="rx_tsys_k"):
+            calc.compute_downlink_modcod(
+                sat_node=sat,
+                gnd_node=gs,
+                distance_km=550.0,
+                gs_lat=48.0,
+                gs_lon=2.0,
+                gs_diameter=1.2,
+            )

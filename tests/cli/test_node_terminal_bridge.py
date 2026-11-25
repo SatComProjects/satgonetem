@@ -112,3 +112,61 @@ def test_sigwinch_handler_defers_resize_to_main_loop(
     resize_msgs = [m for m in sent_messages if m.code == netem_pb2.ExecCltMsg.RESIZE]
     assert len(resize_msgs) == 2
     assert all(m.ttyWidth == 120 and m.ttyHeight == 40 for m in resize_msgs)
+
+
+def test_bridge_surfaces_server_error_and_stops_on_stdin_eof(monkeypatch):
+    import queue
+
+    from satgonetem.cli import node_terminal_bridge
+
+    monkeypatch.setattr(termios, "tcgetattr", lambda _fd: [0])
+    monkeypatch.setattr(termios, "tcsetattr", lambda _fd, _when, _attrs: None)
+    monkeypatch.setattr(tty, "setraw", lambda _fd: None)
+    monkeypatch.setattr(
+        fcntl, "ioctl", lambda _fd, _req, _buf: struct.pack("HHHH", 24, 80, 0, 0)
+    )
+    monkeypatch.setattr(signal, "signal", lambda _sig, _h: None)
+    monkeypatch.setattr(sys, "stdin", SimpleNamespace(fileno=lambda: 0))
+
+    logged: list[str] = []
+    monkeypatch.setattr(node_terminal_bridge, "_log_error", logged.append)
+    monkeypatch.setattr("builtins.input", lambda: "")
+
+    stub = MagicMock()
+    stub.NodeExec.return_value = iter(
+        [netem_pb2.ExecSrvMsg(code=netem_pb2.ExecSrvMsg.ERROR, data=b"node not found")]
+    )
+    monkeypatch.setattr(grpc, "insecure_channel", lambda _srv: MagicMock())
+    monkeypatch.setattr(netem_pb2_grpc, "NetemStub", lambda _ch: stub)
+    monkeypatch.setattr(select, "select", lambda _r, _w, _x, _t: ([], [], []))
+    monkeypatch.setattr(
+        sys, "argv", ["node_terminal_bridge", "localhost:10110", "prj1", "Sat0"]
+    )
+
+    node_terminal_bridge.main()
+
+    assert any("node not found" in msg for msg in logged)
+
+    # Also verify stdin EOF enqueues None on input_queue
+    captured_q: list[queue.Queue] = []
+    orig_queue = queue.Queue
+
+    def _capture_queue():
+        q = orig_queue()
+        captured_q.append(q)
+        return q
+
+    monkeypatch.setattr(queue, "Queue", _capture_queue)
+    stub.NodeExec.return_value = iter(
+        [netem_pb2.ExecSrvMsg(code=netem_pb2.ExecSrvMsg.CLOSE)]
+    )
+    monkeypatch.setattr(select, "select", lambda _r, _w, _x, _t: ([0], [], []))
+    monkeypatch.setattr("os.read", lambda _fd, _n: b"")
+
+    node_terminal_bridge.main()
+
+    assert captured_q
+    items = []
+    while not captured_q[-1].empty():
+        items.append(captured_q[-1].get_nowait())
+    assert None in items

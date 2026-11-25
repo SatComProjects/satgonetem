@@ -239,3 +239,30 @@ class TestLoadRoutesFromFile:
         assert routes == {1: ({2: 4.0}, {3: [1, 2, 3]})}
         assert isinstance(next(iter(routes[1][1])), int)
         assert isinstance(routes[1][0][2], float)
+
+
+class TestPopulateDijkstraIgraphEdgeCases:
+    def test_edgeless_and_empty_graphs_do_not_crash(self):
+        import networkx as nx
+
+        from tests.support.factories import make_ground_station, make_satellite
+
+        gs = make_ground_station("Gnd0")
+        gs.loopback.set_ipv4("10.0.0.1")
+        sat = make_satellite("Sat1")
+        sat.loopback.set_ipv4("10.128.0.1")
+
+        planner = _make_planner(MagicMock())
+
+        # Graph with vertices but zero edges (no "weight" edge attribute).
+        edgeless = nx.Graph()
+        edgeless.add_nodes_from([0, 1])
+        planner.populate_dijkstra_igraph(edgeless, [gs], [sat], {}, {})
+        assert gs.ipv4_routing_table == []
+        assert sat.ipv4_routing_table == []
+
+        # Completely empty graph (0 vertices).
+        empty = nx.Graph()
+        planner.populate_dijkstra_igraph(empty, [gs], [sat], {}, {})
+        assert gs.ipv4_routing_table == []
+        assert sat.ipv4_routing_table == []

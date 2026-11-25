@@ -111,3 +111,41 @@ def test_connectivity_result_serialization():
     )
     assert result.to_dict()["packet_loss_percent"] == 10.0
     assert "Sat0" in ConnectivityMatrix([result]).to_json()
+
+
+def test_failed_flow_preserves_underlying_flow_exception_instead_of_keyerror():
+    class FlowWithResults(_Flow):
+        def results(self):
+            raise TimeoutError("ping timed out")
+
+    class KeyErrorScheduler(_Scheduler):
+        def results(self, flow):
+            if flow.source.name == "Gnd0":
+                raise KeyError("No result found for flow")
+            return _Result()
+
+    matrix = build_connectivity_matrix(
+        _nodes(), flow_factory=FlowWithResults, scheduler_factory=KeyErrorScheduler
+    )
+
+    failed = matrix.results[1]
+    assert failed.reachable is False
+    assert failed.error == "ping timed out"
+
+
+def test_scheduler_error_status_raises_instead_of_masking_as_keyerrors():
+    import pytest
+
+    from satgonetem.traffic.flow_scheduler import FlowSchedulerStatus
+
+    class BrokenScheduler(_Scheduler):
+        def status(self):
+            return FlowSchedulerStatus.ERROR
+
+        def errors(self):
+            raise RuntimeError("scheduler crashed")
+
+    with pytest.raises(RuntimeError, match="scheduler crashed"):
+        build_connectivity_matrix(
+            _nodes(), flow_factory=_Flow, scheduler_factory=BrokenScheduler
+        )

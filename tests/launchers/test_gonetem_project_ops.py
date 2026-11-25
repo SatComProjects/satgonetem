@@ -354,3 +354,60 @@ def test_generate_project_writes_network_yml_archive(tmp_path):
     assert "Gnd2:" in content
     assert "peer1: Sat0.2, peer2: Gnd0.0" in content
     assert "Controller.0" in content
+
+
+def test_controller_links_deduplicate_overlapping_sat_and_gnd_ids():
+    sat = _satellite(0, "Sat0")
+    gnd = _ground_station(0, "Gnd0")
+    topology_manager = _topology({0: sat}, {0: gnd}, {})
+    launcher = _launcher(topology_manager)
+
+    document = yaml.safe_load(launcher.get_gonetem_topology(controller=True))
+    peer1s = [entry["peer1"] for entry in document["links"]]
+
+    assert len(peer1s) == 2
+    assert len(set(peer1s)) == 2
+
+
+def test_write_links_preserves_asymmetric_peer_capacities():
+    sat = _satellite(0, "Sat0")
+    gnd = _ground_station(2, "Gnd0")
+    link = FakeLink(sat, gnd, capacity=2000)
+    link.peer1_capacity = 5000
+    link.peer2_capacity = 1200
+    topology_manager = _topology({sat.id: sat}, {gnd.id: gnd}, {"sat-gnd": link})
+    launcher = _launcher(topology_manager)
+
+    document = yaml.safe_load(launcher.get_gonetem_topology())
+    assert document["links"][0]["peer1qos"]["rate"] == 5000
+    assert document["links"][0]["peer2qos"]["rate"] == 1200
+
+
+def test_project_builder_reads_live_launcher_queue_settings():
+    sat = _satellite(0, "Sat0")
+    gnd = _ground_station(2, "Gnd0")
+    link = FakeLink(sat, gnd, capacity=2000)
+    topology_manager = _topology({sat.id: sat}, {gnd.id: gnd}, {"sat-gnd": link})
+    launcher = _launcher(topology_manager)
+    launcher.netem_limit = 4096
+    launcher.txqueuelen = 2048
+
+    document = yaml.safe_load(launcher.get_gonetem_topology())
+    assert document["links"][0]["peer1qos"]["limit"] == 4096
+    assert document["links"][0]["peer1qos"]["txqueuelen"] == 2048
+
+
+def test_generate_project_cleans_up_temp_archive_on_tar_failure(tmp_path, monkeypatch):
+    sat = _satellite(0, "Sat0")
+    topology_manager = _topology({sat.id: sat}, {}, {})
+    launcher = _launcher(topology_manager)
+
+    def boom(*_args, **_kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(tarfile, "open", boom)
+
+    with pytest.raises(OSError, match="disk full"):
+        launcher.generate_project(str(tmp_path))
+
+    assert list(tmp_path.glob("*.gnet")) == []

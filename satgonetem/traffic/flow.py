@@ -131,7 +131,7 @@ class ThreadedFlow(abc.ABC):
                 self._status = self.STATUS.ERROR
             return
         with self._lock:
-            if self._waiting_delay and self._stop_event.is_set():
+            if self._stop_event.is_set():
                 self._waiting_delay = False
                 self._error = RuntimeError(
                     f"{self.flow_name} stopped before it could start"

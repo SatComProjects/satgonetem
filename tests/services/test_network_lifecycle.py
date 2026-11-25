@@ -350,3 +350,67 @@ def test_start_gonetem_clears_stale_backend_link_tracking():
     assert topology._failed_link_adds == set()
     assert topology._failed_link_updates == set()
     assert topology._link_update_many_unavailable is False
+
+
+def test_start_gonetem_records_initially_wired_links_in_backend_link_adds():
+    topology = DummyTopology()
+    sat = SimpleNamespace(name="Sat0")
+    gnd = SimpleNamespace(name="Gnd0")
+    active_link = SimpleNamespace(source=sat, target=gnd, is_active=True)
+    topology.satellites = {0: sat}
+    topology.ground_stations = {0: gnd}
+    topology.links = {frozenset(("Sat0", "Gnd0")): active_link}
+    topology._backend_link_adds = set()
+    topology._link_backend_adds = lambda: topology._backend_link_adds
+    topology._build_link_key = lambda a, b: frozenset((a.name, b.name))
+
+    fake_launcher = MagicMock()
+    fake_launcher.start_containers.return_value = (1.0, 2.0)
+
+    with patch(
+        "satgonetem.launchers.gonetem_launcher.GoNetEmLauncher",
+        return_value=fake_launcher,
+    ):
+        topology.start_gonetem()
+
+    assert frozenset(("Sat0", "Gnd0")) in topology._backend_link_adds
+
+
+def test_failed_start_gonetem_clears_runtime_handles_when_force_close_succeeds():
+    topology = DummyTopology()
+    sat = SimpleNamespace(
+        name="Sat0",
+        container=object(),
+        container_pid=1234,
+        grpc_client=object(),
+        project_id="proj-1",
+    )
+    topology.satellites = {0: sat}
+    topology.ground_stations = {}
+    topology.links = {}
+    topology.project_id = "proj-1"
+    topology.client = object()
+    topology.request = object()
+
+    fake_launcher = MagicMock()
+    fake_launcher.start_containers.return_value = (1.0, 2.0)
+    fake_launcher.wire_links.side_effect = RuntimeError("wire boom")
+    fake_launcher.force_close_project.return_value = True
+
+    with (
+        patch(
+            "satgonetem.launchers.gonetem_launcher.GoNetEmLauncher",
+            return_value=fake_launcher,
+        ),
+        pytest.raises(RuntimeError, match="wire boom"),
+    ):
+        topology.start_gonetem()
+
+    assert topology.launcher is None
+    assert topology.project_id is None
+    assert topology.client is None
+    assert topology.request is None
+    assert sat.container is None
+    assert sat.container_pid is None
+    assert sat.grpc_client is None
+    assert sat.project_id is None

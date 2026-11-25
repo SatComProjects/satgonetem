@@ -86,15 +86,16 @@ def coverage_ring_from_elevation(
         lon = np.array(lon)  # type: ignore[assignment]
         lat = np.array(lat)  # type: ignore[assignment]
 
-        # Expand range for seamless wrapping when rasterizing.
-        lon = np.insert(lon, 0, -2 * np.pi)
-        lon = np.append(lon, 2 * np.pi)
+        # Close vertically to the geodetic pole at the ring's endpoints before
+        # extending along the pole to +/-2*pi for seamless wrapping.
+        pole = math.copysign(math.pi / 2, 1.0 if north else -1.0)
+        first_lon = float(lon[0])
+        last_lon = float(lon[-1])
+        lon = np.insert(lon, 0, first_lon)
+        lon = np.append(lon, last_lon)
         lon = np.insert(lon, 0, -2 * np.pi)
         lon = np.append(lon, 2 * np.pi)
 
-        # Close through the geodetic pole; +/-180 latitude is not a valid
-        # geographic coordinate and corrupts polygon coverage.
-        pole = math.copysign(math.pi / 2, 1.0 if north else -1.0)
         lat = np.insert(lat, 0, pole)
         lat = np.append(lat, pole)
         lat = np.insert(lat, 0, pole)
@@ -149,7 +150,9 @@ def coverage_percentage(
     )
     lon_edges = np.arange(-180.0, 180.0 + grid_res_deg, grid_res_deg)
     lat_centers = lat_edges[:-1] + grid_res_deg / 2.0
+    lat_centers = lat_centers[np.abs(lat_centers) <= max_latitude_deg]
     lon_centers = lon_edges[:-1] + grid_res_deg / 2.0
+    lon_centers = lon_centers[np.abs(lon_centers) <= 180.0]
     lon_grid, lat_grid = np.meshgrid(lon_centers, lat_centers)
 
     pts = np.vstack((lon_grid.ravel(), lat_grid.ravel())).T
@@ -216,8 +219,12 @@ def coverage_percentage_fast(
         -max_latitude_deg, max_latitude_deg + grid_res_deg, grid_res_deg
     )
     lon_edges = np.arange(-180.0, 180.0 + grid_res_deg, grid_res_deg)
-    lat_centers = np.radians(lat_edges[:-1] + grid_res_deg / 2.0)
-    lon_centers = np.radians(lon_edges[:-1] + grid_res_deg / 2.0)
+    lat_centers_deg = lat_edges[:-1] + grid_res_deg / 2.0
+    lat_centers_deg = lat_centers_deg[np.abs(lat_centers_deg) <= max_latitude_deg]
+    lon_centers_deg = lon_edges[:-1] + grid_res_deg / 2.0
+    lon_centers_deg = lon_centers_deg[np.abs(lon_centers_deg) <= 180.0]
+    lat_centers = np.radians(lat_centers_deg)
+    lon_centers = np.radians(lon_centers_deg)
     lon_grid, lat_grid = np.meshgrid(lon_centers, lat_centers)
 
     sin_lat_grid = np.sin(lat_grid)
